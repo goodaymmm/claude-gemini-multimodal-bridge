@@ -5,7 +5,7 @@ import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
 
 // ===================================
-// Main Entry Point
+// MCP Server Entry Point for Claude Code
 // ===================================
 
 async function main() {
@@ -13,34 +13,35 @@ async function main() {
     // Load environment variables
     config();
 
-    // Log startup information
-    logger.info('Starting Claude-Gemini Multimodal Bridge (CGMB)...', {
+    // Log startup information for MCP server
+    logger.info('Starting CGMB MCP Server for Claude Code integration...', {
       version: '1.0.0',
       nodeVersion: process.version,
       platform: process.platform,
+      mcpMode: true,
     });
 
-    // Create and initialize server
+    // Create and initialize MCP server
     const server = new CGMBServer();
     
-    // Start the server
+    // Start the MCP server (stdio transport for Claude Code)
     await server.start();
     
-    logger.info('CGMB is ready to accept connections');
+    logger.info('CGMB MCP Server ready for Claude Code connections');
 
-    // Graceful shutdown handling
+    // Handle graceful shutdown
     process.on('SIGINT', async () => {
-      logger.info('Received SIGINT, shutting down gracefully...');
+      logger.info('Received SIGINT, shutting down MCP server...');
       process.exit(0);
     });
 
     process.on('SIGTERM', async () => {
-      logger.info('Received SIGTERM, shutting down gracefully...');
+      logger.info('Received SIGTERM, shutting down MCP server...');
       process.exit(0);
     });
 
   } catch (error) {
-    logger.error('Failed to start CGMB server', error);
+    logger.error('Failed to start CGMB MCP server', error as Error);
     process.exit(1);
   }
 }

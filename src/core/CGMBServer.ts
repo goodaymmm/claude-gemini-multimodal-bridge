@@ -77,7 +77,7 @@ export class CGMBServer {
       this.initialized = true;
       logger.info('CGMB Server initialized successfully');
     } catch (error) {
-      logger.error('Failed to initialize CGMB Server', error);
+      logger.error('Failed to initialize CGMB Server', error as Error);
       throw new CGMBError(
         'Server initialization failed',
         'INIT_ERROR',
@@ -230,7 +230,7 @@ export class CGMBServer {
       try {
         logger.info(`Tool called: ${name}`, { args });
 
-        let result: ToolResult;
+        let result: CallToolResult;
 
         switch (name) {
           case 'multimodal_process':
@@ -256,7 +256,7 @@ export class CGMBServer {
 
         return result;
       } catch (error) {
-        logger.error(`Tool failed: ${name}`, error);
+        logger.error(`Tool failed: ${name}`, error as Error);
         
         const errorMessage = error instanceof Error ? error.message : String(error);
         return {
@@ -275,7 +275,7 @@ export class CGMBServer {
   /**
    * Handle multimodal processing requests
    */
-  private async handleMultimodalProcess(args: unknown): Promise<ToolResult> {
+  private async handleMultimodalProcess(args: unknown): Promise<CallToolResult> {
     return safeExecute(
       async () => {
         const validatedArgs = MultimodalProcessArgsSchema.parse(args);
@@ -306,7 +306,7 @@ export class CGMBServer {
   /**
    * Handle document analysis requests
    */
-  private async handleDocumentAnalysis(args: unknown): Promise<ToolResult> {
+  private async handleDocumentAnalysis(args: unknown): Promise<CallToolResult> {
     return safeExecute(
       async () => {
         const validatedArgs = DocumentAnalysisArgsSchema.parse(args);
@@ -337,7 +337,7 @@ export class CGMBServer {
   /**
    * Handle workflow orchestration requests
    */
-  private async handleWorkflowOrchestration(args: unknown): Promise<ToolResult> {
+  private async handleWorkflowOrchestration(args: unknown): Promise<CallToolResult> {
     return safeExecute(
       async () => {
         const validatedArgs = WorkflowDefinitionArgsSchema.parse(args);

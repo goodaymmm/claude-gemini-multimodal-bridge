@@ -114,11 +114,11 @@ cgmb auth --interactive
 # Verify installation and authentication
 cgmb verify
 
-# Check quota status before usage
-cgmb quota-status
+# Add CGMB to Claude Code (one-time setup)
+claude mcp add cgmb
 
-# Start the MCP server
-cgmb serve
+# Now use Claude Code normally with enhanced capabilities!
+claude "Hello! Test the enhanced capabilities."
 ```
 
 ### Configuration
@@ -163,16 +163,36 @@ echo "GEMINI_API_KEY=your_api_key_here" >> .env
 
 ## 📖 Usage
 
-### Basic MCP Tool Usage
+### Simple Setup with Claude Code
 
 ```bash
-# In Claude Code, call the multimodal processing tool
-mcp__cgmb__multimodal_process \
-  prompt: "Analyze these documents and extract key insights" \
-  files: [{"path": "/path/to/document.pdf", "type": "pdf"}] \
-  workflow: "analysis" \
-  options: {"quality_level": "balanced"}
+# 1. Add CGMB as MCP server (one-time setup)
+claude mcp add cgmb
+
+# 2. Use Claude Code normally - CGMB enhances automatically
+claude "Analyze this image and describe what you see @image.png"
+claude "Summarize this PDF document @document.pdf"
+claude "What are the latest developments in AI technology?"
+claude "Convert this spreadsheet to markdown format @data.xlsx"
 ```
+
+### How It Works
+
+When you use Claude Code with CGMB connected:
+
+1. **Automatic Enhancement**: CGMB detects what type of task you're doing
+2. **Smart Routing**: Routes to the best AI layer (Claude Code, Gemini CLI, or AI Studio)
+3. **Transparent Results**: You get enhanced capabilities without learning new commands
+
+### Enhanced Capabilities
+
+| Input Type | CGMB Enhancement | Example |
+|------------|------------------|---------|
+| **Images** | Advanced visual analysis | `claude "Analyze this chart @chart.png"` |
+| **PDFs** | Full document processing | `claude "Extract tables from @report.pdf"` |
+| **Audio** | Transcription + analysis | `claude "Transcribe and summarize @meeting.mp3"` |
+| **Current Info** | Real-time search | `claude "Latest news about quantum computing"` |
+| **Complex Tasks** | Multi-layer processing | `claude "Compare these 3 documents @doc1.pdf @doc2.pdf @doc3.pdf"` |
 
 ### Advanced Workflow Example
 

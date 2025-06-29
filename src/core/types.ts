@@ -5,10 +5,17 @@ import { z } from 'zod';
 // ===================================
 
 // Layer Types
-export type LayerType = 'claude' | 'gemini' | 'aistudio';
-export type ExecutionMode = 'sequential' | 'parallel' | 'adaptive';
-export type QualityLevel = 'fast' | 'balanced' | 'quality';
-export type WorkflowType = 'analysis' | 'conversion' | 'extraction' | 'generation';
+export const LayerTypeSchema = z.enum(['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator']);
+export type LayerType = z.infer<typeof LayerTypeSchema>;
+export const ExecutionModeSchema = z.enum(['sequential', 'parallel', 'adaptive']);
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
+export const QualityLevelSchema = z.enum(['fast', 'balanced', 'quality']);
+export type QualityLevel = z.infer<typeof QualityLevelSchema>;
+export const WorkflowTypeSchema = z.enum(['analysis', 'conversion', 'extraction', 'generation']);
+export type WorkflowType = z.infer<typeof WorkflowTypeSchema>;
+
+// Analysis Types
+export type AnalysisType = 'content' | 'comparative' | 'thematic' | 'sentiment' | 'trend' | 'statistical';
 
 // File Types
 export const FileTypeSchema = z.enum([
@@ -35,6 +42,16 @@ export const ProcessingOptionsSchema = z.object({
   max_tokens: z.number().positive().optional(),
   timeout: z.number().positive().optional(),
   use_cache: z.boolean().optional(),
+  // Additional properties for workflow processing
+  depth: z.enum(['shallow', 'medium', 'deep']).optional(),
+  extractMetadata: z.boolean().optional(),
+  structured: z.boolean().optional(),
+  requiresGrounding: z.boolean().optional(),
+  parallelProcessing: z.boolean().optional(),
+  batchMode: z.boolean().optional(),
+  detailed: z.boolean().optional(),
+  extractionType: z.string().optional(),
+  outputFormat: z.string().optional(), // Note: keeping both output_format and outputFormat for compatibility
 });
 export type ProcessingOptions = z.infer<typeof ProcessingOptionsSchema>;
 
@@ -423,3 +440,78 @@ export const AvailableCapabilitiesSchema = z.object({
   lastChecked: z.date(),
 });
 export type AvailableCapabilities = z.infer<typeof AvailableCapabilitiesSchema>;
+
+// ===================================
+// Additional Types for Workflow Processing
+// ===================================
+
+// Multimodal File
+export const MultimodalFileSchema = z.object({
+  path: z.string(),
+  type: FileTypeSchema,
+  size: z.number().optional(),
+  encoding: z.string().optional(),
+  content: z.string().optional(),
+  metadata: z.record(z.any()).optional(),
+});
+export type MultimodalFile = z.infer<typeof MultimodalFileSchema>;
+
+// Multimodal Process Result
+export const MultimodalProcessResultSchema = z.object({
+  success: z.boolean(),
+  content: z.string(),
+  files_processed: z.array(z.string()),
+  processing_time: z.number(),
+  workflow_used: WorkflowTypeSchema,
+  layers_involved: z.array(LayerTypeSchema),
+  metadata: z.object({
+    total_duration: z.number(),
+    tokens_used: z.number().optional(),
+    cost: z.number().optional(),
+    quality_level: QualityLevelSchema.optional(),
+  }),
+  error: z.string().optional(),
+});
+export type MultimodalProcessResult = z.infer<typeof MultimodalProcessResultSchema>;
+
+// Workflow Definition
+export const WorkflowDefinitionSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  steps: z.array(WorkflowStepSchema),
+  dependencies: z.record(z.array(z.string())).optional(),
+  fallbackStrategies: z.record(z.object({
+    replace: z.string(),
+    with: WorkflowStepSchema,
+  })).optional(),
+  timeout: z.number().optional(),
+  phases: z.array(z.array(z.string())).optional(), // For parallel execution phases
+  parallel: z.boolean().optional(), // Allow parallel execution
+  continueOnError: z.boolean().optional(), // Continue workflow on step failure
+});
+export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
+
+// Workflow Execution Plan
+export const WorkflowExecutionPlanSchema = z.object({
+  id: z.string(),
+  workflow: WorkflowDefinitionSchema,
+  input_data: z.record(z.any()),
+  execution_mode: ExecutionModeSchema,
+  estimated_duration: z.number().optional(),
+  estimated_cost: z.number().optional(),
+  priority: z.enum(['low', 'medium', 'high']).optional(),
+  created_at: z.date().default(() => new Date()),
+});
+export type WorkflowExecutionPlan = z.infer<typeof WorkflowExecutionPlanSchema>;
+
+// Resource Estimate
+export const ResourceEstimateSchema = z.object({
+  estimated_duration: z.number(), // milliseconds
+  estimated_cost: z.number().optional(), // USD
+  estimated_tokens: z.number().optional(),
+  complexity_score: z.number().min(0).max(10),
+  recommended_execution_mode: ExecutionModeSchema,
+  required_capabilities: z.array(z.enum(['claude', 'gemini', 'aistudio'])),
+});
+export type ResourceEstimate = z.infer<typeof ResourceEstimateSchema>;

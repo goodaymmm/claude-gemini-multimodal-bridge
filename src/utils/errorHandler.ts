@@ -7,9 +7,11 @@ import { logger } from './logger.js';
 
 export interface RetryOptions {
   maxRetries: number;
+  maxAttempts?: number; // Alias for maxRetries for compatibility
   delay: number;
   backoffMultiplier: number;
   maxDelay: number;
+  operationName?: string;
 }
 
 export class ErrorHandler {
@@ -27,7 +29,12 @@ export class ErrorHandler {
     operation: () => Promise<T>,
     options: Partial<RetryOptions> = {}
   ): Promise<T> {
-    const opts = { ...this.defaultRetryOptions, ...options };
+    const opts = { 
+      ...this.defaultRetryOptions, 
+      ...options,
+      // Handle maxAttempts alias
+      maxRetries: options.maxAttempts || options.maxRetries || this.defaultRetryOptions.maxRetries
+    };
     let lastError: Error;
 
     for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {

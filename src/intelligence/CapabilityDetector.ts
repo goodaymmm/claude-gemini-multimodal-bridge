@@ -353,7 +353,7 @@ export class CapabilityDetector {
           timeout: 5000,
           stdio: 'pipe'
         });
-        return output.split('\n')[0].trim();
+        return output.split('\n')[0]?.trim();
       } catch {
         return undefined;
       }
@@ -407,7 +407,7 @@ export class CapabilityDetector {
    * Clear capabilities cache
    */
   clearCache(): void {
-    this.capabilitiesCache = undefined;
+    this.capabilitiesCache = undefined as any;
     logger.debug('Capabilities cache cleared');
   }
 
@@ -443,7 +443,7 @@ export class CapabilityDetector {
    */
   async getDetailedCapabilityReport(): Promise<{
     capabilities: AvailableCapabilities;
-    status: Awaited<ReturnType<typeof this.getCapabilityStatus>>;
+    status: Awaited<ReturnType<CapabilityDetector['getCapabilityStatus']>>;
     timestamp: Date;
   }> {
     const capabilities = await this.detectAvailableCapabilities();

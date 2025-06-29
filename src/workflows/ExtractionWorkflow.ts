@@ -103,7 +103,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'comprehensive-extraction-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -132,7 +132,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'text-extraction-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -163,7 +163,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'structured-data-extraction-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -194,7 +194,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'entity-extraction-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -225,7 +225,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'multimodal-extraction-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -256,7 +256,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'form-data-extraction-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -286,7 +286,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'metadata-extraction-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );

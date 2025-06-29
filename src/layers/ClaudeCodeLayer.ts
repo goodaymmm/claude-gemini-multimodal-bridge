@@ -38,7 +38,7 @@ export class ClaudeCodeLayer implements LayerInterface {
         }
 
         // Find Claude Code executable path
-        this.claudePath = await this.findClaudeCodePath();
+        this.claudePath = await this.findClaudeCodePath() || '';
         if (!this.claudePath) {
           throw new Error('Claude Code executable not found');
         }

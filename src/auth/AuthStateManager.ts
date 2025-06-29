@@ -114,7 +114,7 @@ export class AuthStateManager {
   async stopAuthMonitoring(): Promise<void> {
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
-      this.monitoringInterval = undefined;
+      this.monitoringInterval = undefined as any;
       logger.info('Authentication monitoring stopped');
     }
   }

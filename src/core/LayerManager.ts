@@ -35,9 +35,9 @@ export class LayerManager {
 
   constructor(config: Config) {
     this.config = config;
-    this.claudeLayer = new ClaudeCodeLayer(config);
-    this.geminiLayer = new GeminiCLILayer(config);
-    this.aiStudioLayer = new AIStudioLayer(config);
+    this.claudeLayer = new ClaudeCodeLayer();
+    this.geminiLayer = new GeminiCLILayer();
+    this.aiStudioLayer = new AIStudioLayer();
   }
 
   /**
@@ -104,7 +104,7 @@ export class LayerManager {
     const executionPlan = await this.createWorkflowPlan(workflow, {
       prompt,
       files,
-      options,
+      options: options || {},
     });
 
     // Execute the workflow
@@ -284,7 +284,7 @@ export class LayerManager {
           duration: result.metadata.duration,
         });
       } catch (error) {
-        logger.error(`Step ${step.id} failed`, error);
+        logger.error(`Step ${step.id} failed`, error as Error);
         
         // Try fallback strategy if available
         const fallbackResult = await this.tryFallbackStrategy(
@@ -335,7 +335,7 @@ export class LayerManager {
           const result = await this.executeStep(step, stepInput, options);
           return { stepId: step.id, result };
         } catch (error) {
-          logger.error(`Step ${step.id} failed in parallel execution`, error);
+          logger.error(`Step ${step.id} failed in parallel execution`, error as Error);
           return {
             stepId: step.id,
             result: {
@@ -403,7 +403,7 @@ export class LayerManager {
       {
         operationName: `step-${step.id}`,
         layer: step.layer,
-        timeout: step.timeout || options.timeout,
+        timeout: step.timeout || options.timeout || 120000,
       }
     );
   }
@@ -529,7 +529,7 @@ export class LayerManager {
       
       return await this.executeStep(strategy.with, fallbackInput, options);
     } catch (fallbackError) {
-      logger.error(`Fallback strategy failed for step ${failedStep.id}`, fallbackError);
+      logger.error(`Fallback strategy failed for step ${failedStep.id}`, fallbackError as Error);
       return null;
     }
   }
@@ -833,11 +833,11 @@ export class LayerManager {
 
     steps.forEach(step => {
       if (step.layer === analysis.recommendedLayer) {
-        groups.high.push(step);
+        groups.high!.push(step);
       } else if (step.layer === 'claude') {
-        groups.medium.push(step);
+        groups.medium!.push(step);
       } else {
-        groups.low.push(step);
+        groups.low!.push(step);
       }
     });
 

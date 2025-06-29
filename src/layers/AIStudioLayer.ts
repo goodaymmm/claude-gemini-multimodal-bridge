@@ -206,7 +206,7 @@ export class AIStudioLayer implements LayerInterface {
 
         return {
           content: result.content || result.response || 'Processing completed',
-          files_processed: files.map(f => f.path || f.name),
+          files_processed: files.map(f => f.path),
           processing_time: processingTime,
           tokens_used: this.estimateTokensUsed({ files, instructions }, result),
           model_used: 'gemini-2.5-pro',
@@ -516,7 +516,7 @@ export class AIStudioLayer implements LayerInterface {
     }
 
     for (const file of files) {
-      const path = 'path' in file ? file.path : file.name;
+      const path = file.path;
       const size = file.size;
 
       if (size && size > this.MAX_FILE_SIZE) {
@@ -552,9 +552,9 @@ export class AIStudioLayer implements LayerInterface {
         };
       } else {
         return {
-          path: file.name,
+          path: file.path,
           content: file.content,
-          mimeType: file.mimeType,
+          mimeType: file.type,
           size: file.size,
         };
       }

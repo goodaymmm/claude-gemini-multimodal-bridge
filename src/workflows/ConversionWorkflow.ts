@@ -88,7 +88,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'document-conversion-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -121,7 +121,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'image-conversion-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -154,7 +154,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'audio-conversion-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -187,7 +187,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'data-conversion-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -215,7 +215,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'batch-conversion-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout * conversions.length,
       }
     );
@@ -249,7 +249,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'content-extraction-conversion-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );

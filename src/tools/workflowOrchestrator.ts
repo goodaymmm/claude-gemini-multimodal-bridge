@@ -31,9 +31,18 @@ export class WorkflowOrchestrator {
   private readonly MAX_WORKFLOW_DURATION = 30 * 60 * 1000; // 30 minutes
   private readonly MAX_RETRY_ATTEMPTS = 3;
 
-  constructor() {
-    this.layerManager = new LayerManager();
-    this.claudeLayer = new ClaudeCodeLayer();
+  constructor(config?: any) {
+    // Create default config if not provided
+    const defaultConfig = {
+      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
+      claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
+      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+      cache: { enabled: true, ttl: 3600 },
+      logging: { level: 'info' as const },
+    };
+    
+    this.layerManager = new LayerManager(config || defaultConfig);
+    this.claudeLayer = new ClaudeCodeLayer(config || defaultConfig);
     this.geminiLayer = new GeminiCLILayer();
     this.aiStudioLayer = new AIStudioLayer();
     this.authVerifier = new AuthVerifier();

@@ -52,7 +52,7 @@ program
       });
       
     } catch (error) {
-      logger.error('Failed to start CGMB server', error);
+      logger.error('Failed to start CGMB server', error as Error);
       process.exit(1);
     }
   });
@@ -106,7 +106,7 @@ program
       logger.info('💡 Tip: OAuth authentication is recommended (no API keys needed)');
       
     } catch (error) {
-      logger.error('Setup failed', error);
+      logger.error('Setup failed', error as Error);
       process.exit(1);
     }
   });
@@ -138,7 +138,7 @@ program
       }
       
     } catch (error) {
-      logger.error('Authentication setup failed', error);
+      logger.error('Authentication setup failed', error as Error);
       process.exit(1);
     }
   });
@@ -191,7 +191,7 @@ program
       console.log('');
       
     } catch (error) {
-      logger.error('Failed to check authentication status', error);
+      logger.error('Failed to check authentication status', error as Error);
       process.exit(1);
     }
   });
@@ -251,7 +251,7 @@ program
       }
       
     } catch (error) {
-      logger.error('Failed to get quota status', error);
+      logger.error('Failed to get quota status', error as Error);
       console.error('❌ Failed to get quota status:', (error as Error).message);
       process.exit(1);
     }
@@ -334,7 +334,7 @@ program
       }
       
     } catch (error) {
-      logger.error('Failed to detect paths', error);
+      logger.error('Failed to detect paths', error as Error);
       console.error('❌ Failed to detect paths:', (error as Error).message);
       process.exit(1);
     }
@@ -447,7 +447,7 @@ program
         logger.info('💡 Try: cgmb serve');
         
       } else {
-        logger.error('⚠️  Some verification checks failed');
+        logger.error('⚠️  Some verification checks failed', new Error('Verification checks failed'));
         
         if (options.fix && !authChecksPassed) {
           logger.info('\n🔧 Attempting to fix authentication issues...');
@@ -456,7 +456,7 @@ program
             logger.info('✓ Authentication setup completed');
             logger.info('💡 Please run "cgmb verify" again to confirm fixes');
           } catch (fixError) {
-            logger.error('❌ Automatic fix failed:', (fixError as Error).message);
+            logger.error('❌ Automatic fix failed', fixError as Error);
             logger.info('💡 Please run "cgmb auth --interactive" for manual setup');
           }
         } else if (!authChecksPassed) {
@@ -481,7 +481,7 @@ program
       }
       
     } catch (error) {
-      logger.error('❌ Verification failed:', (error as Error).message);
+      logger.error('❌ Verification failed', error as Error);
       logger.info('\n💡 Try:');
       logger.info('   1. cgmb setup');
       logger.info('   2. cgmb auth --interactive');
@@ -516,7 +516,7 @@ program
       logger.info('CGMB is working correctly');
       
     } catch (error) {
-      logger.error('Test failed', error);
+      logger.error('Test failed', error as Error);
       process.exit(1);
     }
   });

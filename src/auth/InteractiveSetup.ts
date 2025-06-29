@@ -257,6 +257,7 @@ export class InteractiveSetup {
           method: 'oauth',
           userInfo: geminiStatus.status.userInfo,
         },
+        requiresAction: false,
       };
     }
     

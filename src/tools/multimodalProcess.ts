@@ -33,8 +33,17 @@ export class MultimodalProcess {
     spreadsheets: ['.xls', '.xlsx', '.ods', '.csv'],
   };
 
-  constructor() {
-    this.layerManager = new LayerManager();
+  constructor(config?: any) {
+    // Create default config if not provided
+    const defaultConfig = {
+      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
+      claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
+      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+      cache: { enabled: true, ttl: 3600 },
+      logging: { level: 'info' as const },
+    };
+    
+    this.layerManager = new LayerManager(config || defaultConfig);
     this.authVerifier = new AuthVerifier();
   }
 
@@ -48,8 +57,8 @@ export class MultimodalProcess {
         
         logger.info('Starting multimodal processing', {
           fileCount: args.files.length,
-          workflowType: args.workflowType,
-          hasInstructions: !!args.instructions,
+          workflow: args.workflow,
+          promptLength: args.prompt.length,
         });
 
         // Validate inputs
@@ -68,19 +77,21 @@ export class MultimodalProcess {
         
         return {
           success: true,
-          result: result.data,
+          content: result.data || '',
+          files_processed: processedFiles.map(f => f.path),
+          processing_time: totalDuration,
+          workflow_used: validatedArgs.workflow,
+          layers_involved: this.extractLayersUsed(result),
           metadata: {
-            ...result.metadata,
-            totalDuration,
-            filesProcessed: processedFiles.length,
-            workflowType: validatedArgs.workflowType,
-            layersUsed: this.extractLayersUsed(result),
+            total_duration: totalDuration,
+            tokens_used: result.metadata?.tokens_used,
+            cost: result.metadata?.cost,
           },
         };
       },
       {
         operationName: 'multimodal-process',
-        layer: 'tool',
+        layer: 'claude', // Use valid LayerType
         timeout: 600000, // 10 minutes
       }
     );
@@ -97,9 +108,9 @@ export class MultimodalProcess {
     const file = await this.createFileReference(filePath);
     
     return this.processMultimodal({
+      prompt: instructions,
       files: [file],
-      instructions,
-      workflowType: this.detectWorkflowType([file], instructions),
+      workflow: this.detectWorkflowType([file], instructions),
       options: options || {},
     });
   }
@@ -117,9 +128,9 @@ export class MultimodalProcess {
     );
     
     return this.processMultimodal({
+      prompt: instructions,
       files,
-      instructions,
-      workflowType: 'batch_processing',
+      workflow: 'generation',
       options: {
         ...options,
         batchMode: true,
@@ -139,9 +150,9 @@ export class MultimodalProcess {
     const instructions = this.generateAnalysisInstructions(files);
     
     return this.processMultimodal({
+      prompt: instructions,
       files,
-      instructions,
-      workflowType: 'content_analysis',
+      workflow: 'analysis',
       options: {
         detailed: true,
         extractMetadata: true,
@@ -164,9 +175,9 @@ export class MultimodalProcess {
     const instructions = `Convert the provided files to ${targetFormat} format. Maintain quality and preserve important content structure.`;
     
     return this.processMultimodal({
+      prompt: instructions,
       files,
-      instructions,
-      workflowType: 'format_conversion',
+      workflow: 'conversion',
       options: {
         ...options,
         outputFormat: targetFormat,
@@ -190,9 +201,9 @@ export class MultimodalProcess {
     const instructions = this.generateExtractionInstructions(extractionType);
     
     return this.processMultimodal({
+      prompt: instructions,
       files,
-      instructions,
-      workflowType: 'data_extraction',
+      workflow: 'extraction',
       options: {
         ...options,
         extractionType,
@@ -219,8 +230,8 @@ export class MultimodalProcess {
       throw new Error(`Too many files. Maximum ${this.MAX_FILES} files allowed`);
     }
 
-    if (!args.instructions?.trim()) {
-      throw new Error('Instructions are required for processing');
+    if (!args.prompt?.trim()) {
+      throw new Error('Prompt is required for processing');
     }
 
     return validationResult.data;
@@ -372,13 +383,13 @@ export class MultimodalProcess {
       this.determineFileType(f.path) !== 'document' && this.determineFileType(f.path) !== 'unknown'
     );
     
-    if (hasMultimodalFiles || args.workflowType === 'multimodal_processing') {
+    if (hasMultimodalFiles || args.workflow === 'analysis') {
       services.add('aistudio');
     }
     
     // Check if grounding/search is needed
-    const needsGrounding = this.needsGrounding(args.instructions);
-    if (needsGrounding || args.workflowType === 'content_analysis') {
+    const needsGrounding = this.needsGrounding(args.prompt);
+    if (needsGrounding || args.workflow === 'analysis') {
       services.add('gemini');
     }
     
@@ -411,14 +422,14 @@ export class MultimodalProcess {
         const workflowTask = {
           type: 'multimodal',
           action: 'multimodal_processing',
-          workflowType: args.workflowType,
+          workflowType: args.workflow,
           files,
-          instructions: args.instructions,
+          instructions: args.prompt,
           options: args.options || {},
         };
 
         logger.info('Executing multimodal workflow', {
-          workflowType: args.workflowType,
+          workflowType: args.workflow,
           fileCount: files.length,
           optionsSet: Object.keys(args.options || {}).length,
         });

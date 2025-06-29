@@ -68,7 +68,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'content-analysis-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -99,7 +99,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'comparative-analysis-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -126,7 +126,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'thematic-analysis-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -153,7 +153,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'sentiment-analysis-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -180,7 +180,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'trend-analysis-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -207,7 +207,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'statistical-analysis-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout * 1.5, // Statistical analysis may take longer
       }
     );

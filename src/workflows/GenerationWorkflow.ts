@@ -111,7 +111,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'content-generation-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -142,7 +142,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'summary-generation-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -179,7 +179,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'report-generation-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -218,7 +218,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'documentation-generation-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -260,7 +260,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'presentation-generation-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -298,7 +298,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'creative-generation-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );
@@ -332,7 +332,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'comparative-analysis-generation-workflow',
-        layer: 'workflow',
+        layer: 'claude',
         timeout: this.timeout,
       }
     );

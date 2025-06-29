@@ -347,19 +347,19 @@ export class AuthVerifier {
   private generateRecommendations(services: Record<string, AuthResult>): string[] {
     const recommendations: string[] = [];
 
-    if (!services.gemini.success) {
+    if (services.gemini && !services.gemini.success) {
       if (services.gemini.actionInstructions) {
         recommendations.push(`Gemini: ${services.gemini.actionInstructions}`);
       }
     }
 
-    if (!services.aistudio.success) {
+    if (services.aistudio && !services.aistudio.success) {
       if (services.aistudio.actionInstructions) {
         recommendations.push(`AI Studio: ${services.aistudio.actionInstructions}`);
       }
     }
 
-    if (!services.claude.success) {
+    if (services.claude && !services.claude.success) {
       if (services.claude.actionInstructions) {
         recommendations.push(`Claude Code: ${services.claude.actionInstructions}`);
       }
