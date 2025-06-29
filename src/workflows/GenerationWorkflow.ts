@@ -20,7 +20,6 @@ import path from 'path';
 export class GenerationWorkflow implements WorkflowDefinition {
   id: string;
   steps: any[];
-  parallel: boolean;
   continueOnError: boolean;
   timeout: number;
 
@@ -66,7 +65,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
   constructor(id?: string) {
     this.id = id || `generation_workflow_${Date.now()}`;
     this.steps = [];
-    this.parallel = false;
     this.continueOnError = false;
     this.timeout = 1200000; // 20 minutes
 
@@ -111,7 +109,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'content-generation-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -142,7 +140,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'summary-generation-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -179,7 +177,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'report-generation-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -218,7 +216,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'documentation-generation-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -260,7 +258,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'presentation-generation-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -298,7 +296,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'creative-generation-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -332,7 +330,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'comparative-analysis-generation-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -353,7 +351,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'research',
       steps: ['analyze_sources', 'extract_insights', 'research_context'],
-      estimatedDuration: 180000, // 3 minutes
       requiredLayers: ['aistudio', 'gemini'],
     });
     estimatedDuration += 180000;
@@ -362,7 +359,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'planning',
       steps: ['create_outline', 'plan_structure', 'organize_content'],
-      estimatedDuration: 120000, // 2 minutes
       requiredLayers: ['claude'],
     });
     estimatedDuration += 120000;
@@ -372,7 +368,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'generation',
       steps: ['generate_content', 'enhance_with_context', 'refine_output'],
-      estimatedDuration: generationDuration,
       requiredLayers: ['claude', 'gemini'],
     });
     estimatedDuration += generationDuration;
@@ -382,17 +377,13 @@ export class GenerationWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'finalization',
       steps: ['review_content', 'format_output', 'quality_check'],
-      estimatedDuration: 120000, // 2 minutes
       requiredLayers: ['claude'],
     });
     estimatedDuration += 120000;
 
     return {
-      phases,
-      estimatedDuration,
-      estimatedCost,
-      complexity: generationComplexity,
-      parallelizable: false, // Generation typically sequential
+      steps: [],
+      timeout: estimatedDuration,
     };
   }
 
@@ -439,19 +430,20 @@ export class GenerationWorkflow implements WorkflowDefinition {
 
     // Adjust for complexity
     const complexityMultipliers = {
-      low: { memory: 1, cpu: 1, duration: 1, cost: 1 },
-      medium: { memory: 1.5, cpu: 1.3, duration: 2, cost: 1.5 },
-      high: { memory: 2.5, cpu: 2, duration: 4, cost: 2.5 },
+      low: { estimated_tokens: 1, complexity_score: 1, estimated_duration: 1, estimated_cost: 1 },
+      medium: { estimated_tokens: 1.5, complexity_score: 1.3, estimated_duration: 2, estimated_cost: 1.5 },
+      high: { estimated_tokens: 2.5, complexity_score: 2, estimated_duration: 4, estimated_cost: 2.5 },
     };
 
     const multiplier = complexityMultipliers[complexity];
 
     return {
-      memory: memory * lengthMultiplier * sourceMultiplier * multiplier.memory,
-      cpu: cpu * multiplier.cpu,
-      duration: duration * lengthMultiplier * multiplier.duration,
-      cost: cost * lengthMultiplier * multiplier.cost,
-      bandwidth: 20, // MB
+      estimated_tokens: memory * lengthMultiplier * sourceMultiplier * multiplier.estimated_tokens,
+      complexity_score: cpu * multiplier.complexity_score,
+      estimated_duration: duration * lengthMultiplier * multiplier.estimated_duration,
+      recommended_execution_mode: 'adaptive' as const,
+      required_capabilities: ['claude', 'gemini', 'aistudio'] as const,
+      estimated_cost: cost * lengthMultiplier * multiplier.estimated_cost,
     };
   }
 
@@ -492,7 +484,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
     if (sourceFiles.length > 0) {
       steps.push({
         id: 'analyze_sources',
-        layer: 'aistudio',
+        layer: 'aistudio' as const,
         action: 'document_analysis',
         input: {
           files: sourceFiles,
@@ -506,7 +498,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
     if (this.needsGrounding(generationType, requirements)) {
       steps.push({
         id: 'research_context',
-        layer: 'gemini',
+        layer: 'gemini' as const,
         action: 'grounded_search',
         input: {
           prompt: `Research current information relevant to: ${requirements}`,
@@ -519,7 +511,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
     // Step 3: Content planning
     steps.push({
       id: 'plan_content',
-      layer: 'claude',
+      layer: 'claude' as const,
       action: 'complex_reasoning',
       input: {
         prompt: this.buildPlanningPrompt(generationType, requirements, options),
@@ -532,7 +524,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
     // Step 4: Generate content
     steps.push({
       id: 'generate_content',
-      layer: 'claude',
+      layer: 'claude' as const,
       action: 'synthesize_response',
       input: {
         request: this.buildGenerationPrompt(generationType, requirements, options),
@@ -548,7 +540,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
     // Step 5: Review and refine
     steps.push({
       id: 'review_and_refine',
-      layer: 'claude',
+      layer: 'claude' as const,
       action: 'complex_reasoning',
       input: {
         prompt: 'Review the generated content for quality, accuracy, and adherence to requirements',
@@ -561,7 +553,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
     return {
       id: `content_generation_${generationType}_${Date.now()}`,
       steps,
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -580,7 +571,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'analyze_content_for_summary',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files: sourceFiles,
@@ -590,7 +581,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'generate_summary',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: this.buildSummaryPrompt(summaryType, options),
@@ -600,7 +591,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'refine_summary',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: 'Refine summary for clarity, conciseness, and completeness',
@@ -610,7 +601,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
           dependsOn: ['generate_summary'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -630,7 +620,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'analyze_data_for_report',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files: sourceFiles,
@@ -640,7 +630,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'create_report_structure',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Create detailed structure for ${reportType} report with sections: ${specifications.sections.join(', ')}`,
@@ -651,7 +641,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'generate_report_content',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: `Generate comprehensive ${reportType} report: ${specifications.requirements}`,
@@ -664,7 +654,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'format_report',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Format report with proper headings, sections, and professional presentation',
@@ -673,7 +663,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
           dependsOn: ['generate_report_content'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -693,7 +682,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'analyze_technical_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files: sourceFiles,
@@ -703,7 +692,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'create_documentation_outline',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Create comprehensive outline for ${documentationType} documentation`,
@@ -714,7 +703,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'generate_documentation_sections',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Generate detailed documentation sections with examples and best practices',
@@ -727,7 +716,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'format_documentation',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Format documentation with proper markdown, code blocks, and navigation',
@@ -736,7 +725,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
           dependsOn: ['generate_documentation_sections'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -756,7 +744,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'analyze_presentation_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files: sourceFiles,
@@ -766,7 +754,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'create_slide_outline',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Create detailed slide outline for ${slideStructure.targetSlideCount} slides`,
@@ -777,7 +765,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'generate_slide_content',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Generate engaging slide content with bullet points and speaker notes',
@@ -789,7 +777,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
           dependsOn: ['create_slide_outline'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -809,7 +796,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'gather_creative_inspiration',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files: sourceFiles,
@@ -819,7 +806,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'develop_creative_concept',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Develop creative concept for ${creativeType}: ${creativePrompt}`,
@@ -830,7 +817,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'generate_creative_content',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Generate engaging creative content with vivid imagery and compelling narrative',
@@ -842,7 +829,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
           dependsOn: ['develop_creative_concept'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -862,7 +848,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'analyze_comparison_sources',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files: sourceFiles,
@@ -872,7 +858,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'perform_comparative_analysis',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Perform detailed comparative analysis using specified criteria`,
@@ -883,7 +869,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
         },
         {
           id: 'generate_comparison_output',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: `Generate ${outputType} format comparison with insights and recommendations`,
@@ -892,7 +878,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
           dependsOn: ['perform_comparative_analysis'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };

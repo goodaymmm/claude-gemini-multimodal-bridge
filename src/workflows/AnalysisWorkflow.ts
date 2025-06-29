@@ -1,5 +1,6 @@
 import {
   WorkflowDefinition,
+  WorkflowStep,
   WorkflowResult,
   ExecutionPlan,
   ResourceEstimate,
@@ -21,7 +22,6 @@ import path from 'path';
 export class AnalysisWorkflow implements WorkflowDefinition {
   id: string;
   steps: any[];
-  parallel: boolean;
   continueOnError: boolean;
   timeout: number;
 
@@ -32,7 +32,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
   constructor(id?: string) {
     this.id = id || `analysis_workflow_${Date.now()}`;
     this.steps = [];
-    this.parallel = false;
     this.continueOnError = false;
     this.timeout = 900000; // 15 minutes
 
@@ -68,7 +67,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'content-analysis-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -99,7 +98,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'comparative-analysis-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -126,7 +125,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'thematic-analysis-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -153,7 +152,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'sentiment-analysis-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -180,7 +179,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'trend-analysis-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -207,7 +206,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'statistical-analysis-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout * 1.5, // Statistical analysis may take longer
       }
     );
@@ -229,7 +228,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       phases.push({
         name: 'content_extraction',
         steps: ['extract_text', 'extract_metadata', 'preprocess_content'],
-        estimatedDuration: 60000 * files.length, // 1 minute per file
         requiredLayers: ['aistudio'],
       });
       estimatedDuration += 60000 * files.length;
@@ -240,7 +238,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'initial_analysis',
       steps: ['analyze_structure', 'identify_themes', 'extract_entities'],
-      estimatedDuration: 120000, // 2 minutes
       requiredLayers: ['claude', 'aistudio'],
     });
     estimatedDuration += 120000;
@@ -251,7 +248,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       phases.push({
         name: 'deep_analysis',
         steps: ['complex_reasoning', 'cross_referencing', 'pattern_detection'],
-        estimatedDuration: 300000, // 5 minutes
         requiredLayers: ['claude', 'gemini'],
       });
       estimatedDuration += 300000;
@@ -262,18 +258,27 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'synthesis',
       steps: ['synthesize_findings', 'generate_insights', 'create_report'],
-      estimatedDuration: 120000, // 2 minutes
       requiredLayers: ['claude'],
     });
     estimatedDuration += 120000;
     estimatedCost += 0.02;
 
+    const steps: WorkflowStep[] = [];
+    phases.forEach(phase => {
+      phase.steps.forEach(stepName => {
+        steps.push({
+          id: stepName,
+          layer: 'claude' as const,
+          action: 'analyze',
+          input: { instruction: stepName },
+          dependsOn: [],
+        });
+      });
+    });
+    
     return {
-      phases,
-      estimatedDuration,
-      estimatedCost,
-      complexity,
-      parallelizable: phases.some(phase => phase.steps.length > 1),
+      steps,
+      timeout: estimatedDuration,
     };
   }
 
@@ -313,19 +318,20 @@ export class AnalysisWorkflow implements WorkflowDefinition {
 
     // Adjust based on complexity
     const complexityMultipliers = {
-      low: { memory: 1, cpu: 1, duration: 1, cost: 1 },
-      medium: { memory: 1.5, cpu: 1.2, duration: 1.5, cost: 1.3 },
-      high: { memory: 2, cpu: 1.5, duration: 2, cost: 1.6 },
+      low: { estimated_tokens: 1, complexity_score: 1, estimated_duration: 1, estimated_cost: 1 },
+      medium: { estimated_tokens: 1.5, complexity_score: 1.2, estimated_duration: 1.5, estimated_cost: 1.3 },
+      high: { estimated_tokens: 2, complexity_score: 1.5, estimated_duration: 2, estimated_cost: 1.6 },
     };
 
     const multiplier = complexityMultipliers[complexity];
 
     return {
-      memory: baseMemory * memoryMultiplier * multiplier.memory,
-      cpu: baseCPU * multiplier.cpu,
-      duration: baseDuration * durationMultiplier * multiplier.duration,
-      cost: baseCost * multiplier.cost,
-      bandwidth: 50, // MB
+      estimated_duration: baseDuration * durationMultiplier * multiplier.estimated_duration,
+      estimated_cost: baseCost * multiplier.estimated_cost,
+      estimated_tokens: baseMemory * memoryMultiplier * multiplier.estimated_tokens,
+      complexity_score: Math.min(baseCPU * multiplier.complexity_score / 10, 10),
+      recommended_execution_mode: 'adaptive' as const,
+      required_capabilities: ['claude', 'gemini', 'aistudio'] as const,
     };
   }
 
@@ -425,13 +431,13 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     analysisType: AnalysisType,
     options?: ProcessingOptions
   ): WorkflowDefinition {
-    const steps = [];
+    const steps: WorkflowStep[] = [];
 
     // Step 1: Content extraction
     if (fileTypes.multimodal.length > 0) {
       steps.push({
         id: 'extract_multimodal_content',
-        layer: 'aistudio',
+        layer: 'aistudio' as const,
         action: 'multimodal_processing',
         input: {
           files: fileTypes.multimodal,
@@ -444,7 +450,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     if (fileTypes.documents.length > 0) {
       steps.push({
         id: 'extract_document_content',
-        layer: 'aistudio',
+        layer: 'aistudio' as const,
         action: 'document_analysis',
         input: {
           files: fileTypes.documents,
@@ -457,7 +463,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     // Step 2: Initial analysis
     steps.push({
       id: 'initial_content_analysis',
-      layer: 'claude',
+      layer: 'claude' as const,
       action: 'complex_reasoning',
       input: {
         prompt: `Perform ${analysisType} analysis of the extracted content. Identify themes, patterns, and key insights.`,
@@ -473,7 +479,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     if (this.needsGrounding(analysisType, options)) {
       steps.push({
         id: 'grounded_analysis',
-        layer: 'gemini',
+        layer: 'gemini' as const,
         action: 'grounded_search',
         input: {
           prompt: 'Enhance the analysis with current contextual information: {{initial_content_analysis}}',
@@ -486,7 +492,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     // Step 4: Final synthesis
     steps.push({
       id: 'synthesize_analysis',
-      layer: 'claude',
+      layer: 'claude' as const,
       action: 'synthesize_response',
       input: {
         request: 'Create comprehensive analysis report with insights and conclusions',
@@ -501,7 +507,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     return {
       id: `content_analysis_${Date.now()}`,
       steps,
-      parallel: true,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -520,7 +525,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_all_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -530,7 +535,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'perform_comparison',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Perform ${comparisonType} comparison of the extracted content. Focus on similarities, differences, and relationships.`,
@@ -541,7 +546,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'generate_comparison_report',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Generate detailed comparison report with findings and insights',
@@ -550,7 +555,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
           dependsOn: ['perform_comparison'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -569,7 +573,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_content_for_themes',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -579,7 +583,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'analyze_theme_patterns',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Analyze thematic patterns for: ${themes.join(', ')}. Identify relationships, frequencies, and contextual usage.`,
@@ -590,7 +594,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'synthesize_thematic_insights',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Synthesize thematic analysis with insights about theme development and relationships',
@@ -599,7 +603,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
           dependsOn: ['analyze_theme_patterns'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -618,7 +621,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_text_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -628,7 +631,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'analyze_sentiment',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Perform detailed sentiment analysis at ${granularity} level. Identify emotions, tone, and sentiment patterns.`,
@@ -639,7 +642,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'aggregate_sentiment_insights',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Aggregate sentiment analysis results and provide overall sentiment insights',
@@ -648,7 +651,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
           dependsOn: ['analyze_sentiment'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -667,7 +669,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_temporal_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -677,7 +679,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'identify_trends',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: 'Identify trends, patterns, and changes over time in the content',
@@ -688,7 +690,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'contextualize_trends',
-          layer: 'gemini',
+          layer: 'gemini' as const,
           action: 'grounded_search',
           input: {
             prompt: 'Provide current context for identified trends: {{identify_trends}}',
@@ -698,7 +700,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'synthesize_trend_analysis',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Create comprehensive trend analysis report with predictions and insights',
@@ -710,7 +712,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
           dependsOn: ['identify_trends', 'contextualize_trends'],
         },
       ],
-      parallel: true,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -729,7 +730,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_numerical_data',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -739,7 +740,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'perform_statistical_analysis',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Perform ${analysisTypes.join(', ')} statistical analysis on the extracted data`,
@@ -750,7 +751,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         },
         {
           id: 'interpret_results',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Interpret statistical results and provide insights with visualizable summaries',
@@ -759,7 +760,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
           dependsOn: ['perform_statistical_analysis'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout * 1.5, // Statistical analysis may take longer
     };
@@ -769,7 +769,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
    * Check if analysis needs grounding
    */
   private needsGrounding(analysisType: AnalysisType, options?: ProcessingOptions): boolean {
-    const groundingTypes: AnalysisType[] = ['contextual', 'comprehensive'];
+    const groundingTypes: AnalysisType[] = ['comprehensive'];
     return groundingTypes.includes(analysisType) || options?.requiresGrounding === true;
   }
 
@@ -777,7 +777,7 @@ export class AnalysisWorkflow implements WorkflowDefinition {
    * Get available analysis types
    */
   getAvailableAnalysisTypes(): AnalysisType[] {
-    return ['comprehensive', 'summarization', 'extraction', 'comparative', 'contextual'];
+    return ['comprehensive', 'comparative'];
   }
 
   /**

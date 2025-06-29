@@ -20,7 +20,6 @@ import path from 'path';
 export class ExtractionWorkflow implements WorkflowDefinition {
   id: string;
   steps: any[];
-  parallel: boolean;
   continueOnError: boolean;
   timeout: number;
 
@@ -66,7 +65,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
   constructor(id?: string) {
     this.id = id || `extraction_workflow_${Date.now()}`;
     this.steps = [];
-    this.parallel = true;
+    
     this.continueOnError = false;
     this.timeout = 900000; // 15 minutes
 
@@ -103,7 +102,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'comprehensive-extraction-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -132,7 +131,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'text-extraction-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -163,7 +162,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'structured-data-extraction-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -194,7 +193,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'entity-extraction-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -225,7 +224,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'multimodal-extraction-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -256,7 +255,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'form-data-extraction-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -286,7 +285,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'metadata-extraction-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -307,7 +306,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'analysis',
       steps: ['analyze_files', 'determine_extraction_strategy', 'prepare_processing'],
-      estimatedDuration: 60000, // 1 minute
       requiredLayers: ['aistudio'],
     });
     estimatedDuration += 60000;
@@ -317,7 +315,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'extraction',
       steps: ['extract_content', 'process_multimodal', 'structure_data'],
-      estimatedDuration: extractionDuration,
       requiredLayers: ['aistudio', 'claude'],
     });
     estimatedDuration += extractionDuration;
@@ -327,17 +324,13 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'postprocessing',
       steps: ['organize_results', 'validate_extraction', 'generate_output'],
-      estimatedDuration: 120000, // 2 minutes
       requiredLayers: ['claude'],
     });
     estimatedDuration += 120000;
 
     return {
-      phases,
-      estimatedDuration,
-      estimatedCost,
-      complexity: extractionComplexity,
-      parallelizable: files.length > 1 && fileTypes.multimodal.length > 0,
+      steps: [],
+      timeout: estimatedDuration,
     };
   }
 
@@ -385,19 +378,20 @@ export class ExtractionWorkflow implements WorkflowDefinition {
 
     // Adjust for complexity
     const complexityMultipliers = {
-      low: { memory: 1, cpu: 1, duration: 1, cost: 1 },
-      medium: { memory: 1.5, cpu: 1.3, duration: 1.8, cost: 1.4 },
-      high: { memory: 2.5, cpu: 2, duration: 3, cost: 2.2 },
+      low: { estimated_tokens: 1, complexity_score: 1, estimated_duration: 1, estimated_cost: 1 },
+      medium: { estimated_tokens: 1.5, complexity_score: 1.3, estimated_duration: 1.8, estimated_cost: 1.4 },
+      high: { estimated_tokens: 2.5, complexity_score: 2, estimated_duration: 3, estimated_cost: 2.2 },
     };
 
     const multiplier = complexityMultipliers[complexity];
 
     return {
-      memory: memory * Math.max(sizeMultiplier, countMultiplier) * typeMultiplier * multiplier.memory,
-      cpu: cpu * multiplier.cpu,
-      duration: duration * Math.max(sizeMultiplier, countMultiplier) * typeMultiplier * multiplier.duration,
-      cost: cost * typeMultiplier * multiplier.cost,
-      bandwidth: Math.min(totalSize / 1024 / 1024, 1000), // MB, max 1GB
+      estimated_tokens: memory * Math.max(sizeMultiplier, countMultiplier) * typeMultiplier * multiplier.estimated_tokens,
+      complexity_score: cpu * multiplier.complexity_score,
+      estimated_duration: duration * Math.max(sizeMultiplier, countMultiplier) * typeMultiplier * multiplier.estimated_duration,
+      recommended_execution_mode: 'adaptive' as const,
+      required_capabilities: ['claude', 'gemini', 'aistudio'] as const,
+      estimated_cost: cost * typeMultiplier * multiplier.estimated_cost,
     };
   }
 
@@ -430,7 +424,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     // Step 1: File analysis
     steps.push({
       id: 'analyze_files',
-      layer: 'aistudio',
+      layer: 'aistudio' as const,
       action: 'document_analysis',
       input: {
         files,
@@ -443,7 +437,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     extractionTypes.forEach((type, index) => {
       steps.push({
         id: `extract_${type}`,
-        layer: 'aistudio',
+        layer: 'aistudio' as const,
         action: this.getExtractionAction(type),
         input: {
           files,
@@ -458,7 +452,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     // Step 3: Combine and organize results
     steps.push({
       id: 'organize_extractions',
-      layer: 'claude',
+      layer: 'claude' as const,
       action: 'synthesize_response',
       input: {
         request: 'Organize and structure all extraction results into comprehensive output',
@@ -472,7 +466,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     return {
       id: `comprehensive_extraction_${Date.now()}`,
       steps,
-      parallel: true,
       continueOnError: true,
       timeout: this.timeout,
     };
@@ -487,7 +480,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_text_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -502,7 +495,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'clean_and_structure_text',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Clean and structure the extracted text for optimal readability',
@@ -511,7 +504,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
           dependsOn: ['extract_text_content'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -530,7 +522,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'identify_structured_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -546,7 +538,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'structure_extracted_data',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: 'Structure the extracted data into normalized, usable format',
@@ -557,7 +549,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'format_output',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: `Format structured data as ${options?.outputFormat || 'json'}`,
@@ -566,7 +558,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
           dependsOn: ['structure_extracted_data'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -585,7 +576,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_text_for_entities',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -595,7 +586,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'identify_entities',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: `Identify and extract entities of types: ${entityTypes.join(', ')}${options?.customEntities ? '. Custom entities: ' + options.customEntities.join(', ') : ''}`,
@@ -606,7 +597,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'organize_entities',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Organize entities with context and confidence scores',
@@ -618,7 +609,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
           dependsOn: ['identify_entities'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -637,7 +627,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'process_multimodal_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'multimodal_processing',
           input: {
             files,
@@ -652,7 +642,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'organize_multimodal_results',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Organize multimodal extraction results by content type',
@@ -661,7 +651,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
           dependsOn: ['process_multimodal_content'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -680,7 +669,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'identify_form_structure',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -693,7 +682,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'extract_form_data',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: 'Extract form data and values with field mapping',
@@ -704,7 +693,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'validate_and_format',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Validate and format form data for output',
@@ -717,7 +706,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
           dependsOn: ['extract_form_data'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -736,7 +724,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_file_metadata',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -750,7 +738,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'organize_metadata',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Organize metadata into structured categories',
@@ -759,7 +747,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
           dependsOn: ['extract_file_metadata'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
