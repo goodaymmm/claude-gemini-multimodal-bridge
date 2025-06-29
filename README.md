@@ -83,7 +83,7 @@ npm install -g @anthropic-ai/claude-code
 
 📖 **API Key Setup Guides:**
 - [Gemini API Key Guide](https://ai.google.dev/gemini-api/docs/api-key)
-- [Create API Key](https://aistudio.google.com/app/apikey)
+- [Create AI Studio API Key](https://aistudio.google.com/app/apikey)
 
 ### Installation
 
@@ -100,6 +100,8 @@ npm run build
 # Make CLI globally available
 npm link
 ```
+
+> **WSL Users**: Run `nvm use 22.17` before installation if you encounter version errors.
 
 **Option 2: Direct Usage (No Installation)**
 ```bash
@@ -118,6 +120,21 @@ npm start
 - **Node.js** ≥ 22.0.0 (Recommended: 22.17+)
 - **Claude Code CLI** installed and configured
 - **Gemini CLI** installed
+
+#### **Windows WSL Users**
+If you're using Windows WSL and encounter Node.js version or permission issues:
+
+```bash
+# Switch to required Node.js version
+nvm use 22.17  # or any 22.x version
+nvm current    # Verify version
+
+# Then proceed with installation
+npm install && npm run build
+npm link
+```
+
+**Note**: WSL environments may have multiple Node.js installations. Always use nvm to ensure the correct version.
 
 ### Authentication Requirements (Choose One Method Per Service)
 
@@ -438,6 +455,21 @@ cgmb test --file example.pdf --prompt "Analyze this document"
 ## 🐛 Troubleshooting
 
 ### Common Issues
+
+**WSL Permission/Version Issues:**
+```bash
+# Check current Node.js version
+node --version
+
+# If version < 22.0.0, switch with nvm
+nvm list        # Show available versions
+nvm install 22.17  # Install if not available
+nvm use 22.17   # Switch to required version
+
+# Verify and retry
+node --version
+npm link
+```
 
 **"Layer not available" errors:**
 ```bash
