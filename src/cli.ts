@@ -137,6 +137,10 @@ program
         await interactiveSetup.runAuthSetupWizard();
       }
       
+      // 認証完了後の明示的な終了
+      logger.info('Authentication setup completed successfully');
+      process.exit(0);
+      
     } catch (error) {
       logger.error('Authentication setup failed', error as Error);
       process.exit(1);
