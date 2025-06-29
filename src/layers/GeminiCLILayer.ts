@@ -4,6 +4,7 @@ import { logger } from '../utils/logger.js';
 import { safeExecute, retry } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { OAuthManager } from '../auth/OAuthManager.js';
+import { getQuotaMonitor, QuotaMonitor } from '../utils/quotaMonitor.js';
 
 /**
  * GeminiCLILayer handles Gemini CLI integration with enhanced authentication support
@@ -12,6 +13,7 @@ import { OAuthManager } from '../auth/OAuthManager.js';
 export class GeminiCLILayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private oauthManager: OAuthManager;
+  private quotaMonitor: QuotaMonitor;
   private geminiPath?: string;
   private isInitialized = false;
   private readonly DEFAULT_TIMEOUT = 60000; // 1 minute
@@ -29,6 +31,7 @@ export class GeminiCLILayer implements LayerInterface {
   constructor() {
     this.authVerifier = new AuthVerifier();
     this.oauthManager = new OAuthManager();
+    this.quotaMonitor = getQuotaMonitor(); // Defaults to free tier
     this.resetDailyCounterIfNeeded();
   }
 
@@ -132,7 +135,17 @@ export class GeminiCLILayer implements LayerInterface {
           await this.initialize();
         }
 
-        // Check rate limits
+        // Check quota limits before execution
+        const estimatedTokens = QuotaMonitor.estimateTokens(
+          JSON.stringify(task), 
+          task.files?.length || 0
+        );
+        const quotaCheck = this.quotaMonitor.canMakeRequest(estimatedTokens);
+        if (!quotaCheck.allowed) {
+          throw new Error(`Quota limit exceeded: ${quotaCheck.reason}. ${quotaCheck.waitTime ? `Wait ${Math.ceil(quotaCheck.waitTime / 1000)}s` : 'Try again later'}`);
+        }
+
+        // Check legacy rate limits
         await this.checkRateLimit();
 
         logger.info('Executing Gemini CLI task', {
@@ -159,6 +172,10 @@ export class GeminiCLILayer implements LayerInterface {
         }
 
         const duration = Date.now() - startTime;
+        const tokensUsed = this.estimateTokensUsed(task, result);
+        
+        // Track quota usage
+        this.quotaMonitor.trackRequest(tokensUsed);
         
         return {
           success: true,
@@ -166,9 +183,10 @@ export class GeminiCLILayer implements LayerInterface {
           metadata: {
             layer: 'gemini' as const,
             duration,
-            tokens_used: this.estimateTokensUsed(task, result),
+            tokens_used: tokensUsed,
             cost: this.calculateCost(task, result),
-            model: 'gemini-2.5-flash',
+            model: 'gemini-2.5-pro',
+            quota_status: this.quotaMonitor.getQuotaStatus(),
           },
         };
       },
@@ -242,7 +260,7 @@ export class GeminiCLILayer implements LayerInterface {
           files_processed: files.map(f => f.path),
           processing_time: processingTime,
           tokens_used: this.estimateTokensUsed({ files, prompt }, output),
-          model_used: 'gemini-2.5-flash',
+          model_used: 'gemini-2.5-pro',
         };
       },
       {
@@ -651,5 +669,19 @@ export class GeminiCLILayer implements LayerInterface {
       remainingDailyRequests: Math.max(0, this.RATE_LIMIT.daily - this.dailyRequestCount),
       resetTime: this.lastRequestTime + this.RATE_LIMIT.window,
     };
+  }
+
+  /**
+   * Get comprehensive quota status
+   */
+  getQuotaStatus() {
+    return this.quotaMonitor.getUsageStats();
+  }
+
+  /**
+   * Check if quota allows the request
+   */
+  canMakeQuotaRequest(estimatedTokens: number = 1000) {
+    return this.quotaMonitor.canMakeRequest(estimatedTokens);
   }
 }

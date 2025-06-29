@@ -140,7 +140,7 @@ export interface ToolResult {
 export const ConfigSchema = z.object({
   gemini: z.object({
     api_key: z.string(),
-    model: z.string().default('gemini-2.5-flash'),
+    model: z.string().default('gemini-2.5-pro'),
     timeout: z.number().default(60000),
     max_tokens: z.number().default(16384),
     temperature: z.number().default(0.2),

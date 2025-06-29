@@ -437,7 +437,7 @@ export class CGMBServer {
     return {
       gemini: {
         api_key: process.env.GEMINI_API_KEY || '',
-        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+        model: process.env.GEMINI_MODEL || 'gemini-2.5-pro',
         timeout: parseInt(process.env.GEMINI_TIMEOUT || '60000'),
         max_tokens: parseInt(process.env.GEMINI_MAX_OUTPUT_TOKENS || '16384'),
         temperature: parseFloat(process.env.GEMINI_TEMPERATURE || '0.2'),

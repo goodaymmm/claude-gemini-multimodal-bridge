@@ -19,23 +19,34 @@
 
 ## 🏗️ Architecture
 
+CGMB operates as an **MCP (Model Context Protocol) server** that seamlessly integrates three powerful AI layers. Claude Code connects to CGMB via MCP, enabling transparent enhancement of your existing workflows.
+
 ```mermaid
 graph TD
-    A[Claude Code] --> B[Layer Manager]
-    B --> C[Claude Code Layer]
-    B --> D[Gemini CLI Layer]
-    B --> E[AI Studio MCP Layer]
+    A[Claude Code CLI] --> B[MCP Connection]
+    B --> C[CGMB Server]
+    C --> D[Layer Manager]
+    D --> E[Claude Code Layer]
+    D --> F[Gemini CLI Layer]  
+    D --> G[AI Studio MCP Layer]
     
-    C --> F[Complex Reasoning]
-    D --> G[Grounding & CLI Tools]
-    E --> H[Multimodal Processing]
+    E --> H[Complex Reasoning & Workflow Orchestration]
+    F --> I[Real-time Grounding & Google Search]
+    G --> J[Multimodal Processing & File Conversion]
     
-    F --> I[Workflow Orchestration]
-    G --> I
-    H --> I
+    H --> K[Intelligent Result Synthesis]
+    I --> K
+    J --> K
     
-    I --> J[Unified Results]
+    K --> L[Enhanced Response to Claude Code]
 ```
+
+### How It Works
+
+1. **MCP Integration**: CGMB runs as an MCP server that Claude Code can connect to
+2. **Transparent Enhancement**: Your existing Claude Code workflows remain unchanged
+3. **Intelligent Routing**: CGMB automatically routes tasks to the optimal AI layer
+4. **Unified Results**: All responses are synthesized and returned through Claude Code
 
 ### Layer Responsibilities
 
@@ -49,15 +60,36 @@ graph TD
 
 ### Installation
 
+**Option 1: NPM Installation (Coming Soon)**
 ```bash
-# Install globally
+# When published to NPM (future)
 npm install -g claude-gemini-multimodal-bridge
+```
 
-# Or clone and build
-git clone https://github.com/yourusername/claude-gemini-multimodal-bridge
+**Option 2: Clone and Build (Current Method)**
+```bash
+# Clone the repository
+git clone https://github.com/goodaymmm/claude-gemini-multimodal-bridge.git
 cd claude-gemini-multimodal-bridge
+
+# Install dependencies and build
 npm install
 npm run build
+
+# Make CLI globally available
+npm link
+```
+
+**Option 3: Direct Usage (No Installation)**
+```bash
+# Run directly with npx
+npx claude-gemini-multimodal-bridge serve
+
+# Or clone and run without global installation
+git clone https://github.com/goodaymmm/claude-gemini-multimodal-bridge.git
+cd claude-gemini-multimodal-bridge
+npm install && npm run build
+npm start
 ```
 
 ### Prerequisites
@@ -73,8 +105,14 @@ npm run build
 # Run setup wizard
 cgmb setup
 
-# Verify installation
+# Set up authentication for all services
+cgmb auth --interactive
+
+# Verify installation and authentication
 cgmb verify
+
+# Check quota status before usage
+cgmb quota-status
 
 # Start the MCP server
 cgmb serve
@@ -93,7 +131,7 @@ CLAUDE_CODE_PATH=/usr/local/bin/claude
 GEMINI_CLI_PATH=/usr/local/bin/gemini
 
 # Processing Options
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-2.5-pro
 DEFAULT_LAYER_PRIORITY=adaptive
 ENABLE_CACHING=true
 ```
@@ -155,6 +193,49 @@ const workflow = {
 | `conversion` | File format conversion | PDF→Markdown, image processing |
 | `extraction` | Data extraction from files | Tables, text, metadata |
 | `generation` | Content creation | Reports, summaries, presentations |
+
+## 📊 Quota Monitoring & Management
+
+CGMB includes comprehensive API quota monitoring to help you stay within free tier limits and avoid unexpected charges.
+
+### Free Tier Limits (Google AI Studio)
+
+- **Requests**: 15/minute, 1,500/day
+- **Tokens**: 32,000/minute, 50,000/day
+
+### Quota Commands
+
+```bash
+# Check current quota usage
+cgmb quota-status
+
+# Detailed quota breakdown
+cgmb quota-status --detailed
+```
+
+### Automatic Quota Management
+
+- **Pre-request Validation**: Checks quota before making API calls
+- **Smart Warnings**: Alerts at 80% and 90% usage thresholds  
+- **Automatic Blocking**: Prevents requests that would exceed limits
+- **Reset Tracking**: Monitors daily and per-minute reset times
+
+### Quota Status Examples
+
+```bash
+📊 Google AI Studio API Quota Status
+=====================================
+Tier: FREE
+
+✅ Requests (Daily): 45/1500 (3%)
+   Remaining: 1455
+   Reset in: 18h
+
+✅ Tokens (Daily): 12450/50000 (25%)
+   Remaining: 37550
+
+✅ Overall Status: HEALTHY
+```
 
 ## 🛠️ API Reference
 
@@ -238,7 +319,7 @@ CLAUDE_CODE_TIMEOUT=300000
 CLAUDE_ENABLE_DANGEROUS_MODE=false
 
 # Gemini CLI Layer  
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-2.5-pro
 GEMINI_TIMEOUT=60000
 GEMINI_USE_SEARCH=true
 
@@ -287,8 +368,11 @@ cgmb test --file example.pdf --prompt "Analyze this document"
 
 **"Layer not available" errors:**
 ```bash
-# Check layer status
+# Check layer status and authentication
 cgmb verify
+
+# Check authentication status
+cgmb auth-status
 
 # Test individual layers
 claude --version
@@ -297,11 +381,36 @@ gemini --help
 
 **API key issues:**
 ```bash
-# Verify API keys are set
-cgmb info
+# Check authentication status
+cgmb auth-status --verbose
 
 # Test Gemini API directly
 gemini "test prompt"
+
+# Verify environment variables
+cgmb detect-paths
+```
+
+**Quota exceeded errors:**
+```bash
+# Check current quota usage
+cgmb quota-status
+
+# Wait for quota reset or upgrade plan
+# Free tier resets daily
+```
+
+**Path detection issues:**
+```bash
+# Auto-detect CLI tool paths
+cgmb detect-paths
+
+# Fix common PATH issues
+cgmb detect-paths --fix
+
+# Manual PATH setup
+export GEMINI_CLI_PATH=/usr/local/bin/gemini
+export CLAUDE_CODE_PATH=/usr/local/bin/claude
 ```
 
 **Performance issues:**
@@ -311,6 +420,9 @@ LOG_LEVEL=debug cgmb serve
 
 # Check resource usage
 htop  # Monitor CPU/memory during processing
+
+# Monitor quota usage
+cgmb quota-status --detailed
 ```
 
 ### Debug Mode

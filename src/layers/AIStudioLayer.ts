@@ -163,7 +163,7 @@ export class AIStudioLayer implements LayerInterface {
             duration,
             tokens_used: this.estimateTokensUsed(task, result),
             cost: this.calculateCost(task, result),
-            model: 'gemini-2.5-flash',
+            model: 'gemini-2.5-pro',
           },
         };
       },
@@ -209,7 +209,7 @@ export class AIStudioLayer implements LayerInterface {
           files_processed: files.map(f => f.path || f.name),
           processing_time: processingTime,
           tokens_used: this.estimateTokensUsed({ files, instructions }, result),
-          model_used: 'gemini-2.5-flash',
+          model_used: 'gemini-2.5-pro',
         };
       },
       {

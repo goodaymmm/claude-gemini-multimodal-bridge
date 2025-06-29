@@ -194,6 +194,150 @@ program
     }
   });
 
+// Quota status command
+program
+  .command('quota-status')
+  .description('Check Google AI Studio API quota usage')
+  .option('--detailed', 'Show detailed quota breakdown')
+  .action(async (options) => {
+    try {
+      const { getQuotaMonitor } = await import('./utils/quotaMonitor.js');
+      
+      const quotaMonitor = getQuotaMonitor();
+      const stats = quotaMonitor.getUsageStats();
+      const status = quotaMonitor.getQuotaStatus();
+      
+      console.log('📊 Google AI Studio API Quota Status');
+      console.log('=====================================');
+      console.log(`Tier: ${stats.tier.toUpperCase()}`);
+      console.log();
+      
+      // Requests status
+      const reqStatusIcon = status.requests_daily_percent >= 90 ? '🚨' : 
+                          status.requests_daily_percent >= 80 ? '⚠️' : '✅';
+      console.log(`${reqStatusIcon} Requests (Daily): ${stats.requests.today}/${stats.requests.daily_limit} (${Math.round(status.requests_daily_percent)}%)`);
+      console.log(`   Remaining: ${stats.requests.daily_remaining}`);
+      console.log(`   Reset in: ${Math.ceil(stats.reset_times.daily_reset_in / 1000 / 60 / 60)}h`);
+      console.log();
+      
+      // Tokens status
+      const tokenStatusIcon = status.tokens_daily_percent >= 90 ? '🚨' : 
+                            status.tokens_daily_percent >= 80 ? '⚠️' : '✅';
+      console.log(`${tokenStatusIcon} Tokens (Daily): ${stats.tokens.today}/${stats.tokens.daily_limit} (${Math.round(status.tokens_daily_percent)}%)`);
+      console.log(`   Remaining: ${stats.tokens.daily_remaining}`);
+      console.log();
+      
+      // Per-minute limits
+      if (options.detailed) {
+        console.log('Per-Minute Limits:');
+        console.log(`   Requests: ${stats.requests.this_minute}/${stats.requests.minute_limit}`);
+        console.log(`   Tokens: ${stats.tokens.this_minute}/${stats.tokens.minute_limit}`);
+        console.log(`   Reset in: ${Math.ceil(stats.reset_times.minute_reset_in / 1000)}s`);
+        console.log();
+      }
+      
+      // Overall status
+      const overallIcon = status.overall_status === 'critical' ? '🚨' : 
+                         status.overall_status === 'warning' ? '⚠️' : '✅';
+      console.log(`${overallIcon} Overall Status: ${status.overall_status.toUpperCase()}`);
+      
+      if (status.overall_status === 'critical') {
+        console.log('\n⚠️  WARNING: You are near or at your quota limits.');
+        console.log('   Consider waiting or upgrading to a paid plan.');
+      } else if (status.overall_status === 'warning') {
+        console.log('\n💡 TIP: Monitor your usage to avoid hitting limits.');
+      }
+      
+    } catch (error) {
+      logger.error('Failed to get quota status', error);
+      console.error('❌ Failed to get quota status:', (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Path detection command
+program
+  .command('detect-paths')
+  .description('Detect and show paths for required CLI tools')
+  .option('--fix', 'Attempt to fix PATH issues automatically')
+  .action(async (options) => {
+    try {
+      console.log('🔍 Detecting CLI Tool Paths');
+      console.log('===========================');
+      
+      const tools = [
+        { name: 'Claude Code', commands: ['claude', 'claude-code'], env: 'CLAUDE_CODE_PATH' },
+        { name: 'Gemini CLI', commands: ['gemini'], env: 'GEMINI_CLI_PATH' },
+        { name: 'Node.js', commands: ['node'], env: 'NODE_PATH' },
+        { name: 'NPM', commands: ['npm'], env: 'NPM_PATH' }
+      ];
+      
+      for (const tool of tools) {
+        console.log(`\n${tool.name}:`);
+        
+        let foundPath = null;
+        for (const command of tool.commands) {
+          try {
+            const output = execSync(`which ${command} 2>/dev/null || where ${command} 2>nul`, {
+              encoding: 'utf8',
+              stdio: 'pipe',
+              timeout: 5000,
+            });
+            foundPath = output.trim().split('\n')[0];
+            if (foundPath) {
+              console.log(`  ✅ Found: ${foundPath}`);
+              
+              // Test if it works
+              try {
+                execSync(`${foundPath} --version 2>/dev/null || ${foundPath} -v 2>/dev/null`, {
+                  stdio: 'ignore',
+                  timeout: 3000,
+                });
+                console.log(`     Works: ✅`);
+              } catch {
+                console.log(`     Works: ❌ (command failed)`);
+              }
+              break;
+            }
+          } catch {
+            continue;
+          }
+        }
+        
+        if (!foundPath) {
+          console.log(`  ❌ Not found in PATH`);
+          if (tool.env) {
+            console.log(`     Set ${tool.env}=/path/to/${tool.commands[0]} in your environment`);
+          }
+          
+          if (options.fix && tool.name === 'Gemini CLI') {
+            console.log(`     💡 Install with: npm install -g @google/gemini-cli`);
+          }
+        }
+      }
+      
+      // Check environment variables
+      console.log('\n📋 Environment Variables:');
+      const envVars = ['GEMINI_API_KEY', 'CLAUDE_CODE_PATH', 'GEMINI_CLI_PATH'];
+      for (const envVar of envVars) {
+        const value = process.env[envVar];
+        if (value) {
+          // Mask API keys
+          const displayValue = envVar.includes('API_KEY') ? 
+            `${value.substring(0, 8)}...` : value;
+          console.log(`  ✅ ${envVar}: ${displayValue}`);
+        } else {
+          console.log(`  ❌ ${envVar}: Not set`);
+        }
+      }
+      
+    } catch (error) {
+      logger.error('Failed to detect paths', error);
+      console.error('❌ Failed to detect paths:', (error as Error).message);
+      process.exit(1);
+    }
+  });
+
 // Setup guide command
 program
   .command('setup-guide')
