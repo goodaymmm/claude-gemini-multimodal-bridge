@@ -42,7 +42,7 @@ export class WorkflowOrchestrator {
     };
     
     this.layerManager = new LayerManager(config || defaultConfig);
-    this.claudeLayer = new ClaudeCodeLayer(config || defaultConfig);
+    this.claudeLayer = new ClaudeCodeLayer();
     this.geminiLayer = new GeminiCLILayer();
     this.aiStudioLayer = new AIStudioLayer();
     this.authVerifier = new AuthVerifier();
@@ -85,11 +85,9 @@ export class WorkflowOrchestrator {
           summary: finalResult.summary,
           metadata: {
             total_duration: totalDuration,
-            steps_completed: stepResults.length,
+            steps_completed: Object.keys(stepResults).length,
             steps_failed: this.countFailedSteps(stepResults),
             total_cost: this.calculateTotalCost(stepResults),
-            layers_used: this.extractLayersUsed(stepResults),
-            execution_plan: executionPlan,
           },
         };
       },
@@ -286,12 +284,14 @@ export class WorkflowOrchestrator {
         const strategy = this.determineExecutionStrategy(workflow, executionPhases, resourceEstimates);
         
         return {
-          phases: executionPhases,
-          totalEstimatedDuration: resourceEstimates.reduce((sum, est) => sum + est.duration, 0),
-          totalEstimatedCost: resourceEstimates.reduce((sum, est) => sum + est.cost, 0),
-          requiredLayers: this.extractRequiredLayers(sortedSteps),
-          resourceRequirements: resourceEstimates,
-          executionStrategy: strategy,
+          id: workflow.id || `workflow-${Date.now()}`,
+          workflow: workflow,
+          input_data: {},
+          execution_mode: strategy === 'hybrid' ? 'adaptive' : strategy,
+          estimated_duration: resourceEstimates.reduce((sum, est) => sum + est.estimated_duration, 0),
+          estimated_cost: resourceEstimates.reduce((sum, est) => sum + (est.estimated_cost || 0), 0),
+          priority: 'medium',
+          created_at: new Date(),
         };
       },
       {
@@ -427,12 +427,12 @@ export class WorkflowOrchestrator {
       }
       
       estimates.push({
-        stepId: step.id,
-        duration,
-        cost,
-        memory,
-        cpu,
-        bandwidth: 10, // MB
+        estimated_duration: duration,
+        estimated_cost: cost,
+        estimated_tokens: memory * 100, // Convert memory to tokens estimate
+        complexity_score: Math.min(cpu / 10, 10),
+        recommended_execution_mode: 'adaptive' as const,
+        required_capabilities: [step.layer],
       });
     }
     
@@ -448,7 +448,7 @@ export class WorkflowOrchestrator {
     estimates: ResourceEstimate[]
   ): 'sequential' | 'parallel' | 'hybrid' {
     const totalSteps = workflow.steps?.length || 0;
-    const totalDuration = estimates.reduce((sum, est) => sum + est.duration, 0);
+    const totalDuration = estimates.reduce((sum, est) => sum + est.estimated_duration, 0);
     const maxPhaseSize = Math.max(...phases.map(phase => phase.length));
     
     if (totalSteps <= 3 || totalDuration < 60000) {
@@ -477,7 +477,8 @@ export class WorkflowOrchestrator {
   private async initializeRequiredLayers(plan: WorkflowExecutionPlan): Promise<void> {
     const initPromises: Promise<void>[] = [];
     
-    for (const layer of plan.requiredLayers) {
+    const requiredLayers = this.extractRequiredLayers(plan.workflow.steps);
+    for (const layer of requiredLayers) {
       switch (layer) {
         case 'claude':
           initPromises.push(this.claudeLayer.initialize());
@@ -492,7 +493,35 @@ export class WorkflowOrchestrator {
     }
     
     await Promise.all(initPromises);
-    logger.debug('Initialized layers for workflow', { layers: plan.requiredLayers });
+    logger.debug('Initialized layers for workflow', { layers: requiredLayers });
+  }
+
+  /**
+   * Group steps into execution phases based on dependencies
+   */
+  private groupStepsIntoPhases(steps: WorkflowStep[]): WorkflowStep[][] {
+    const phases: WorkflowStep[][] = [];
+    const completed = new Set<string>();
+    const remaining = [...steps];
+    
+    while (remaining.length > 0) {
+      const readySteps = remaining.filter(step => 
+        !step.dependsOn || step.dependsOn.every(dep => completed.has(dep))
+      );
+      
+      if (readySteps.length === 0) {
+        throw new Error('Circular dependency detected in workflow steps');
+      }
+      
+      phases.push(readySteps);
+      readySteps.forEach(step => {
+        completed.add(step.id);
+        const index = remaining.indexOf(step);
+        remaining.splice(index, 1);
+      });
+    }
+    
+    return phases;
   }
 
   /**
@@ -505,11 +534,12 @@ export class WorkflowOrchestrator {
     const results: Record<string, LayerResult> = {};
     const context: Record<string, any> = {};
     
-    for (const phase of plan.phases) {
+    const phases = this.groupStepsIntoPhases(plan.workflow.steps);
+    for (const phase of phases) {
       logger.info(`Executing workflow phase with ${phase.length} step(s)`);
       
       // Execute steps in current phase
-      const phasePromises = phase.map(step => 
+      const phasePromises = phase.map((step: WorkflowStep) => 
         this.executeWorkflowStep(step, context, results)
       );
       
@@ -519,6 +549,10 @@ export class WorkflowOrchestrator {
       for (let i = 0; i < phase.length; i++) {
         const step = phase[i];
         const result = phaseResults[i];
+        
+        if (!step || !result) {
+          continue;
+        }
         
         if (result.status === 'fulfilled') {
           results[step.id] = result.value;
@@ -533,23 +567,23 @@ export class WorkflowOrchestrator {
           
           logger.error('Step failed', {
             stepId: step.id,
-            error: error.message,
+            error: error instanceof Error ? error.message : 'Unknown error',
           });
           
           results[step.id] = {
             success: false,
-            error: error.message,
+            error: error instanceof Error ? error.message : 'Unknown error',
             data: null,
             metadata: {
               layer: step.layer,
               duration: 0,
-              failed: true,
             },
           };
           
           // Check if workflow should continue on error
           if (!workflow.continueOnError) {
-            throw new Error(`Workflow failed at step ${step.id}: ${error.message}`);
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            throw new Error(`Workflow failed at step ${step.id}: ${errorMessage}`);
           }
         }
       }

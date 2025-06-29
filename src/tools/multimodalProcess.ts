@@ -7,6 +7,7 @@ import {
   LayerResult,
   FileReference,
   MultimodalFile,
+  WorkflowResult,
 } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { logger } from '../utils/logger.js';
@@ -77,15 +78,15 @@ export class MultimodalProcess {
         
         return {
           success: true,
-          content: result.data || '',
+          content: result.summary || 'Processing completed',
           files_processed: processedFiles.map(f => f.path),
           processing_time: totalDuration,
           workflow_used: validatedArgs.workflow,
-          layers_involved: this.extractLayersUsed(result),
+          layers_involved: this.extractLayersFromWorkflowResult(result),
           metadata: {
             total_duration: totalDuration,
-            tokens_used: result.metadata?.tokens_used,
-            cost: result.metadata?.cost,
+            tokens_used: this.extractTotalTokens(result),
+            cost: result.metadata?.total_cost,
           },
         };
       },
@@ -419,7 +420,7 @@ export class MultimodalProcess {
   private async executeWorkflow(
     args: MultimodalProcessArgs,
     files: MultimodalFile[]
-  ): Promise<LayerResult> {
+  ): Promise<WorkflowResult> {
     return retry(
       async () => {
         const workflowTask = {
@@ -534,6 +535,31 @@ export class MultimodalProcess {
       type: this.determineFileType(filePath),
       encoding: 'utf-8',
     };
+  }
+
+  /**
+   * Extract layers used from workflow result
+   */
+  private extractLayersFromWorkflowResult(result: WorkflowResult): ('claude' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
+    const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
+    const layers = new Set<typeof validLayers[number]>();
+    
+    Object.values(result.results).forEach(layerResult => {
+      if (layerResult.metadata?.layer && validLayers.includes(layerResult.metadata.layer as any)) {
+        layers.add(layerResult.metadata.layer as any);
+      }
+    });
+    
+    return Array.from(layers);
+  }
+
+  /**
+   * Extract total tokens from workflow result
+   */
+  private extractTotalTokens(result: WorkflowResult): number {
+    return Object.values(result.results).reduce((total, layerResult) => {
+      return total + (layerResult.metadata?.tokens_used || 0);
+    }, 0);
   }
 
   /**
