@@ -102,6 +102,28 @@ export class CGMBServer {
   }
 
   /**
+   * Stop the server gracefully
+   */
+  public async stop(): Promise<void> {
+    try {
+      logger.info('Stopping CGMB Server...');
+      
+      // Close the server connection
+      if (this.server) {
+        await this.server.close();
+      }
+      
+      // Cleanup resources if needed
+      // (Add any additional cleanup logic here)
+      
+      logger.info('CGMB Server stopped successfully');
+    } catch (error) {
+      logger.error('Error stopping CGMB Server', error as Error);
+      throw error;
+    }
+  }
+
+  /**
    * Register all MCP tools
    */
   private registerTools(): void {

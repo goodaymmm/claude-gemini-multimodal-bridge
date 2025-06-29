@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { config } from 'dotenv';
 import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
+import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -31,9 +31,7 @@ program
   .option('--debug', 'Enable debug logging')
   .action(async (options) => {
     try {
-      // Load environment variables
-      config();
-      
+      // Set log level first if specified
       if (options.verbose) {
         process.env.LOG_LEVEL = 'verbose';
       }
@@ -42,14 +40,47 @@ program
         process.env.LOG_LEVEL = 'debug';
       }
 
+      // Load environment variables with smart discovery
+      const loadOptions: { verbose: boolean; searchPaths?: string[] } = { 
+        verbose: options.verbose || options.debug
+      };
+      if (options.config) {
+        loadOptions.searchPaths = [path.dirname(options.config)];
+      }
+      const envResult = await loadEnvironmentSmart(loadOptions);
+
+      if (!envResult.success && envResult.errors.length > 0) {
+        logger.warn('Environment loading had issues', {
+          errors: envResult.errors,
+          foundFiles: envResult.foundFiles
+        });
+      }
+
+      if (envResult.loadedFrom) {
+        logger.info('Environment loaded successfully', {
+          source: envResult.loadedFrom,
+          hasGeminiKey: !!process.env.GEMINI_API_KEY
+        });
+      }
+
       const server = new CGMBServer();
       await server.start();
       
-      // Keep the process running
-      process.on('SIGINT', () => {
+      // Keep the process running with proper cleanup
+      const gracefulShutdown = async () => {
         logger.info('Shutting down CGMB server...');
+        try {
+          if (server && typeof server.stop === 'function') {
+            await server.stop();
+          }
+        } catch (error) {
+          logger.error('Error during server shutdown', error as Error);
+        }
         process.exit(0);
-      });
+      };
+
+      process.on('SIGINT', gracefulShutdown);
+      process.on('SIGTERM', gracefulShutdown);
       
     } catch (error) {
       logger.error('Failed to start CGMB server', error as Error);
@@ -120,7 +151,8 @@ program
   .option('--interactive', 'Interactive authentication setup')
   .action(async (options) => {
     try {
-      config();
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
       
       const authManager = new OAuthManager();
       const interactiveSetup = new InteractiveSetup();
@@ -154,7 +186,8 @@ program
   .option('--verbose', 'Show detailed authentication information')
   .action(async (options) => {
     try {
-      config();
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
       
       const verifier = new AuthVerifier();
       const result = await verifier.verifyAllAuthentications();
@@ -363,7 +396,8 @@ program
       logger.info('🔍 Verifying CGMB installation and authentication...');
       
       // Load configuration
-      config();
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
       
       const authVerifier = new AuthVerifier();
       const interactiveSetup = new InteractiveSetup();
@@ -517,7 +551,8 @@ program
   .option('-p, --prompt <text>', 'Test prompt', 'Analyze this content')
   .action(async (options) => {
     try {
-      config();
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
       
       logger.info('Running CGMB test...');
       
@@ -544,33 +579,72 @@ program
 program
   .command('info')
   .description('Show CGMB system information')
-  .action(() => {
-    config();
-    
-    logger.info('CGMB System Information:');
-    logger.info(`Version: 1.0.0`);
-    logger.info(`Node.js: ${process.version}`);
-    logger.info(`Platform: ${process.platform}`);
-    logger.info(`Architecture: ${process.arch}`);
-    logger.info(`Working Directory: ${process.cwd()}`);
-    
-    // Environment info
-    const envVars = [
-      'GEMINI_API_KEY',
-      'CLAUDE_CODE_PATH', 
-      'GEMINI_CLI_PATH',
-      'LOG_LEVEL'
-    ];
-    
-    logger.info('Environment Configuration:');
-    envVars.forEach(key => {
-      const value = process.env[key];
-      if (key.includes('KEY') && value) {
-        logger.info(`${key}: ${'*'.repeat(8)}...${value.slice(-4)}`);
+  .option('--env', 'Show detailed environment information')
+  .action(async (options) => {
+    try {
+      // Load environment variables
+      const envResult = await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('🚀 CGMB System Information');
+      console.log('═'.repeat(50));
+      console.log(`Version: 1.0.0`);
+      console.log(`Node.js: ${process.version}`);
+      console.log(`Platform: ${process.platform}`);
+      console.log(`Architecture: ${process.arch}`);
+      console.log(`Working Directory: ${process.cwd()}`);
+      console.log('');
+
+      // Environment loading status
+      console.log('📋 Environment Configuration');
+      console.log('═'.repeat(30));
+      const envStatus = getEnvironmentStatus();
+      
+      if (envStatus.loaded) {
+        console.log(`✅ Environment: Loaded successfully`);
+        console.log(`📁 Source: ${envStatus.source}`);
       } else {
-        logger.info(`${key}: ${value || 'Not set'}`);
+        console.log(`❌ Environment: Not loaded properly`);
       }
-    });
+      
+      if (envStatus.foundFiles.length > 0) {
+        console.log(`📄 Found .env files:`);
+        envStatus.foundFiles.forEach(file => console.log(`   • ${file}`));
+      }
+      
+      if (envStatus.errors.length > 0) {
+        console.log(`⚠️  Errors:`);
+        envStatus.errors.forEach(error => console.log(`   • ${error}`));
+      }
+      
+      console.log('');
+
+      // Key environment variables
+      console.log('🔑 Key Environment Variables');
+      console.log('═'.repeat(30));
+      Object.entries(envStatus.availableVars).forEach(([key, isSet]) => {
+        const icon = isSet ? '✅' : '❌';
+        if (key.includes('KEY') && isSet) {
+          const value = process.env[key];
+          const masked = value ? `${value.substring(0, 8)}...${value.slice(-4)}` : 'Not set';
+          console.log(`${icon} ${key}: ${masked}`);
+        } else {
+          const value = process.env[key];
+          console.log(`${icon} ${key}: ${value || 'Not set'}`);
+        }
+      });
+
+      if (options.env) {
+        console.log('');
+        console.log('🔍 Detailed Environment Information');
+        console.log('═'.repeat(35));
+        console.log(`Environment loading result:`, JSON.stringify(envResult, null, 2));
+        console.log(`Environment status:`, JSON.stringify(envStatus, null, 2));
+      }
+      
+    } catch (error) {
+      logger.error('Failed to get system information', error as Error);
+      process.exit(1);
+    }
   });
 
 // Helper functions
