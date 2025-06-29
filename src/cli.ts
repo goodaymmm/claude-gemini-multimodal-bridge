@@ -68,7 +68,7 @@ program
       
       // Check Node.js version
       const nodeVersion = process.version;
-      const requiredVersion = 'v18.0.0';
+      const requiredVersion = 'v22.0.0';
       if (nodeVersion < requiredVersion) {
         throw new Error(`Node.js ${requiredVersion} or higher is required. Current: ${nodeVersion}`);
       }
@@ -86,7 +86,7 @@ program
         if (fs.existsSync(examplePath)) {
           fs.copyFileSync(examplePath, envPath);
           logger.info('✓ Created .env configuration file');
-          logger.warn('Please edit .env file and add your API keys');
+          logger.info('Note: API keys are optional if using OAuth authentication');
         }
       }
       
@@ -99,9 +99,11 @@ program
       
       logger.info('Setup completed successfully!');
       logger.info('Next steps:');
-      logger.info('1. Edit .env file and add your API keys');
-      logger.info('2. Run: cgmb verify');
-      logger.info('3. Run: cgmb serve');
+      logger.info('1. Set up authentication: cgmb auth --interactive');
+      logger.info('2. Verify installation: cgmb verify');
+      logger.info('3. Start the server: cgmb serve');
+      logger.info('');
+      logger.info('💡 Tip: OAuth authentication is recommended (no API keys needed)');
       
     } catch (error) {
       logger.error('Setup failed', error);
@@ -368,7 +370,7 @@ program
           name: 'Node.js version',
           check: () => {
             const version = process.version;
-            const required = 'v18.0.0';
+            const required = 'v22.0.0';
             if (version < required) {
               throw new Error(`Node.js ${required}+ required, found ${version}`);
             }

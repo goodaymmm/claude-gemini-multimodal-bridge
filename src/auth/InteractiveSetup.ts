@@ -164,18 +164,35 @@ export class InteractiveSetup {
       return currentStatus;
     }
 
-    console.log('Please choose authentication method:');
-    console.log('1. OAuth (recommended for personal use)');
-    console.log('2. API Key (for programmatic access)\n');
+    console.log('Gemini authentication methods:');
+    console.log('1. OAuth (RECOMMENDED) - Free, secure, no API key needed');
+    console.log('2. API Key (Alternative) - Requires Google AI Studio API key\n');
     
     // For now, we'll guide through both methods
     // In a real interactive setup, we'd prompt for user choice
     
-    // Check if API key is available
+    // Try OAuth method first (recommended)
+    console.log('🔄 Trying OAuth authentication (recommended)...');
+    try {
+      const authSuccess = await this.oauthManager.promptGeminiLogin();
+      if (authSuccess) {
+        const result = await this.authVerifier.verifyGeminiAuth();
+        return result;
+      }
+    } catch (error) {
+      console.log(`⚠️  OAuth authentication not available: ${(error as Error).message}`);
+      console.log('\n📋 To set up OAuth authentication:');
+      console.log('   1. Install Gemini CLI: npm install -g @google/gemini-cli');
+      console.log('   2. Run: gemini auth');
+      console.log('   3. Follow browser authentication flow');
+      console.log('   4. Grant permissions when prompted\n');
+    }
+
+    // Check if API key is available as fallback
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     
     if (apiKey) {
-      console.log('✅ GEMINI_API_KEY found in environment');
+      console.log('🔄 Trying API key authentication (fallback)...');
       console.log('   Validating API key...');
       
       if (this.oauthManager.validateApiKey(apiKey)) {
@@ -191,30 +208,12 @@ export class InteractiveSetup {
         console.log('   Please check your API key from https://aistudio.google.com/');
       }
     } else {
-      console.log('ℹ️  No GEMINI_API_KEY found in environment');
-      console.log('\n📋 To set up API key authentication:');
+      console.log('\n📋 Alternative: API key authentication');
       console.log('   1. Visit: https://aistudio.google.com/');
       console.log('   2. Click "Get API Key"');
       console.log('   3. Create new API key');
       console.log('   4. Set environment variable: GEMINI_API_KEY=your_key_here');
       console.log('   5. Restart your terminal/application\n');
-    }
-
-    // Try OAuth method
-    console.log('🔄 Attempting OAuth authentication...');
-    try {
-      const authSuccess = await this.oauthManager.promptGeminiLogin();
-      if (authSuccess) {
-        const result = await this.authVerifier.verifyGeminiAuth();
-        return result;
-      }
-    } catch (error) {
-      console.log(`❌ OAuth authentication failed: ${(error as Error).message}`);
-      console.log('\n📋 To set up OAuth authentication:');
-      console.log('   1. Install Gemini CLI: npm install -g @google/gemini-cli');
-      console.log('   2. Run: gemini auth');
-      console.log('   3. Follow browser authentication flow');
-      console.log('   4. Grant permissions when prompted\n');
     }
 
     return {
@@ -243,13 +242,29 @@ export class InteractiveSetup {
       return currentStatus;
     }
 
-    console.log('AI Studio uses the same API key as Gemini CLI.\n');
+    console.log('ℹ️  AI Studio authentication:');
+    console.log('   - If Gemini OAuth is working: AI Studio will work automatically');
+    console.log('   - Otherwise: Uses the same API key as Gemini CLI\n');
+    
+    // First check if Gemini OAuth is available (shared authentication)
+    const geminiStatus = await this.authVerifier.verifyGeminiAuth();
+    if (geminiStatus.success && geminiStatus.status.method === 'oauth') {
+      console.log('✅ Using shared authentication from Gemini OAuth');
+      return {
+        success: true,
+        status: {
+          isAuthenticated: true,
+          method: 'oauth',
+          userInfo: geminiStatus.status.userInfo,
+        },
+      };
+    }
     
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
     
     if (!apiKey) {
-      console.log('❌ No API key found in environment');
-      console.log('\n📋 To set up AI Studio authentication:');
+      console.log('⚠️  No API key found - AI Studio requires API key if OAuth not available');
+      console.log('\n📋 To set up AI Studio API key:');
       console.log('   1. Visit: https://aistudio.google.com/');
       console.log('   2. Sign in with Google account');
       console.log('   3. Navigate to "Get API Key" section');
@@ -411,41 +426,45 @@ export class InteractiveSetup {
     console.log(`
 🚀 CGMB Authentication Setup Guide
 
-This guide will help you set up authentication for all required services.
+This guide will help you set up authentication for all services.
+💡 TIP: OAuth authentication is recommended (no API keys needed!)
 
-STEP 1: Gemini CLI Authentication
-=====================================
-Option A - OAuth (Recommended for personal use):
-1. Run: gemini auth
-2. Follow browser authentication flow
-3. Grant permissions when prompted
+STEP 1: Gemini Authentication
+==============================
+🥇 RECOMMENDED: OAuth (Free & Secure)
+1. Install: npm install -g @google/gemini-cli
+2. Run: gemini auth
+3. Follow browser authentication flow
+4. Grant permissions when prompted
 
-Option B - API Key:
+🔄 ALTERNATIVE: API Key (If OAuth not available)
 1. Visit: https://aistudio.google.com/
 2. Click "Get API Key"
 3. Create new API key
 4. Set environment: GEMINI_API_KEY=your_key_here
 
-STEP 2: Google AI Studio API Key
-==================================
-1. Visit: https://aistudio.google.com/
-2. Sign in with Google account
-3. Navigate to "Get API Key" section
-4. Create new API key
-5. Copy the key and set: GEMINI_API_KEY=your_key_here
-   (Note: Same key works for both Gemini CLI and AI Studio)
-
-STEP 3: Claude Code CLI
+STEP 2: Claude Code CLI
 ========================
+🆓 FREE TIER: Uses built-in Claude Code authentication
+- No additional setup needed if using free tier
+
+💰 PAID TIER: Optional API key for rate limit bypass
 1. Install: npm install -g @anthropic-ai/claude-code
-2. Run: claude auth (if required)
-3. Follow authentication instructions
+2. Set CLAUDE_API_KEY=your_key_here (optional)
+
+STEP 3: Google AI Studio
+=========================
+ℹ️  Auto-configured if Gemini OAuth is working
+- Uses shared authentication from Gemini OAuth
+- Falls back to same API key as Gemini if needed
 
 STEP 4: Verify Setup
 =====================
 Run: cgmb auth-status --verbose
 
-For interactive setup: cgmb auth --interactive
+🚀 Quick Start: cgmb auth --interactive
+📊 Check Usage: cgmb quota-status
+🔍 Find Tools: cgmb detect-paths
     `);
   }
 }

@@ -60,13 +60,7 @@ graph TD
 
 ### Installation
 
-**Option 1: NPM Installation (Coming Soon)**
-```bash
-# When published to NPM (future)
-npm install -g claude-gemini-multimodal-bridge
-```
-
-**Option 2: Clone and Build (Current Method)**
+**Option 1: Clone and Build (Recommended)**
 ```bash
 # Clone the repository
 git clone https://github.com/goodaymmm/claude-gemini-multimodal-bridge.git
@@ -80,7 +74,7 @@ npm run build
 npm link
 ```
 
-**Option 3: Direct Usage (No Installation)**
+**Option 2: Direct Usage (No Installation)**
 ```bash
 # Run directly with npx
 npx claude-gemini-multimodal-bridge serve
@@ -94,10 +88,19 @@ npm start
 
 ### Prerequisites
 
-- **Node.js** ≥ 18.0.0
+- **Node.js** ≥ 22.0.0 (Recommended: 22.17+)
 - **Claude Code CLI** installed and configured
-- **Gemini CLI** installed and authenticated
-- **Google AI Studio API key**
+- **Gemini CLI** installed
+
+### Authentication Requirements (Choose One Method Per Service)
+
+#### **Gemini Authentication**
+- **Method 1 (Recommended)**: OAuth via `gemini auth` command
+- **Method 2 (Alternative)**: Google AI Studio API key
+
+#### **Claude Authentication**  
+- **Free Tier**: Uses built-in Claude Code authentication (no additional setup needed)
+- **Paid Tier**: Optional API key to bypass rate limits
 
 ### Setup
 
@@ -120,13 +123,14 @@ cgmb serve
 
 ### Configuration
 
-Copy `.env.example` to `.env` and configure:
+Copy `.env.example` to `.env` and configure (all settings are optional):
 
 ```bash
-# API Keys
-GEMINI_API_KEY=your_gemini_api_key_here
+# Authentication (Optional - OAuth is recommended)
+GEMINI_API_KEY=your_api_key_here_optional  # Only if not using OAuth
+CLAUDE_API_KEY=your_api_key_here_optional  # Only for paid tier rate limit bypass
 
-# Paths
+# CLI Tool Paths (Auto-detected if in PATH)
 CLAUDE_CODE_PATH=/usr/local/bin/claude
 GEMINI_CLI_PATH=/usr/local/bin/gemini
 
@@ -134,6 +138,27 @@ GEMINI_CLI_PATH=/usr/local/bin/gemini
 GEMINI_MODEL=gemini-2.5-pro
 DEFAULT_LAYER_PRIORITY=adaptive
 ENABLE_CACHING=true
+```
+
+### Quick Authentication Setup
+
+#### **Gemini (Recommended: OAuth)**
+```bash
+# Install Gemini CLI (if not installed)
+npm install -g @google/gemini-cli
+
+# Authenticate with Google
+gemini auth
+
+# Test authentication
+gemini "Hello, test authentication"
+```
+
+#### **Alternative: API Key Method**
+```bash
+# Get API key from: https://aistudio.google.com/
+# Add to .env file:
+echo "GEMINI_API_KEY=your_api_key_here" >> .env
 ```
 
 ## 📖 Usage
