@@ -74,7 +74,7 @@ export class AIStudioLayer implements LayerInterface {
       {
         operationName: 'initialize-aistudio-layer',
         layer: 'aistudio',
-        timeout: 60000, // Increased timeout to 60 seconds for MCP server connection
+        timeout: 15000, // Reduced timeout to 15 seconds for lightweight checks
       }
     );
   }
@@ -822,6 +822,7 @@ export class AIStudioLayer implements LayerInterface {
         env: {
           ...process.env,
           GEMINI_API_KEY: process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY,
+          GOOGLE_AI_STUDIO_API_KEY: process.env.GOOGLE_AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY,
         },
       });
 
@@ -873,37 +874,36 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
-   * Test MCP server connection
+   * Test MCP server connection (lightweight test)
    */
   private async testMCPServerConnection(): Promise<void> {
     try {
-      // Use lightweight check first - just verify MCP server process availability
+      // Only do a very lightweight check - verify binary availability and API key
       const { execSync } = await import('child_process');
       
+      // Check if we have API key first
+      const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
+      if (!apiKey) {
+        throw new Error('AI Studio API key not found. Set GEMINI_API_KEY or GOOGLE_AI_STUDIO_API_KEY environment variable');
+      }
+      
+      // Quick binary availability check only
       try {
-        // Quick check if aistudio-mcp-server command exists
-        execSync('which aistudio-mcp-server || which npx', { 
-          timeout: 10000,
+        execSync('which npx', { 
+          timeout: 5000,
           stdio: 'ignore'
         });
         
-        logger.debug('AI Studio MCP server binary available');
+        logger.debug('AI Studio MCP dependencies available', {
+          hasApiKey: !!apiKey,
+          npxAvailable: true
+        });
         
-        // Optional: Try a quick version check if we have time
-        try {
-          const result = await this.executeMCPCommand('version', {});
-          logger.debug('AI Studio MCP server connection test successful', { 
-            version: result?.version 
-          });
-        } catch (versionError) {
-          // Version check failed, but binary exists - proceed with warning
-          logger.warn('AI Studio MCP server version check failed, but binary available', {
-            error: (versionError as Error).message
-          });
-        }
+        // Skip actual MCP connection test during initialization to avoid timeout
+        // Connection will be tested when actually needed
         
       } catch (binaryError) {
-        throw new Error('AI Studio MCP server not installed. Run: npm install -g aistudio-mcp-server');
+        throw new Error('npx not available. Please ensure Node.js and npm are properly installed');
       }
       
     } catch (error) {

@@ -99,6 +99,19 @@ npm link
 
 > **WSL Users**: Run `nvm use 22.17` before installation if you encounter version errors.
 
+#### **Windows WSL Users**
+If you're using Windows WSL and encounter Node.js version or permission issues:
+
+```bash
+# Switch to required Node.js version
+nvm use 22.17  # or any 22.x version
+nvm current    # Verify version
+
+# Then proceed with installation
+npm install && npm run build
+npm link
+```
+
 **Option 2: Direct Usage (No Installation)**
 ```bash
 # Run directly with npx
@@ -117,18 +130,6 @@ npm start
 - **Claude Code CLI** installed and configured
 - **Gemini CLI** installed
 
-#### **Windows WSL Users**
-If you're using Windows WSL and encounter Node.js version or permission issues:
-
-```bash
-# Switch to required Node.js version
-nvm use 22.17  # or any 22.x version
-nvm current    # Verify version
-
-# Then proceed with installation
-npm install && npm run build
-npm link
-```
 
 **Note**: WSL environments may have multiple Node.js installations. Always use nvm to ensure the correct version.
 
@@ -185,26 +186,6 @@ DEFAULT_LAYER_PRIORITY=adaptive
 ENABLE_CACHING=true
 ```
 
-### Quick Authentication Setup
-
-#### **Gemini (Recommended: OAuth)**
-```bash
-# Install Gemini CLI (if not installed)
-npm install -g @google/gemini-cli
-
-# Authenticate with Google
-gemini auth
-
-# Test authentication
-gemini "Hello, test authentication"
-```
-
-#### **Alternative: API Key Method**
-```bash
-# Get API key from: https://aistudio.google.com/
-# Add to .env file:
-echo "GEMINI_API_KEY=your_api_key_here" >> .env
-```
 
 ## 📖 Usage
 
@@ -579,5 +560,3 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - **Documentation**: [docs/](docs/)
 
 ---
-
-**Built with ❤️ for the AI development community**
