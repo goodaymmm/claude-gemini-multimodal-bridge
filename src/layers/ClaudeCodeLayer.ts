@@ -415,15 +415,21 @@ export class ClaudeCodeLayer implements LayerInterface {
    */
   private async testClaudeCodeConnection(): Promise<void> {
     try {
-      const testResult = await this.executeClaudeCommand('Test connection', {
-        timeout: 10000,
+      // Use lightweight version check instead of full command execution
+      const { execSync } = await import('child_process');
+      const output = execSync(`${this.claudePath} --version`, { 
+        timeout: 30000, // Increased timeout to 30 seconds
+        encoding: 'utf8',
+        stdio: 'pipe'
       });
       
-      if (!testResult) {
-        throw new Error('No response from Claude Code');
+      if (!output || !output.includes('claude')) {
+        throw new Error('Claude Code version check failed');
       }
       
-      logger.debug('Claude Code connection test successful');
+      logger.debug('Claude Code connection test successful', {
+        version: output.trim().substring(0, 50)
+      });
     } catch (error) {
       throw new Error(`Claude Code connection test failed: ${(error as Error).message}`);
     }

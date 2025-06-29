@@ -19,7 +19,7 @@ export type AnalysisType = 'content' | 'comparative' | 'thematic' | 'sentiment' 
 
 // File Types
 export const FileTypeSchema = z.enum([
-  'image', 'audio', 'pdf', 'document', 'text', 'video'
+  'image', 'audio', 'pdf', 'document', 'text', 'video', 'music'
 ]);
 export type FileType = z.infer<typeof FileTypeSchema>;
 
@@ -292,6 +292,110 @@ export const ReasoningResultSchema = z.object({
   steps: z.array(z.string()).optional(),
 });
 export type ReasoningResult = z.infer<typeof ReasoningResultSchema>;
+
+// ===================================
+// Media Generation Types and Schemas
+// ===================================
+
+// Media Generation Types
+export const GenerationTypeSchema = z.enum(['image', 'video', 'audio', 'music']);
+export type GenerationType = z.infer<typeof GenerationTypeSchema>;
+
+// Image Generation Options
+export const ImageGenOptionsSchema = z.object({
+  width: z.number().min(64).max(4096).optional(),
+  height: z.number().min(64).max(4096).optional(),
+  aspectRatio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).optional(),
+  style: z.enum(['photorealistic', 'artistic', 'cartoon', 'sketch', 'abstract']).optional(),
+  quality: z.enum(['draft', 'standard', 'high', 'ultra']).optional(),
+  model: z.enum(['imagen-3', 'imagen-2']).default('imagen-3'),
+  seed: z.number().optional(),
+  guidance: z.number().min(1).max(20).optional(),
+  steps: z.number().min(10).max(100).optional(),
+});
+export type ImageGenOptions = z.infer<typeof ImageGenOptionsSchema>;
+
+// Video Generation Options  
+export const VideoGenOptionsSchema = z.object({
+  width: z.number().min(256).max(2048).optional(),
+  height: z.number().min(256).max(2048).optional(),
+  duration: z.number().min(1).max(30).optional(), // seconds
+  fps: z.enum(['24', '30', '60']).default('30'),
+  quality: z.enum(['draft', 'standard', 'high']).optional(),
+  model: z.enum(['veo-2', 'video-generation']).default('veo-2'),
+  motion: z.enum(['static', 'slow', 'medium', 'fast']).optional(),
+  seed: z.number().optional(),
+});
+export type VideoGenOptions = z.infer<typeof VideoGenOptionsSchema>;
+
+// Audio Generation Options
+export const AudioGenOptionsSchema = z.object({
+  voice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']).optional(),
+  language: z.string().optional(),
+  speed: z.number().min(0.25).max(4).optional(),
+  format: z.enum(['mp3', 'wav', 'flac']).default('mp3'),
+  quality: z.enum(['standard', 'hd']).optional(),
+  model: z.enum(['text-to-speech', 'voice-synthesis']).default('text-to-speech'),
+});
+export type AudioGenOptions = z.infer<typeof AudioGenOptionsSchema>;
+
+// Media Generation Results
+export const MediaGenResultSchema = z.object({
+  success: z.boolean(),
+  generationType: GenerationTypeSchema,
+  outputPath: z.string(),
+  originalPrompt: z.string(),
+  metadata: z.object({
+    duration: z.number(),
+    fileSize: z.number(),
+    format: z.string(),
+    dimensions: z.object({
+      width: z.number(),
+      height: z.number(),
+    }).optional(),
+    model: z.string(),
+    settings: z.record(z.any()),
+    cost: z.number().optional(),
+  }),
+  downloadUrl: z.string().optional(),
+  error: z.string().optional(),
+});
+export type MediaGenResult = z.infer<typeof MediaGenResultSchema>;
+
+// Advanced Audio Analysis
+export const AudioAnalysisResultSchema = z.object({
+  transcription: z.string(),
+  language: z.string().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  sentiment: z.enum(['positive', 'negative', 'neutral']).optional(),
+  emotions: z.array(z.string()).optional(),
+  speakers: z.array(z.object({
+    id: z.string(),
+    confidence: z.number(),
+    segments: z.array(z.object({
+      start: z.number(),
+      end: z.number(),
+      text: z.string(),
+    })),
+  })).optional(),
+  metadata: z.object({
+    duration: z.number(),
+    sampleRate: z.number().optional(),
+    channels: z.number().optional(),
+    format: z.string(),
+  }),
+});
+export type AudioAnalysisResult = z.infer<typeof AudioAnalysisResultSchema>;
+
+// Media Generation Arguments
+export const MediaGenerationArgsSchema = z.object({
+  prompt: z.string().min(1),
+  type: GenerationTypeSchema,
+  options: z.record(z.any()).optional(),
+  outputPath: z.string().optional(),
+  downloadAfterGeneration: z.boolean().default(true),
+});
+export type MediaGenerationArgs = z.infer<typeof MediaGenerationArgsSchema>;
 
 // ===================================
 // Authentication Types and Schemas

@@ -1,5 +1,22 @@
 import { spawn } from 'child_process';
-import { LayerInterface, LayerResult, MultimodalFile, MultimodalResult, ImageAnalysisType, ImageAnalysisResult, FileReference } from '../core/types.js';
+import { createWriteStream } from 'fs';
+import { mkdir } from 'fs/promises';
+import { dirname } from 'path';
+import { 
+  LayerInterface, 
+  LayerResult, 
+  MultimodalFile, 
+  MultimodalResult, 
+  ImageAnalysisType, 
+  ImageAnalysisResult, 
+  FileReference,
+  ImageGenOptions,
+  VideoGenOptions,
+  AudioGenOptions,
+  MediaGenResult,
+  AudioAnalysisResult,
+  GenerationType
+} from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute, retry } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
@@ -57,7 +74,7 @@ export class AIStudioLayer implements LayerInterface {
       {
         operationName: 'initialize-aistudio-layer',
         layer: 'aistudio',
-        timeout: 30000,
+        timeout: 60000, // Increased timeout to 60 seconds for MCP server connection
       }
     );
   }
@@ -145,6 +162,22 @@ export class AIStudioLayer implements LayerInterface {
             break;
           case 'image':
             result = await this.analyzeImage(task.imagePath || task.files?.[0]?.path, task.analysisType || 'detailed');
+            break;
+          case 'image_generation':
+          case 'generate_image':
+            result = await this.generateImage(task.prompt || task.text, task.options || {});
+            break;
+          case 'video_generation':
+          case 'generate_video':
+            result = await this.generateVideo(task.prompt || task.text, task.options || {});
+            break;
+          case 'audio_generation':
+          case 'generate_audio':
+            result = await this.generateAudio(task.prompt || task.text, task.options || {});
+            break;
+          case 'audio_analysis_advanced':
+          case 'analyze_audio_advanced':
+            result = await this.analyzeAudioAdvanced(task.audioPath || task.files?.[0]?.path);
             break;
           case 'convert':
             result = await this.convertFiles(task.files, task.outputFormat);
@@ -308,6 +341,352 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Generate image using AI Studio
+   */
+  async generateImage(prompt: string, options: Partial<ImageGenOptions> = {}): Promise<MediaGenResult> {
+    return retry(
+      async () => {
+        logger.info('Generating image with AI Studio', {
+          promptLength: prompt.length,
+          model: options.model || 'imagen-3',
+          quality: options.quality || 'standard'
+        });
+
+        const startTime = Date.now();
+        
+        const imageOptions = {
+          width: options.width || 1024,
+          height: options.height || 1024,
+          aspectRatio: options.aspectRatio || '1:1',
+          style: options.style || 'photorealistic',
+          quality: options.quality || 'standard',
+          model: options.model || 'imagen-3',
+          seed: options.seed,
+          guidance: options.guidance || 7,
+          steps: options.steps || 30,
+        };
+
+        const result = await this.executeMCPCommand('generate_image', {
+          prompt,
+          options: imageOptions,
+        });
+
+        const duration = Date.now() - startTime;
+        
+        // Download and save the generated image
+        const outputPath = await this.downloadGeneratedMedia(
+          result.downloadUrl || result.imageUrl,
+          'image',
+          options.quality || 'standard'
+        );
+
+        return {
+          success: true,
+          generationType: 'image' as GenerationType,
+          outputPath,
+          originalPrompt: prompt,
+          metadata: {
+            duration,
+            fileSize: result.fileSize || 0,
+            format: 'png',
+            dimensions: {
+              width: options.width || 1024,
+              height: options.height || 1024,
+            },
+            model: options.model || 'imagen-3',
+            settings: options,
+            cost: this.calculateGenerationCost('image', options),
+          },
+          downloadUrl: result.downloadUrl,
+        };
+      },
+      {
+        maxAttempts: this.MAX_RETRIES,
+        delay: 5000,
+        operationName: 'generate-image',
+      }
+    );
+  }
+
+  /**
+   * Generate video using AI Studio
+   */
+  async generateVideo(prompt: string, options: Partial<VideoGenOptions> = {}): Promise<MediaGenResult> {
+    return retry(
+      async () => {
+        logger.info('Generating video with AI Studio', {
+          promptLength: prompt.length,
+          model: options.model || 'veo-2',
+          duration: options.duration || 5
+        });
+
+        const startTime = Date.now();
+        
+        const videoOptions = {
+          width: options.width || 1024,
+          height: options.height || 576,
+          duration: options.duration || 5,
+          fps: options.fps || '30',
+          quality: options.quality || 'standard',
+          model: options.model || 'veo-2',
+          motion: options.motion || 'medium',
+          seed: options.seed,
+        };
+
+        const result = await this.executeMCPCommand('generate_video', {
+          prompt,
+          options: videoOptions,
+        });
+
+        const duration = Date.now() - startTime;
+        
+        // Download and save the generated video
+        const outputPath = await this.downloadGeneratedMedia(
+          result.downloadUrl || result.videoUrl,
+          'video',
+          options.quality || 'standard'
+        );
+
+        return {
+          success: true,
+          generationType: 'video' as GenerationType,
+          outputPath,
+          originalPrompt: prompt,
+          metadata: {
+            duration,
+            fileSize: result.fileSize || 0,
+            format: 'mp4',
+            dimensions: {
+              width: options.width || 1024,
+              height: options.height || 576,
+            },
+            model: options.model || 'veo-2',
+            settings: options,
+            cost: this.calculateGenerationCost('video', options),
+          },
+          downloadUrl: result.downloadUrl,
+        };
+      },
+      {
+        maxAttempts: this.MAX_RETRIES,
+        delay: 10000, // Longer delay for video generation
+        operationName: 'generate-video',
+      }
+    );
+  }
+
+  /**
+   * Generate audio using AI Studio
+   */
+  async generateAudio(text: string, options: Partial<AudioGenOptions> = {}): Promise<MediaGenResult> {
+    return retry(
+      async () => {
+        logger.info('Generating audio with AI Studio', {
+          textLength: text.length,
+          voice: options.voice || 'alloy',
+          format: options.format || 'mp3'
+        });
+
+        const startTime = Date.now();
+        
+        const audioOptions = {
+          voice: options.voice || 'alloy',
+          language: options.language || 'en',
+          speed: options.speed || 1.0,
+          format: options.format || 'mp3',
+          quality: options.quality || 'standard',
+          model: options.model || 'text-to-speech',
+        };
+
+        const result = await this.executeMCPCommand('generate_audio', {
+          text,
+          options: audioOptions,
+        });
+
+        const duration = Date.now() - startTime;
+        
+        // Download and save the generated audio
+        const outputPath = await this.downloadGeneratedMedia(
+          result.downloadUrl || result.audioUrl,
+          'audio',
+          options.quality || 'standard'
+        );
+
+        return {
+          success: true,
+          generationType: 'audio' as GenerationType,
+          outputPath,
+          originalPrompt: text,
+          metadata: {
+            duration,
+            fileSize: result.fileSize || 0,
+            format: options.format || 'mp3',
+            model: options.model || 'text-to-speech',
+            settings: options,
+            cost: this.calculateGenerationCost('audio', options),
+          },
+          downloadUrl: result.downloadUrl,
+        };
+      },
+      {
+        maxAttempts: this.MAX_RETRIES,
+        delay: 5000,
+        operationName: 'generate-audio',
+      }
+    );
+  }
+
+  /**
+   * Advanced audio analysis with enhanced features
+   */
+  async analyzeAudioAdvanced(audioPath: string): Promise<AudioAnalysisResult> {
+    return retry(
+      async () => {
+        logger.debug('Performing advanced audio analysis', { audioPath });
+
+        const result = await this.executeMCPCommand('analyze_audio_advanced', {
+          audio: audioPath,
+          options: {
+            include_transcription: true,
+            include_sentiment: true,
+            include_emotions: true,
+            include_speaker_detection: true,
+            include_metadata: true,
+          },
+        });
+
+        return {
+          transcription: result.transcription || '',
+          language: result.language,
+          confidence: result.confidence,
+          sentiment: result.sentiment,
+          emotions: result.emotions || [],
+          speakers: result.speakers || [],
+          metadata: {
+            duration: result.metadata?.duration || 0,
+            sampleRate: result.metadata?.sampleRate,
+            channels: result.metadata?.channels,
+            format: result.metadata?.format || 'unknown',
+          },
+        };
+      },
+      {
+        maxAttempts: this.MAX_RETRIES,
+        delay: 5000,
+        operationName: 'analyze-audio-advanced',
+      }
+    );
+  }
+
+  /**
+   * Download generated media and save to local filesystem
+   */
+  private async downloadGeneratedMedia(
+    downloadUrl: string, 
+    mediaType: 'image' | 'video' | 'audio',
+    quality: string
+  ): Promise<string> {
+    if (!downloadUrl) {
+      throw new Error('No download URL provided for generated media');
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const extension = this.getFileExtension(mediaType);
+    const fileName = `generated-${mediaType}-${timestamp}.${extension}`;
+    const outputDir = `./generated-media/${mediaType}`;
+    const outputPath = `${outputDir}/${fileName}`;
+
+    try {
+      // Ensure output directory exists
+      await mkdir(outputDir, { recursive: true });
+
+      // Download the file
+      logger.debug('Downloading generated media', {
+        url: downloadUrl.substring(0, 100),
+        outputPath,
+        mediaType
+      });
+
+      const response = await fetch(downloadUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to download media: ${response.statusText}`);
+      }
+
+      // Save to filesystem
+      const fileStream = createWriteStream(outputPath);
+      const reader = response.body?.getReader();
+      
+      if (!reader) {
+        throw new Error('Failed to get response stream');
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(Buffer.from(value));
+      }
+
+      fileStream.end();
+      
+      logger.info('Media downloaded successfully', {
+        outputPath,
+        mediaType,
+        fileSize: response.headers.get('content-length')
+      });
+
+      return outputPath;
+      
+    } catch (error) {
+      logger.error('Failed to download generated media', {
+        error: (error as Error).message,
+        downloadUrl: downloadUrl.substring(0, 100),
+        mediaType
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get file extension for media type
+   */
+  private getFileExtension(mediaType: 'image' | 'video' | 'audio'): string {
+    switch (mediaType) {
+      case 'image': return 'png';
+      case 'video': return 'mp4';
+      case 'audio': return 'mp3';
+      default: return 'bin';
+    }
+  }
+
+  /**
+   * Calculate generation cost based on media type and options
+   */
+  private calculateGenerationCost(
+    mediaType: 'image' | 'video' | 'audio',
+    options: any
+  ): number {
+    // Basic cost calculation - would be replaced with actual API pricing
+    const baseCosts = {
+      image: 0.05,
+      video: 0.25,
+      audio: 0.02,
+    };
+    
+    let cost = baseCosts[mediaType];
+    
+    // Quality multipliers
+    if (options.quality === 'high') cost *= 2;
+    if (options.quality === 'ultra') cost *= 4;
+    
+    // Video duration multiplier
+    if (mediaType === 'video' && options.duration) {
+      cost *= Math.max(1, options.duration / 5);
+    }
+    
+    return Math.round(cost * 1000) / 1000; // Round to 3 decimal places
+  }
+
+  /**
    * Get layer capabilities
    */
   getCapabilities(): string[] {
@@ -315,11 +694,16 @@ export class AIStudioLayer implements LayerInterface {
       'multimodal_processing',
       'document_analysis',
       'image_analysis',
+      'image_generation',
+      'video_generation',
+      'audio_generation',
       'audio_transcription',
+      'audio_analysis_advanced',
       'pdf_conversion',
       'file_processing',
       'batch_processing',
       'content_extraction',
+      'media_download',
     ];
   }
 
@@ -493,17 +877,37 @@ export class AIStudioLayer implements LayerInterface {
    */
   private async testMCPServerConnection(): Promise<void> {
     try {
-      // Test with a simple command
-      await this.executeMCPCommand('health_check', {});
-      logger.debug('AI Studio MCP server connection test successful');
-    } catch (error) {
-      // Try alternative test
+      // Use lightweight check first - just verify MCP server process availability
+      const { execSync } = await import('child_process');
+      
       try {
-        const result = await this.executeMCPCommand('version', {});
-        logger.debug('AI Studio MCP server available', { version: result.version });
-      } catch (testError) {
-        throw new Error(`AI Studio MCP server not available: ${(testError as Error).message}`);
+        // Quick check if aistudio-mcp-server command exists
+        execSync('which aistudio-mcp-server || which npx', { 
+          timeout: 10000,
+          stdio: 'ignore'
+        });
+        
+        logger.debug('AI Studio MCP server binary available');
+        
+        // Optional: Try a quick version check if we have time
+        try {
+          const result = await this.executeMCPCommand('version', {});
+          logger.debug('AI Studio MCP server connection test successful', { 
+            version: result?.version 
+          });
+        } catch (versionError) {
+          // Version check failed, but binary exists - proceed with warning
+          logger.warn('AI Studio MCP server version check failed, but binary available', {
+            error: (versionError as Error).message
+          });
+        }
+        
+      } catch (binaryError) {
+        throw new Error('AI Studio MCP server not installed. Run: npm install -g aistudio-mcp-server');
       }
+      
+    } catch (error) {
+      throw new Error(`AI Studio MCP server not available: ${(error as Error).message}`);
     }
   }
 

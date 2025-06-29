@@ -390,7 +390,9 @@ export class GeminiCLILayer implements LayerInterface {
       finalPrompt += `\n\nAdditional context: ${options.context}`;
     }
 
-    args.push(finalPrompt);
+    // Use -p option for better token efficiency and stability
+    // This prevents issues with long prompts being passed as arguments
+    args.push('-p', finalPrompt);
 
     return args;
   }
