@@ -269,7 +269,6 @@ export class InteractiveSetup {
     if (!apiKey) {
       console.log('⚠️  No API key found - AI Studio requires API key if OAuth not available');
       console.log('\n📋 To set up AI Studio API key:');
-      console.log('   📖 Setup Guide: https://ai.google.dev/aistudio/setup');
       console.log('   📖 API Key Creation: https://aistudio.google.com/app/apikey');
       console.log('   1. Visit: https://aistudio.google.com/app/apikey');
       console.log('   2. Sign in with Google account');
@@ -434,21 +433,19 @@ export class InteractiveSetup {
 
 ⚠️  IMPORTANT: Complete these steps IN ORDER for best results
 
-STEP 0: Prerequisites (REQUIRED FIRST)
-======================================
-🔧 Install Required Tools:
-1. Install Gemini CLI: npm install -g @google/gemini-cli
-2. Install Claude Code: npm install -g @anthropic-ai/claude-code
+STEP 1: Install Gemini CLI (DO THIS FIRST!)
+============================================
+npm install -g @google/gemini-cli
 
-STEP 1: Gemini CLI Authentication (DO THIS FIRST!)
-===================================================
+STEP 2: Gemini Authentication (CRITICAL!)
+==========================================
 🥇 RECOMMENDED: OAuth (Free & Secure)
 1. Run: gemini auth
 2. Follow browser authentication flow
 3. Grant permissions when prompted
 4. ✅ Verify: gemini "test prompt"
 
-🔄 ALTERNATIVE: API Key
+🔄 ALTERNATIVE: API Key Method
 1. 📖 Detailed Guide: https://ai.google.dev/gemini-api/docs/api-key
 2. 📖 Create API Key: https://aistudio.google.com/app/apikey
 3. Visit: https://aistudio.google.com/app/apikey
@@ -458,20 +455,19 @@ STEP 1: Gemini CLI Authentication (DO THIS FIRST!)
 7. Set: GEMINI_API_KEY=your_key_here
 8. ✅ Verify: gemini "test prompt"
 
-STEP 2: Google AI Studio Setup
-===============================
-ℹ️  Auto-configured if Gemini OAuth is working
-📖 Setup Guide: https://ai.google.dev/aistudio/setup
-📖 API Key Guide: https://aistudio.google.com/app/apikey
-- Uses shared authentication from Gemini
-- Same API key works for both services
+STEP 3: Install Claude Code & Other Tools
+==========================================
+npm install -g @anthropic-ai/claude-code
 
-STEP 3: Install CGMB
+Note: Claude Code requires separate authentication.
+Run 'claude auth' if prompted during usage.
+
+STEP 4: Install CGMB
 =====================
 git clone <repo> && cd <repo>
 npm install && npm run build
 
-STEP 4: Verify Everything Works
+STEP 5: Verify Everything Works
 ================================
 cgmb auth-status --verbose
 cgmb verify

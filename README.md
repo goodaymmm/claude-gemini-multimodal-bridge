@@ -63,9 +63,8 @@ graph TD
 ⚠️  **IMPORTANT**: Complete authentication setup BEFORE installing CGMB
 
 ```bash
-# 1. Install required CLI tools first
+# 1. Install Gemini CLI first
 npm install -g @google/gemini-cli
-npm install -g @anthropic-ai/claude-code
 
 # 2. Authenticate Gemini CLI (CRITICAL!)
 gemini auth  # Follow OAuth flow in browser
@@ -73,12 +72,14 @@ gemini auth  # Follow OAuth flow in browser
 
 # 3. Verify authentication works
 gemini "Hello, test prompt"
+
+# 4. Install Claude Code (requires separate auth)
+npm install -g @anthropic-ai/claude-code
 ```
 
 📖 **API Key Setup Guides:**
 - [Gemini API Key Guide](https://ai.google.dev/gemini-api/docs/api-key)
 - [Create API Key](https://aistudio.google.com/app/apikey)
-- [AI Studio Setup](https://ai.google.dev/aistudio/setup)
 
 ### Installation
 
