@@ -157,8 +157,11 @@ cgmb setup
 # Set up authentication for all services
 cgmb auth --interactive
 
-# Verify installation and authentication
+# Verify installation, authentication, and system health
 cgmb verify
+
+# Optional: Auto-fix authentication issues if needed
+cgmb verify --fix
 
 # Add CGMB to Claude Code (one-time setup)
 claude mcp add cgmb
@@ -201,6 +204,28 @@ claude "Summarize this PDF document @document.pdf"
 claude "What are the latest developments in AI technology?"
 claude "Convert this spreadsheet to markdown format @data.xlsx"
 ```
+
+### Working Outside Project Directory
+
+**Method A: Global Installation (Recommended)**
+```bash
+# 1. One-time setup in CGMB directory
+cd /path/to/claude-gemini-multimodal-bridge
+npm link
+
+# 2. Now you can work from any directory
+cd /any/project/directory
+cgmb serve
+
+# 3. Use Claude Code normally with enhanced capabilities
+claude "your request"  # CGMB-enhanced processing
+```
+
+**Benefits:**
+- ✅ Use CGMB from any directory
+- ✅ No need to copy files or change directory
+- ✅ Global `cgmb` command available system-wide
+- ✅ Automatic enhancement of Claude Code workflows
 
 ### How It Works
 
@@ -351,6 +376,56 @@ Execute complex multi-step workflows.
   "input_data": {/* any */},
   "execution_mode": "sequential|parallel|adaptive"
 }
+```
+
+## 🔧 CLI Command Reference
+
+### `cgmb verify`
+Comprehensive system verification and health check command.
+
+**Basic Usage:**
+```bash
+cgmb verify                    # Standard verification
+cgmb verify --fix             # Auto-fix authentication issues  
+cgmb verify --verbose         # Detailed output (future)
+```
+
+**Verification Checks:**
+- ✅ **System Requirements**: Node.js version, dependencies
+- ✅ **CLI Tools**: Claude Code, Gemini CLI availability  
+- ✅ **Authentication**: All service authentication status
+- ✅ **Server Health**: CGMB server initialization test
+
+**Auto-Fix Features (`--fix`):**
+- 🔧 **Authentication Repair**: Automatically runs `cgmb auth --interactive`
+- 🔧 **Path Detection**: Helps resolve CLI tool path issues
+- 🔧 **Configuration**: Guides through missing setup steps
+
+**Exit Codes:**
+- `0`: All checks passed, system ready
+- `1`: Some checks failed, manual intervention needed
+
+**Example Output:**
+```
+🔍 Verifying CGMB installation and authentication...
+
+📋 System Requirements Check:
+✓ Node.js version
+✓ Project dependencies
+✓ Claude Code CLI
+✓ Gemini CLI
+
+🔐 Authentication Verification:
+✅ Gemini: Authenticated
+✅ Claude: Authenticated  
+❌ Aistudio: Not Authenticated
+
+🚀 Testing server initialization...
+✓ Server initialization test passed
+
+💡 To fix authentication issues:
+   Run: cgmb verify --fix
+   Or: cgmb auth --interactive
 ```
 
 ## 📊 Performance & Optimization

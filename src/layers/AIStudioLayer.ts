@@ -127,6 +127,21 @@ export class AIStudioLayer implements LayerInterface {
       return true;
     }
 
+    // PRIORITY: Handle all generation tasks
+    if (task.action && (
+      task.action.includes('generate_image') ||
+      task.action.includes('generate_video') ||
+      task.action.includes('generate_audio') ||
+      task.action.includes('generate')
+    )) {
+      return true;
+    }
+
+    // Handle generation workflow steps
+    if (task.type === 'generation' || task.workflow === 'generation') {
+      return true;
+    }
+
     return false;
   }
 
@@ -795,6 +810,28 @@ export class AIStudioLayer implements LayerInterface {
   private async processGeneral(task: any): Promise<any> {
     const prompt = task.prompt || task.instructions || task.request || 'Please process this content.';
     
+    // Detect if this is a generation request that should be handled by specific methods
+    if (this.isImageGenerationRequest(prompt)) {
+      logger.info('Detected image generation request in general processing', {
+        prompt: prompt.substring(0, 100)
+      });
+      return await this.generateImage(prompt, task.options || {});
+    }
+    
+    if (this.isVideoGenerationRequest(prompt)) {
+      logger.info('Detected video generation request in general processing', {
+        prompt: prompt.substring(0, 100)
+      });
+      return await this.generateVideo(prompt, task.options || {});
+    }
+    
+    if (this.isAudioGenerationRequest(prompt)) {
+      logger.info('Detected audio generation request in general processing', {
+        prompt: prompt.substring(0, 100)
+      });
+      return await this.generateAudio(prompt, task.options || {});
+    }
+    
     return await this.executeMCPCommand('general_process', {
       prompt,
       files: task.files,
@@ -1036,5 +1073,47 @@ export class AIStudioLayer implements LayerInterface {
       maxFileSize: this.MAX_FILE_SIZE,
       maxFileSizeMB: this.MAX_FILE_SIZE / 1024 / 1024,
     };
+  }
+
+  /**
+   * Detection methods for generation requests
+   */
+  private isImageGenerationRequest(prompt: string): boolean {
+    if (!prompt) return false;
+    
+    const imageKeywords = ['image', 'picture', 'photo', 'illustration', 'drawing', 'artwork', 'visual', 'graphic', 'sketch', 'painting', 'render', '画像', '写真', 'イラスト', '絵', '図'];
+    const generationKeywords = ['generate', 'create', 'make', 'produce', 'draw', 'design', '生成', '作成', '作る', '描く'];
+    
+    const lowerPrompt = prompt.toLowerCase();
+    const hasImageKeyword = imageKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
+    const hasGenerationKeyword = generationKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
+    
+    return hasImageKeyword && hasGenerationKeyword;
+  }
+
+  private isVideoGenerationRequest(prompt: string): boolean {
+    if (!prompt) return false;
+    
+    const videoKeywords = ['video', 'movie', 'animation', 'clip', 'motion', '動画', 'ビデオ', 'ムービー', 'アニメーション'];
+    const generationKeywords = ['generate', 'create', 'make', 'produce', '生成', '作成', '作る'];
+    
+    const lowerPrompt = prompt.toLowerCase();
+    const hasVideoKeyword = videoKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
+    const hasGenerationKeyword = generationKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
+    
+    return hasVideoKeyword && hasGenerationKeyword;
+  }
+
+  private isAudioGenerationRequest(prompt: string): boolean {
+    if (!prompt) return false;
+    
+    const audioKeywords = ['audio', 'sound', 'music', 'voice', 'speech', 'narration', '音声', '音楽', 'サウンド', '声', 'ナレーション'];
+    const generationKeywords = ['generate', 'create', 'make', 'produce', 'synthesize', '生成', '作成', '作る', '合成'];
+    
+    const lowerPrompt = prompt.toLowerCase();
+    const hasAudioKeyword = audioKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
+    const hasGenerationKeyword = generationKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
+    
+    return hasAudioKeyword && hasGenerationKeyword;
   }
 }

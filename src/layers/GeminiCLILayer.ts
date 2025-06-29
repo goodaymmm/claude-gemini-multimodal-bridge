@@ -392,7 +392,15 @@ export class GeminiCLILayer implements LayerInterface {
 
     // Use -p option for better token efficiency and stability
     // This prevents issues with long prompts being passed as arguments
+    // Both -p and --prompt should work, but -p is shorter and more reliable
     args.push('-p', finalPrompt);
+
+    logger.debug('Built Gemini command arguments', {
+      argsCount: args.length,
+      hasPromptFlag: args.includes('-p'),
+      promptLength: finalPrompt.length,
+      command: `gemini ${args.join(' ').substring(0, 100)}...`
+    });
 
     return args;
   }
@@ -412,8 +420,10 @@ export class GeminiCLILayer implements LayerInterface {
 
     return new Promise<string>((resolve, reject) => {
       logger.debug('Executing Gemini CLI command', {
+        geminiPath: this.geminiPath,
         args: args.length,
         argsPreview: args.slice(0, -1).join(' ') + ' [prompt]',
+        fullCommand: `${this.geminiPath} ${args.slice(0, -1).join(' ')} -p "[PROMPT]"`
       });
 
       const child = spawn(this.geminiPath!, args, {
@@ -453,9 +463,21 @@ export class GeminiCLILayer implements LayerInterface {
             reject(new Error('Gemini authentication expired. Please run: gemini auth'));
           } else if (errorOutput.includes('quota') || errorOutput.includes('rate limit')) {
             reject(new Error('Gemini API quota exceeded. Please wait or upgrade plan.'));
+          } else if (errorOutput.includes('Unknown argument') || errorOutput.includes('Options:')) {
+            // Handle argument parsing errors - likely prompt not passed with -p flag
+            logger.error('Gemini CLI argument error detected', {
+              command: `${this.geminiPath} ${args.join(' ')}`,
+              errorOutput,
+              suggestedFix: 'Ensure prompt is passed with -p flag'
+            });
+            reject(new Error(`Gemini CLI argument error: Prompt must be passed with -p flag. Error: ${errorOutput}`));
           } else {
             const error = `Gemini CLI exited with code ${code}: ${errorOutput}`;
-            logger.error('Gemini CLI command failed', { code, error: errorOutput });
+            logger.error('Gemini CLI command failed', { 
+              code, 
+              error: errorOutput,
+              command: `${this.geminiPath} ${args.slice(0, -1).join(' ')} -p "[PROMPT]"`
+            });
             reject(new Error(error));
           }
         }

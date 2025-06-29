@@ -1074,6 +1074,161 @@ export class GenerationWorkflow implements WorkflowDefinition {
   }
 
   /**
+   * Execute image generation workflow - directly routed to AI Studio
+   */
+  async executeImageGeneration(
+    prompt: string,
+    options?: ProcessingOptions & {
+      width?: number;
+      height?: number;
+      quality?: 'standard' | 'high' | 'ultra';
+      style?: string;
+      model?: 'imagen-3' | 'imagen-2';
+      aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
+    }
+  ): Promise<WorkflowResult> {
+    return safeExecute(
+      async () => {
+        logger.info('Starting image generation workflow', {
+          prompt: prompt.substring(0, 100),
+          options: options || {},
+          workflowId: this.id,
+        });
+
+        // Create AI Studio-specific workflow for image generation
+        const workflow = this.createImageGenerationWorkflow(prompt, options);
+        return await this.orchestrator.executeWorkflow(workflow);
+      },
+      {
+        operationName: 'image-generation-workflow',
+        layer: 'aistudio' as const,
+        timeout: this.timeout,
+      }
+    );
+  }
+
+  /**
+   * Execute video generation workflow - directly routed to AI Studio
+   */
+  async executeVideoGeneration(
+    prompt: string,
+    options?: ProcessingOptions & {
+      duration?: number;
+      quality?: 'standard' | 'high' | 'ultra';
+      aspectRatio?: '16:9' | '9:16' | '1:1';
+      frameRate?: 24 | 30 | 60;
+    }
+  ): Promise<WorkflowResult> {
+    return safeExecute(
+      async () => {
+        logger.info('Starting video generation workflow', {
+          prompt: prompt.substring(0, 100),
+          options: options || {},
+          workflowId: this.id,
+        });
+
+        const workflow = this.createVideoGenerationWorkflow(prompt, options);
+        return await this.orchestrator.executeWorkflow(workflow);
+      },
+      {
+        operationName: 'video-generation-workflow',
+        layer: 'aistudio' as const,
+        timeout: this.timeout * 2, // Video generation takes longer
+      }
+    );
+  }
+
+  /**
+   * Create image generation workflow that goes directly to AI Studio
+   */
+  private createImageGenerationWorkflow(
+    prompt: string,
+    options?: ProcessingOptions & any
+  ): WorkflowDefinition {
+    return {
+      id: 'image-generation-workflow',
+      name: 'Image Generation Workflow',
+      description: 'Generate images using AI Studio (Imagen 3)',
+      steps: [
+        {
+          id: 'image_generation',
+          layer: 'aistudio' as const,
+          action: 'generate_image',
+          input: {
+            prompt,
+            options: {
+              width: options?.width || 1024,
+              height: options?.height || 1024,
+              quality: options?.quality || 'standard',
+              model: options?.model || 'imagen-3',
+              aspectRatio: options?.aspectRatio || '1:1',
+              style: options?.style
+            }
+          }
+        }
+      ],
+      fallbackStrategies: {
+        // NO fallback to Gemini CLI for image generation
+        aistudio_unavailable: {
+          replace: 'image_generation',
+          with: {
+            id: 'image_generation_fallback',
+            layer: 'claude' as const,
+            action: 'explain_limitation',
+            input: {
+              message: 'Image generation requires AI Studio (Imagen 3). Please check your GEMINI_API_KEY configuration.'
+            }
+          }
+        }
+      }
+    };
+  }
+
+  /**
+   * Create video generation workflow that goes directly to AI Studio
+   */
+  private createVideoGenerationWorkflow(
+    prompt: string,
+    options?: ProcessingOptions & any
+  ): WorkflowDefinition {
+    return {
+      id: 'video-generation-workflow',
+      name: 'Video Generation Workflow',
+      description: 'Generate videos using AI Studio (Veo 2)',
+      steps: [
+        {
+          id: 'video_generation',
+          layer: 'aistudio' as const,
+          action: 'generate_video',
+          input: {
+            prompt,
+            options: {
+              duration: options?.duration || 5,
+              quality: options?.quality || 'standard',
+              aspectRatio: options?.aspectRatio || '16:9',
+              frameRate: options?.frameRate || 30
+            }
+          }
+        }
+      ],
+      fallbackStrategies: {
+        // NO fallback to other layers for video generation
+        aistudio_unavailable: {
+          replace: 'video_generation',
+          with: {
+            id: 'video_generation_fallback',
+            layer: 'claude' as const,
+            action: 'explain_limitation',
+            input: {
+              message: 'Video generation requires AI Studio (Veo 2). Please check your GEMINI_API_KEY configuration.'
+            }
+          }
+        }
+      }
+    };
+  }
+
+  /**
    * Get workflow capabilities
    */
   getCapabilities(): string[] {
@@ -1085,6 +1240,9 @@ export class GenerationWorkflow implements WorkflowDefinition {
       'presentation_generation',
       'creative_generation',
       'comparative_analysis_generation',
+      'image_generation',
+      'video_generation',
+      'audio_generation',
     ];
   }
 }

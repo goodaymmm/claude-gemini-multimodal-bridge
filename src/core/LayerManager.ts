@@ -422,8 +422,14 @@ export class LayerManager {
     const hasComplexPrompt = inputData.prompt && inputData.prompt.length > 1000;
     const multipleSteps = workflow.steps.length > 3;
     
+    // Detect generation requests (especially image/video/audio generation)
+    const isGenerationRequest = this.detectGenerationRequest(inputData.prompt, workflow);
+    const isImageGeneration = this.detectImageGeneration(inputData.prompt, workflow);
+    const isVideoGeneration = this.detectVideoGeneration(inputData.prompt, workflow);
+    const isAudioGeneration = this.detectAudioGeneration(inputData.prompt, workflow);
+    
     const requiresComplexReasoning = hasComplexPrompt || multipleSteps;
-    const requiresMultimodalProcessing = hasMultimodalFiles;
+    const requiresMultimodalProcessing = hasMultimodalFiles || isGenerationRequest;
     const requiresGrounding = inputData.prompt?.includes('search') || 
                              inputData.prompt?.includes('latest') ||
                              inputData.prompt?.includes('current');
@@ -432,17 +438,43 @@ export class LayerManager {
     
     if (multipleSteps && hasMultimodalFiles) {
       estimatedComplexity = 'high';
-    } else if (hasComplexPrompt || hasMultimodalFiles || multipleSteps) {
+    } else if (hasComplexPrompt || hasMultimodalFiles || multipleSteps || isGenerationRequest) {
       estimatedComplexity = 'medium';
     }
 
-    // Determine recommended layer
+    // Determine recommended layer with generation priority
     let recommendedLayer: LayerType = 'gemini';
-    if (requiresComplexReasoning) {
+    
+    // HIGHEST PRIORITY: AI Studio for any generation tasks
+    if (isImageGeneration || isVideoGeneration || isAudioGeneration || isGenerationRequest) {
+      recommendedLayer = 'aistudio';
+      logger.info('Routing to AI Studio for generation task', {
+        isImageGeneration,
+        isVideoGeneration, 
+        isAudioGeneration,
+        prompt: inputData.prompt?.substring(0, 100) + '...'
+      });
+    } else if (requiresComplexReasoning) {
       recommendedLayer = 'claude';
     } else if (requiresMultimodalProcessing) {
       recommendedLayer = 'aistudio';
     }
+
+    logger.info('Workload analysis completed', {
+      hasMultimodalFiles,
+      hasComplexPrompt,
+      multipleSteps,
+      isGenerationRequest,
+      isImageGeneration,
+      isVideoGeneration,
+      isAudioGeneration,
+      requiresComplexReasoning,
+      requiresMultimodalProcessing,
+      requiresGrounding,
+      estimatedComplexity,
+      recommendedLayer,
+      prompt: inputData.prompt?.substring(0, 200) + '...'
+    });
 
     return {
       requiresComplexReasoning,
@@ -906,5 +938,111 @@ export class LayerManager {
 
   public getAIStudioLayer(): AIStudioLayer {
     return this.aiStudioLayer;
+  }
+
+  /**
+   * Detect if request is for content generation
+   */
+  private detectGenerationRequest(prompt: string, workflow: ExecutionPlan): boolean {
+    if (!prompt) return false;
+    
+    const generationKeywords = [
+      'generate', 'create', 'make', 'produce', 'draw', 'design',
+      '生成', '作成', '作る', '描く', 'つくる'
+    ];
+    
+    const isWorkflowGeneration = workflow.steps.some(step => 
+      step.action.includes('generate') || 
+      step.action.includes('create') ||
+      step.layer === 'aistudio'
+    );
+    
+    const hasGenerationKeywords = generationKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    return isWorkflowGeneration || hasGenerationKeywords;
+  }
+
+  /**
+   * Detect if request is specifically for image generation
+   */
+  private detectImageGeneration(prompt: string, workflow: ExecutionPlan): boolean {
+    if (!prompt) return false;
+    
+    const imageKeywords = [
+      'image', 'picture', 'photo', 'illustration', 'drawing', 'artwork',
+      'visual', 'graphic', 'sketch', 'painting', 'render',
+      '画像', '写真', 'イラスト', '絵', '図', 'ピクチャー'
+    ];
+    
+    const generationKeywords = [
+      'generate', 'create', 'make', 'produce', 'draw', 'design',
+      '生成', '作成', '作る', '描く'
+    ];
+    
+    const hasImageKeyword = imageKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    const hasGenerationKeyword = generationKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    return hasImageKeyword && hasGenerationKeyword;
+  }
+
+  /**
+   * Detect if request is for video generation
+   */
+  private detectVideoGeneration(prompt: string, workflow: ExecutionPlan): boolean {
+    if (!prompt) return false;
+    
+    const videoKeywords = [
+      'video', 'movie', 'animation', 'clip', 'motion',
+      '動画', 'ビデオ', 'ムービー', 'アニメーション'
+    ];
+    
+    const generationKeywords = [
+      'generate', 'create', 'make', 'produce',
+      '生成', '作成', '作る'
+    ];
+    
+    const hasVideoKeyword = videoKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    const hasGenerationKeyword = generationKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    return hasVideoKeyword && hasGenerationKeyword;
+  }
+
+  /**
+   * Detect if request is for audio generation
+   */
+  private detectAudioGeneration(prompt: string, workflow: ExecutionPlan): boolean {
+    if (!prompt) return false;
+    
+    const audioKeywords = [
+      'audio', 'sound', 'music', 'voice', 'speech', 'narration',
+      '音声', '音楽', 'サウンド', '声', 'ナレーション'
+    ];
+    
+    const generationKeywords = [
+      'generate', 'create', 'make', 'produce', 'synthesize',
+      '生成', '作成', '作る', '合成'
+    ];
+    
+    const hasAudioKeyword = audioKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    const hasGenerationKeyword = generationKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    return hasAudioKeyword && hasGenerationKeyword;
   }
 }
