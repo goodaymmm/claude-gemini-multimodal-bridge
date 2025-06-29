@@ -70,10 +70,14 @@ npm install -g @google/gemini-cli
 gemini auth  # Follow OAuth flow in browser
 # OR set API key: export GEMINI_API_KEY=your_key
 
-# 3. Verify authentication works
+# 3. Get API key from: https://aistudio.google.com/app/apikey
+# Add to .env file:
+echo "GEMINI_API_KEY=your_api_key_here" >> .env
+
+# 4. Verify authentication works
 gemini "Hello, test prompt"
 
-# 4. Install Claude Code (requires separate auth)
+# 5. Install Claude Code (requires separate auth)
 npm install -g @anthropic-ai/claude-code
 ```
 
@@ -121,9 +125,10 @@ npm start
 - **Method 1 (Recommended)**: OAuth via `gemini auth` command
 - **Method 2 (Alternative)**: Google AI Studio API key
 
-#### **Claude Authentication**  
-- **Free Tier**: Uses built-in Claude Code authentication (no additional setup needed)
-- **Paid Tier**: Optional API key to bypass rate limits
+#### **Claude Code Authentication**  
+- **Required**: Separate Claude Code authentication needed
+- **Setup**: Run `claude auth` when prompted during usage
+- **Note**: Independent from Gemini/AI Studio authentication
 
 ### Setup
 
@@ -151,7 +156,7 @@ Copy `.env.example` to `.env` and configure (all settings are optional):
 ```bash
 # Authentication (Optional - OAuth is recommended)
 GEMINI_API_KEY=your_api_key_here_optional  # Only if not using OAuth
-CLAUDE_API_KEY=your_api_key_here_optional  # Only for paid tier rate limit bypass
+CLAUDE_API_KEY=your_api_key_here_optional  # Only if using Claude API directly
 
 # CLI Tool Paths (Auto-detected if in PATH)
 CLAUDE_CODE_PATH=/usr/local/bin/claude

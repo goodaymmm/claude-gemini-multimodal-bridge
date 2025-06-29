@@ -445,29 +445,29 @@ STEP 2: Gemini Authentication (CRITICAL!)
 3. Grant permissions when prompted
 4. ✅ Verify: gemini "test prompt"
 
-🔄 ALTERNATIVE: API Key Method
-1. 📖 Detailed Guide: https://ai.google.dev/gemini-api/docs/api-key
-2. 📖 Create API Key: https://aistudio.google.com/app/apikey
-3. Visit: https://aistudio.google.com/app/apikey
-4. Sign in with Google account
-5. Click "Create API Key"
-6. Copy the generated key
-7. Set: GEMINI_API_KEY=your_key_here
-8. ✅ Verify: gemini "test prompt"
+STEP 3: AI Studio API Key Method (.env setup)
+==============================================
+📖 Create API Key: https://aistudio.google.com/app/apikey
+1. Visit: https://aistudio.google.com/app/apikey
+2. Sign in with Google account
+3. Click "Create API Key"
+4. Copy the generated key
+5. Add to .env file: echo "GEMINI_API_KEY=your_key_here" >> .env
+6. ✅ Verify: gemini "test prompt"
 
-STEP 3: Install Claude Code & Other Tools
+STEP 4: Install Claude Code & Other Tools
 ==========================================
 npm install -g @anthropic-ai/claude-code
 
 Note: Claude Code requires separate authentication.
 Run 'claude auth' if prompted during usage.
 
-STEP 4: Install CGMB
+STEP 5: Install CGMB
 =====================
 git clone <repo> && cd <repo>
 npm install && npm run build
 
-STEP 5: Verify Everything Works
+STEP 6: Verify Everything Works
 ================================
 cgmb auth-status --verbose
 cgmb verify
