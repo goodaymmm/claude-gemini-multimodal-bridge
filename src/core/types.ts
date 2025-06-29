@@ -15,7 +15,7 @@ export const WorkflowTypeSchema = z.enum(['analysis', 'conversion', 'extraction'
 export type WorkflowType = z.infer<typeof WorkflowTypeSchema>;
 
 // Analysis Types
-export type AnalysisType = 'content' | 'comparative' | 'thematic' | 'sentiment' | 'trend' | 'statistical';
+export type AnalysisType = 'content' | 'comparative' | 'thematic' | 'sentiment' | 'trend' | 'statistical' | 'comprehensive';
 
 // File Types
 export const FileTypeSchema = z.enum([
@@ -71,6 +71,23 @@ export const DocumentAnalysisArgsSchema = z.object({
   options: ProcessingOptionsSchema.optional(),
 });
 export type DocumentAnalysisArgs = z.infer<typeof DocumentAnalysisArgsSchema>;
+
+export const DocumentAnalysisResultSchema = z.object({
+  success: z.boolean(),
+  analysis_type: z.enum(['summary', 'comparison', 'extraction', 'translation']),
+  content: z.string(),
+  documents_processed: z.array(z.string()),
+  processing_time: z.number(),
+  insights: z.array(z.string()).optional(),
+  metadata: z.object({
+    total_duration: z.number(),
+    tokens_used: z.number().optional(),
+    cost: z.number().optional(),
+    quality_score: z.number().optional(),
+  }),
+  error: z.string().optional(),
+});
+export type DocumentAnalysisResult = z.infer<typeof DocumentAnalysisResultSchema>;
 
 // Workflow Definitions
 export const WorkflowStepSchema = z.object({

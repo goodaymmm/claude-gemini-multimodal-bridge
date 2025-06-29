@@ -181,7 +181,7 @@ export class MultimodalProcess {
       options: {
         ...options,
         outputFormat: targetFormat,
-        preserveQuality: true,
+        quality_level: 'quality',
       },
     });
   }
@@ -264,18 +264,21 @@ export class MultimodalProcess {
           
           // Create processed file reference
           const processedFile: MultimodalFile = {
-            name: path.basename(file.path),
             path: file.path,
             size,
-            mimeType: this.getMimeType(file.path),
             type: fileType,
             encoding: file.encoding || 'utf-8',
+            metadata: {
+              mimeType: this.getMimeType(file.path),
+              name: path.basename(file.path),
+            },
           };
 
           processedFiles.push(processedFile);
           
           logger.debug('File prepared for processing', {
-            name: processedFile.name,
+            name: processedFile.metadata?.name,
+            path: processedFile.path,
             size: processedFile.size,
             type: processedFile.type,
           });
@@ -305,7 +308,7 @@ export class MultimodalProcess {
   /**
    * Determine optimal file type for processing
    */
-  private determineFileType(filePath: string): 'image' | 'document' | 'audio' | 'video' | 'unknown' {
+  private determineFileType(filePath: string): 'image' | 'document' | 'audio' | 'video' | 'text' {
     const ext = path.extname(filePath).toLowerCase();
     
     if (this.SUPPORTED_FORMATS.images.includes(ext)) return 'image';
@@ -313,7 +316,7 @@ export class MultimodalProcess {
     if (this.SUPPORTED_FORMATS.audio.includes(ext)) return 'audio';
     if (this.SUPPORTED_FORMATS.video.includes(ext)) return 'video';
     
-    return 'unknown';
+    return 'text'; // Default to text for unknown files
   }
 
   /**
@@ -380,7 +383,7 @@ export class MultimodalProcess {
     
     // Determine if we need specialized services
     const hasMultimodalFiles = args.files.some(f => 
-      this.determineFileType(f.path) !== 'document' && this.determineFileType(f.path) !== 'unknown'
+      this.determineFileType(f.path) !== 'document' && this.determineFileType(f.path) !== 'text'
     );
     
     if (hasMultimodalFiles || args.workflow === 'analysis') {
@@ -435,7 +438,7 @@ export class MultimodalProcess {
         });
 
         // Execute through layer manager with intelligent routing
-        return await this.layerManager.execute(workflowTask);
+        return await this.layerManager.processMultimodal(workflowTask.instructions, workflowTask.files, workflowTask.workflowType, workflowTask.options);
       },
       {
         maxAttempts: 3,
@@ -459,31 +462,19 @@ export class MultimodalProcess {
     
     // Specific workflow detection
     if (lowerInstructions.includes('convert') || lowerInstructions.includes('transform')) {
-      return 'format_conversion';
+      return 'conversion';
     }
     
     if (lowerInstructions.includes('extract') || lowerInstructions.includes('get data')) {
-      return 'data_extraction';
+      return 'extraction';
     }
     
-    if (lowerInstructions.includes('compare') || lowerInstructions.includes('analysis')) {
-      return 'content_analysis';
+    if (lowerInstructions.includes('generate') || lowerInstructions.includes('create')) {
+      return 'generation';
     }
     
-    if (files.length > 5) {
-      return 'batch_processing';
-    }
-    
-    // Default based on file types
-    if (hasImages || hasAudio || hasVideo) {
-      return 'multimodal_processing';
-    }
-    
-    if (hasDocuments) {
-      return 'document_processing';
-    }
-    
-    return 'general_processing';
+    // Default to analysis for most cases
+    return 'analysis';
   }
 
   /**
@@ -548,19 +539,22 @@ export class MultimodalProcess {
   /**
    * Extract layers used from result
    */
-  private extractLayersUsed(result: LayerResult): string[] {
-    const layers = new Set<string>();
+  private extractLayersUsed(result: LayerResult): ('claude' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
+    const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
+    const layers = new Set<typeof validLayers[number]>();
     
-    if (result.metadata?.layer) {
-      layers.add(result.metadata.layer);
+    if (result.metadata?.layer && validLayers.includes(result.metadata.layer as any)) {
+      layers.add(result.metadata.layer as any);
     }
     
     // Check for nested results indicating multiple layers
     if (typeof result.data === 'object' && result.data !== null) {
       const dataStr = JSON.stringify(result.data);
-      if (dataStr.includes('claude')) layers.add('claude');
-      if (dataStr.includes('gemini')) layers.add('gemini');
-      if (dataStr.includes('aistudio')) layers.add('aistudio');
+      validLayers.forEach(layer => {
+        if (dataStr.includes(layer)) {
+          layers.add(layer);
+        }
+      });
     }
     
     return Array.from(layers);
