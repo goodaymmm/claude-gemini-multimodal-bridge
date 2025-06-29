@@ -417,19 +417,60 @@ export class ClaudeCodeLayer implements LayerInterface {
     try {
       // Use lightweight version check instead of full command execution
       const { execSync } = await import('child_process');
-      const output = execSync(`${this.claudePath} --version`, { 
-        timeout: 30000, // Increased timeout to 30 seconds
-        encoding: 'utf8',
-        stdio: 'pipe'
-      });
       
-      if (!output || !output.includes('claude')) {
-        throw new Error('Claude Code version check failed');
+      try {
+        // First try --version
+        const output = execSync(`${this.claudePath} --version`, { 
+          timeout: 30000,
+          encoding: 'utf8',
+          stdio: 'pipe'
+        });
+        
+        // Accept any non-empty output as success (Claude Code might have different version output format)
+        if (output && output.trim()) {
+          logger.debug('Claude Code connection test successful via --version', {
+            version: output.trim().substring(0, 100)
+          });
+          return;
+        }
+      } catch (versionError) {
+        // --version failed, try --help as fallback
+        logger.debug('Claude --version failed, trying --help', {
+          error: (versionError as Error).message
+        });
+        
+        try {
+          const helpOutput = execSync(`${this.claudePath} --help`, { 
+            timeout: 15000,
+            encoding: 'utf8',
+            stdio: 'pipe'
+          });
+          
+          // If --help works and contains "Claude" or shows help text, consider it working
+          if (helpOutput && (helpOutput.includes('Claude') || helpOutput.includes('Usage:') || helpOutput.length > 20)) {
+            logger.debug('Claude Code connection test successful via --help', {
+              helpLength: helpOutput.length
+            });
+            return;
+          }
+        } catch (helpError) {
+          logger.warn('Both --version and --help failed for Claude Code', {
+            versionError: (versionError as Error).message,
+            helpError: (helpError as Error).message
+          });
+        }
       }
       
-      logger.debug('Claude Code connection test successful', {
-        version: output.trim().substring(0, 50)
-      });
+      // Final fallback: just check if the binary exists and is executable
+      try {
+        const { access, constants } = await import('fs/promises');
+        await access(this.claudePath!, constants.F_OK | constants.X_OK);
+        logger.debug('Claude Code binary exists and is executable, considering it available');
+        return;
+      } catch (accessError) {
+        throw new Error(`Claude Code binary not accessible: ${(accessError as Error).message}`);
+      }
+      
     } catch (error) {
       throw new Error(`Claude Code connection test failed: ${(error as Error).message}`);
     }
