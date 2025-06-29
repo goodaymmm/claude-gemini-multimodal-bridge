@@ -56,6 +56,10 @@ graph TD
 | **Gemini CLI** | Grounding, search, rapid processing | Real-time data, command execution |
 | **AI Studio MCP** | Multimodal processing, file conversion | Images, audio, PDFs, documents |
 
+📖 **API Key Setup Guides:**
+- [Gemini API Key Guide](https://ai.google.dev/gemini-api/docs/api-key)
+- [Create AI Studio API Key](https://aistudio.google.com/app/apikey)
+
 ## 🚀 Quick Start
 
 ### Prerequisites (Required First!)
@@ -70,20 +74,12 @@ npm install -g @google/gemini-cli
 gemini auth  # Follow OAuth flow in browser
 # OR set API key: export GEMINI_API_KEY=your_key
 
-# 3. Get API key from: https://aistudio.google.com/app/apikey
-# Add to .env file:
-echo "GEMINI_API_KEY=your_api_key_here" >> .env
-
-# 4. Verify authentication works
+# 3. Verify authentication works
 gemini "Hello, test prompt"
 
-# 5. Install Claude Code (requires separate auth)
+# 4. Install Claude Code (requires separate auth)
 npm install -g @anthropic-ai/claude-code
 ```
-
-📖 **API Key Setup Guides:**
-- [Gemini API Key Guide](https://ai.google.dev/gemini-api/docs/api-key)
-- [Create AI Studio API Key](https://aistudio.google.com/app/apikey)
 
 ### Installation
 
@@ -150,6 +146,10 @@ npm link
 ### Setup
 
 ```bash
+# Get API key from: https://aistudio.google.com/app/apikey
+# Add to .env file:
+echo "GEMINI_API_KEY=your_api_key_here" >> .env
+
 # Run setup wizard
 cgmb setup
 
