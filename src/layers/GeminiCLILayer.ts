@@ -54,7 +54,7 @@ export class GeminiCLILayer implements LayerInterface {
         }
 
         // Find Gemini CLI executable path
-        this.geminiPath = await this.findGeminiPath();
+        this.geminiPath = await this.findGeminiPath() || '';
         if (!this.geminiPath) {
           throw new Error('Gemini CLI executable not found');
         }
@@ -212,8 +212,8 @@ export class GeminiCLILayer implements LayerInterface {
 
         const args = this.buildGeminiCommand(prompt, {
           search: context.useSearch !== false, // Default to true
-          files: context.files,
-          context: context.context,
+          files: context.files || [],
+          context: context.context || '',
         });
 
         const output = await this.executeGeminiProcess(args);
@@ -616,7 +616,7 @@ export class GeminiCLILayer implements LayerInterface {
     const sourcePattern = /Source: (.+?)(?:\n|$)/g;
     let match;
     while ((match = sourcePattern.exec(output)) !== null) {
-      sources.push(match[1].trim());
+      sources.push(match[1]?.trim() || '');
     }
     
     return [...new Set(sources)]; // Remove duplicates

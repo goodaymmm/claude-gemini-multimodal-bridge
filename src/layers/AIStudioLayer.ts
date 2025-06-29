@@ -543,19 +543,24 @@ export class AIStudioLayer implements LayerInterface {
    */
   private async prepareFilesForProcessing(files: (FileReference | MultimodalFile)[]): Promise<any[]> {
     return files.map(file => {
-      if ('path' in file) {
+      // Both types have path, so we can safely access it
+      const fileData = {
+        path: file.path,
+        type: file.type,
+        size: file.size,
+      };
+      
+      // Check if this is a MultimodalFile (has content property)
+      if ('content' in file && file.content !== undefined) {
         return {
-          path: file.path,
-          type: file.type,
-          size: file.size,
-          encoding: file.encoding,
+          ...fileData,
+          content: file.content,
+          mimeType: file.type,
         };
       } else {
         return {
-          path: file.path,
-          content: file.content,
-          mimeType: file.type,
-          size: file.size,
+          ...fileData,
+          encoding: 'encoding' in file ? file.encoding : 'utf-8',
         };
       }
     });

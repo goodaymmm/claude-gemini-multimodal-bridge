@@ -23,7 +23,16 @@ export class ClaudeProxy {
   constructor() {
     this.requestAnalyzer = new RequestAnalyzer();
     this.capabilityDetector = new CapabilityDetector();
-    this.layerManager = new LayerManager();
+    
+    // Create default config for LayerManager
+    const defaultConfig = {
+      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
+      claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
+      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+      cache: { enabled: true, ttl: 3600 },
+      logging: { level: 'info' as const },
+    };
+    this.layerManager = new LayerManager(defaultConfig);
   }
 
   /**
@@ -43,7 +52,7 @@ export class ClaudeProxy {
         args,
         originalCommand: `claude ${args.join(' ')}`,
         workingDirectory: process.cwd(),
-        environment: process.env,
+        environment: process.env as Record<string, string>,
         timestamp: new Date(),
       };
 
@@ -108,10 +117,11 @@ export class ClaudeProxy {
         
         try {
           // Initialize layer manager if needed
-          await this.layerManager.initialize();
+          await this.layerManager.initializeLayers();
           
           // Execute through layer system based on plan
-          const result = await this.layerManager.executeWorkflow({
+          const workflowDefinition = {
+            id: `proxy-workflow-${Date.now()}`,
             steps: plan.layers.map((layer, index) => ({
               id: `step-${index}`,
               layer: layer as any,
@@ -124,7 +134,19 @@ export class ClaudeProxy {
               timeout: plan.estimatedDuration,
             })),
             timeout: plan.estimatedDuration ? plan.estimatedDuration + 30000 : 120000,
-          });
+          };
+          
+          const context = {
+            request: request.originalCommand,
+            args: request.args,
+          };
+          
+          const options = {
+            executionMode: 'adaptive' as const,
+            timeout: plan.estimatedDuration || 300000,
+          };
+          
+          const result = await this.layerManager.executeWorkflow(workflowDefinition, context, options);
           
           const duration = Date.now() - startTime;
           
@@ -269,7 +291,7 @@ export class ClaudeProxy {
       const paths = output.trim().split('\n').filter(p => p && !p.includes('cgmb'));
       if (paths.length > 0) {
         logger.debug('Found Claude in PATH', { path: paths[0] });
-        return paths[0];
+        return paths[0] || null;
       }
     } catch {
       // System PATH lookup failed
@@ -395,7 +417,7 @@ export class ClaudeProxy {
    */
   async getProxyStatus(): Promise<{
     status: 'ready' | 'degraded' | 'offline';
-    capabilities: Awaited<ReturnType<typeof this.capabilityDetector.getCapabilityStatus>>;
+    capabilities: Awaited<ReturnType<CapabilityDetector['getCapabilityStatus']>>;
     originalClaudeAvailable: boolean;
   }> {
     const capabilities = await this.capabilityDetector.getCapabilityStatus();

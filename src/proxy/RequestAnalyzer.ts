@@ -36,14 +36,14 @@ export class RequestAnalyzer {
         logger.debug('Starting request analysis', { args });
 
         const input = args.join(' ');
-        const analysis = {
+        const analysis: RequestAnalysis = {
           canEnhance: false,
-          requiredCapabilities: [] as ('claude' | 'gemini' | 'aistudio')[],
+          requiredCapabilities: [],
           fallbackToOriginal: false,
-          enhancementType: 'passthrough' as const,
+          enhancementType: 'passthrough',
           confidence: 0,
-          priority: 'low' as const,
-          estimatedComplexity: 'simple' as const,
+          priority: 'low',
+          estimatedComplexity: 'simple',
         };
 
         // Check for help/version commands (should not be enhanced)
@@ -423,7 +423,7 @@ export class RequestAnalyzer {
    */
   private getFileExtension(filePath: string): string {
     const match = filePath.match(/\.([^.]+)$/);
-    return match ? `.${match[1].toLowerCase()}` : '';
+    return match ? `.${match[1]?.toLowerCase()}` : '';
   }
 
   /**
