@@ -257,10 +257,16 @@ export class AIStudioLayer implements LayerInterface {
 
         return {
           content: result.content || result.response || 'Processing completed',
+          success: true,
           files_processed: files.map(f => f.path),
           processing_time: processingTime,
-          tokens_used: this.estimateTokensUsed({ files, instructions }, result),
-          model_used: 'gemini-2.5-pro',
+          workflow_used: 'analysis' as const,
+          layers_involved: ['aistudio'] as const,
+          metadata: {
+            total_duration: processingTime,
+            tokens_used: this.estimateTokensUsed({ files, instructions }, result),
+            cost: this.estimateCost({ files, instructions }, result),
+          },
         };
       },
       {
@@ -734,6 +740,19 @@ export class AIStudioLayer implements LayerInterface {
     
     if (task.files && task.files.length > 0) {
       return basePrice * task.files.length;
+    }
+    
+    return basePrice;
+  }
+
+  /**
+   * Estimate cost for processing
+   */
+  private estimateCost(input: any, result: any): number {
+    const basePrice = 0.001; // $0.001 per request
+    
+    if (input.files && input.files.length > 0) {
+      return basePrice * input.files.length;
     }
     
     return basePrice;

@@ -15,11 +15,11 @@ export const WorkflowTypeSchema = z.enum(['analysis', 'conversion', 'extraction'
 export type WorkflowType = z.infer<typeof WorkflowTypeSchema>;
 
 // Analysis Types
-export type AnalysisType = 'content' | 'comparative' | 'thematic' | 'sentiment' | 'trend' | 'statistical' | 'comprehensive';
+export type AnalysisType = 'content' | 'comparative' | 'thematic' | 'sentiment' | 'trend' | 'statistical' | 'comprehensive' | 'contextual' | 'summarization' | 'extraction';
 
 // File Types
 export const FileTypeSchema = z.enum([
-  'image', 'audio', 'pdf', 'document', 'text', 'video', 'music'
+  'image', 'audio', 'pdf', 'document', 'text', 'video'
 ]);
 export type FileType = z.infer<typeof FileTypeSchema>;
 
@@ -52,6 +52,7 @@ export const ProcessingOptionsSchema = z.object({
   detailed: z.boolean().optional(),
   extractionType: z.string().optional(),
   outputFormat: z.string().optional(), // Note: keeping both output_format and outputFormat for compatibility
+  preserveQuality: z.boolean().optional(),
 });
 export type ProcessingOptions = z.infer<typeof ProcessingOptionsSchema>;
 
@@ -69,6 +70,15 @@ export const DocumentAnalysisArgsSchema = z.object({
   analysis_type: z.enum(['summary', 'comparison', 'extraction', 'translation']),
   output_requirements: z.string().optional(),
   options: ProcessingOptionsSchema.optional(),
+  // Additional properties for compatibility
+  analysisType: z.enum(['summary', 'comparison', 'extraction', 'translation']).optional(),
+  extractImages: z.boolean().optional(),
+  extractStructuredData: z.boolean().optional(),
+  requiresGrounding: z.boolean().optional(),
+  depth: z.enum(['shallow', 'medium', 'deep']).optional(),
+  summaryLength: z.string().optional(),
+  dataTypes: z.array(z.string()).optional(),
+  comparisonType: z.string().optional(),
 });
 export type DocumentAnalysisArgs = z.infer<typeof DocumentAnalysisArgsSchema>;
 
@@ -241,10 +251,18 @@ export type ImageAnalysisResult = z.infer<typeof ImageAnalysisResultSchema>;
 
 export const MultimodalResultSchema = z.object({
   content: z.string(),
+  success: z.boolean(),
   files_processed: z.array(z.string()),
   processing_time: z.number(),
-  tokens_used: z.number().optional(),
-  model_used: z.string(),
+  workflow_used: WorkflowTypeSchema,
+  layers_involved: z.array(LayerTypeSchema),
+  metadata: z.object({
+    total_duration: z.number(),
+    quality_level: QualityLevelSchema.optional(),
+    tokens_used: z.number().optional(),
+    cost: z.number().optional(),
+  }),
+  error: z.string().optional(),
 });
 export type MultimodalResult = z.infer<typeof MultimodalResultSchema>;
 
@@ -573,6 +591,7 @@ export const MultimodalFileSchema = z.object({
   size: z.number().optional(),
   encoding: z.string().optional(),
   content: z.string().optional(),
+  name: z.string().optional(),
   metadata: z.record(z.any()).optional(),
 });
 export type MultimodalFile = z.infer<typeof MultimodalFileSchema>;

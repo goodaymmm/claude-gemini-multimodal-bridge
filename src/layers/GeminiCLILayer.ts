@@ -257,10 +257,16 @@ export class GeminiCLILayer implements LayerInterface {
 
         return {
           content: output.trim(),
+          success: true,
           files_processed: files.map(f => f.path),
           processing_time: processingTime,
-          tokens_used: this.estimateTokensUsed({ files, prompt }, output),
-          model_used: 'gemini-2.5-pro',
+          workflow_used: 'analysis' as const,
+          layers_involved: ['gemini'] as const,
+          metadata: {
+            total_duration: processingTime,
+            tokens_used: this.estimateTokensUsed({ files, prompt }, output),
+            cost: this.estimateCost({ files, prompt }, output),
+          },
         };
       },
       {
@@ -764,5 +770,21 @@ export class GeminiCLILayer implements LayerInterface {
       hasPromptFlag,
       commandType: hasPromptFlag ? 'prompt-with-flag' : 'system-command'
     });
+  }
+
+  /**
+   * Estimate cost for processing
+   */
+  private estimateCost(input: any, result: string): number {
+    // Gemini CLI with API key usage
+    const basePrice = 0.001; // $0.001 per request
+    
+    if (input.files && input.files.length > 0) {
+      return basePrice * input.files.length;
+    }
+    
+    // Estimate based on output length
+    const outputTokens = Math.ceil(result.length / 4);
+    return basePrice + (outputTokens * 0.000001); // Rough token pricing
   }
 }

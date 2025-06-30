@@ -42,16 +42,16 @@
     "gemini-cli",
     "google-ai-studio"
   ],
-  "author": "Your Name <your.email@example.com>",
+  "author": "goodaymmm",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/claude-gemini-multimodal-bridge"
+    "url": "https://github.com/goodaymmm/claude-gemini-multimodal-bridge"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/claude-gemini-multimodal-bridge/issues"
+    "url": "https://github.com/goodaymmm/claude-gemini-multimodal-bridge/issues"
   },
-  "homepage": "https://github.com/yourusername/claude-gemini-multimodal-bridge#readme",
+  "homepage": "https://github.com/goodaymmm/claude-gemini-multimodal-bridge#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.22.0",

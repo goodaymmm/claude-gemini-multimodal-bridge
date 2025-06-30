@@ -269,16 +269,16 @@ export class MultimodalProcess {
             size,
             type: fileType,
             encoding: file.encoding || 'utf-8',
+            name: path.basename(file.path),
             metadata: {
               mimeType: this.getMimeType(file.path),
-              name: path.basename(file.path),
             },
           };
 
           processedFiles.push(processedFile);
           
           logger.debug('File prepared for processing', {
-            name: processedFile.metadata?.name,
+            name: processedFile.name,
             path: processedFile.path,
             size: processedFile.size,
             type: processedFile.type,
@@ -309,10 +309,11 @@ export class MultimodalProcess {
   /**
    * Determine optimal file type for processing
    */
-  private determineFileType(filePath: string): 'image' | 'document' | 'audio' | 'video' | 'text' {
+  private determineFileType(filePath: string): 'image' | 'audio' | 'pdf' | 'document' | 'text' | 'video' {
     const ext = path.extname(filePath).toLowerCase();
     
     if (this.SUPPORTED_FORMATS.images.includes(ext)) return 'image';
+    if (ext === '.pdf') return 'pdf';
     if (this.SUPPORTED_FORMATS.documents.includes(ext)) return 'document';
     if (this.SUPPORTED_FORMATS.audio.includes(ext)) return 'audio';
     if (this.SUPPORTED_FORMATS.video.includes(ext)) return 'video';

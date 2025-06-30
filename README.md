@@ -123,7 +123,8 @@ Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 ```bash
 # Set your API key (NEW variable name)
-echo "AI_STUDIO_API_KEY=your_key_here" >> .env
+# Open .env file with text editor and add:
+# AI_STUDIO_API_KEY=your_key_here
 
 # Authenticate Gemini CLI (OAuth recommended)
 gemini auth  # Follow browser authentication flow
@@ -146,18 +147,6 @@ nvm current    # Verify version
 # Then proceed with installation
 npm install && npm run build
 npm link
-```
-
-**Option 2: Direct Usage (No Installation)**
-```bash
-# Run directly with npx
-npx claude-gemini-multimodal-bridge serve
-
-# Or clone and run without global installation
-git clone https://github.com/goodaymmm/claude-gemini-multimodal-bridge.git
-cd claude-gemini-multimodal-bridge
-npm install && npm run build
-npm start
 ```
 
 ### Prerequisites
@@ -194,7 +183,8 @@ npm start
 ```bash
 # 1. Get API key from: https://aistudio.google.com/app/apikey
 # Add to .env file:
-echo "AI_STUDIO_API_KEY=your_api_key_here" >> .env
+# Open .env file with text editor and add:
+# AI_STUDIO_API_KEY=your_api_key_here
 
 # 2. Run setup wizard (creates .env configuration)
 cgmb setup
