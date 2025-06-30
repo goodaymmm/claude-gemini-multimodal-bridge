@@ -113,7 +113,14 @@ export class AuthVerifier {
       async () => {
         logger.info('Verifying AI Studio authentication...');
 
-        const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
+        const apiKey = process.env.AI_STUDIO_API_KEY || 
+                       process.env.GOOGLE_AI_STUDIO_API_KEY ||
+                       process.env.GEMINI_API_KEY; // Backward compatibility
+        
+        // Warn about deprecated environment variable names
+        if (!process.env.AI_STUDIO_API_KEY && process.env.GEMINI_API_KEY) {
+          logger.warn('GEMINI_API_KEY is deprecated for AI Studio. Please use AI_STUDIO_API_KEY instead.');
+        }
         
         if (!apiKey) {
           return {
@@ -125,7 +132,7 @@ export class AuthVerifier {
             },
             error: 'AI Studio API key not found',
             requiresAction: true,
-            actionInstructions: 'Set GEMINI_API_KEY environment variable with your AI Studio API key',
+            actionInstructions: 'Set AI_STUDIO_API_KEY environment variable with your AI Studio API key. Get it from: https://aistudio.google.com/app/apikey',
           };
         }
 
@@ -140,7 +147,7 @@ export class AuthVerifier {
             },
             error: 'Invalid AI Studio API key format',
             requiresAction: true,
-            actionInstructions: 'Verify your API key from https://aistudio.google.com/',
+            actionInstructions: 'Verify your API key from https://aistudio.google.com/app/apikey and update AI_STUDIO_API_KEY in your .env file',
           };
         }
 

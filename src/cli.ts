@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
 import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
+import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -357,7 +358,7 @@ program
       
       // Check environment variables
       console.log('\n📋 Environment Variables:');
-      const envVars = ['GEMINI_API_KEY', 'CLAUDE_CODE_PATH', 'GEMINI_CLI_PATH'];
+      const envVars = ['AI_STUDIO_API_KEY', 'CLAUDE_CODE_PATH', 'GEMINI_CLI_PATH'];
       for (const envVar of envVars) {
         const value = process.env[envVar];
         if (value) {
@@ -367,6 +368,15 @@ program
           console.log(`  ✅ ${envVar}: ${displayValue}`);
         } else {
           console.log(`  ❌ ${envVar}: Not set`);
+        }
+      }
+      
+      // Check for deprecated environment variables and warn
+      const deprecatedVars = ['GEMINI_API_KEY', 'GOOGLE_AI_STUDIO_API_KEY'];
+      for (const deprecatedVar of deprecatedVars) {
+        const value = process.env[deprecatedVar];
+        if (value) {
+          console.log(`  ⚠️  ${deprecatedVar}: ${value.substring(0, 8)}... (DEPRECATED - use AI_STUDIO_API_KEY)`);
         }
       }
       
@@ -384,6 +394,163 @@ program
   .action(() => {
     const interactiveSetup = new InteractiveSetup();
     interactiveSetup.displaySetupGuide();
+  });
+
+// MCP setup command
+program
+  .command('setup-mcp')
+  .description('Configure Claude Code MCP integration for CGMB')
+  .option('--force', 'Force update existing configuration')
+  .option('--dry-run', 'Show what would be done without making changes')
+  .option('--manual', 'Show manual setup instructions instead of automatic setup')
+  .action(async (options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      if (options.manual) {
+        console.log('📋 Manual Claude Code MCP Setup Instructions');
+        console.log('═'.repeat(50));
+        console.log(getManualSetupInstructions());
+        return;
+      }
+      
+      console.log('🔧 Setting up Claude Code MCP integration...');
+      console.log('');
+      
+      // Check current status first
+      const status = await getMCPStatus();
+      
+      console.log('📊 Current MCP Configuration Status');
+      console.log('═'.repeat(40));
+      console.log(`Configuration Path: ${status.configPath || 'Not found'}`);
+      console.log(`CGMB Configured: ${status.isConfigured ? '✅ Yes' : '❌ No'}`);
+      
+      if (status.currentConfig) {
+        console.log(`Current Command: ${status.currentConfig.command}`);
+        console.log(`Current Args: ${status.currentConfig.args.join(' ')}`);
+      }
+      
+      console.log('');
+      
+      if (status.issues.length > 0) {
+        console.log('⚠️  Issues Found:');
+        status.issues.forEach(issue => console.log(`   • ${issue}`));
+        console.log('');
+      }
+      
+      if (options.dryRun) {
+        console.log('🧪 Dry Run Mode - Showing what would be done:');
+        console.log('');
+      }
+      
+      // Perform setup
+      const result = await setupCGMBMCP({
+        force: options.force,
+        dryRun: options.dryRun
+      });
+      
+      if (result.success) {
+        const actionText = options.dryRun ? 'Would be' : 'Successfully';
+        console.log(`✅ ${actionText} ${result.action} CGMB MCP configuration`);
+        
+        if (result.configPath) {
+          console.log(`📁 Configuration file: ${result.configPath}`);
+        }
+        
+        if (result.backupPath) {
+          console.log(`💾 Backup created: ${result.backupPath}`);
+        }
+        
+        if (!options.dryRun) {
+          console.log('');
+          console.log('🎉 Setup Complete!');
+          console.log('');
+          console.log('Next steps:');
+          console.log('1. Restart Claude Code to load the new MCP configuration');
+          console.log('2. Run "cgmb verify" to test the connection');
+          console.log('3. Check that CGMB tools are available in Claude Code');
+          
+          if (status.recommendations.length > 0) {
+            console.log('');
+            console.log('💡 Recommendations:');
+            status.recommendations.forEach(rec => console.log(`   • ${rec}`));
+          }
+        }
+      } else {
+        console.log(`❌ ${result.message}`);
+        
+        if (result.action === 'error') {
+          console.log('');
+          console.log('🔧 Manual Setup Alternative:');
+          console.log('Run: cgmb setup-mcp --manual');
+        }
+        
+        process.exit(1);
+      }
+      
+    } catch (error) {
+      logger.error('MCP setup failed', error as Error);
+      console.log('❌ Failed to setup MCP configuration');
+      console.log('');
+      console.log('🔧 Try manual setup instead:');
+      console.log('   cgmb setup-mcp --manual');
+      process.exit(1);
+    }
+  });
+
+// MCP status command
+program
+  .command('mcp-status')
+  .description('Check Claude Code MCP configuration status')
+  .action(async () => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('📊 Claude Code MCP Configuration Status');
+      console.log('═'.repeat(50));
+      
+      const status = await getMCPStatus();
+      
+      console.log(`Configuration Path: ${status.configPath || 'Not found'}`);
+      console.log(`CGMB Configured: ${status.isConfigured ? '✅ Yes' : '❌ No'}`);
+      console.log('');
+      
+      if (status.currentConfig) {
+        console.log('🔧 Current CGMB Configuration:');
+        console.log(`   Command: ${status.currentConfig.command}`);
+        console.log(`   Arguments: ${status.currentConfig.args.join(' ')}`);
+        if (status.currentConfig.env) {
+          console.log(`   Environment: ${Object.keys(status.currentConfig.env).join(', ')}`);
+        }
+        console.log('');
+      }
+      
+      if (status.issues.length > 0) {
+        console.log('⚠️  Issues:');
+        status.issues.forEach(issue => console.log(`   • ${issue}`));
+        console.log('');
+      }
+      
+      if (status.recommendations.length > 0) {
+        console.log('💡 Recommendations:');
+        status.recommendations.forEach(rec => console.log(`   • ${rec}`));
+        console.log('');
+      }
+      
+      if (!status.isConfigured) {
+        console.log('🚀 To setup MCP integration, run:');
+        console.log('   cgmb setup-mcp');
+        console.log('');
+        console.log('📋 For manual setup instructions, run:');
+        console.log('   cgmb setup-mcp --manual');
+      }
+      
+    } catch (error) {
+      logger.error('Failed to check MCP status', error as Error);
+      process.exit(1);
+    }
   });
 
 // Verify command
@@ -468,8 +635,30 @@ program
         }
       });
       
+      // Run MCP configuration verification
+      logger.info('\n🔗 MCP Configuration Verification:');
+      const mcpStatus = await getMCPStatus();
+      let mcpChecksPassed = true;
+      
+      const mcpIcon = mcpStatus.isConfigured ? '✅' : '❌';
+      logger.info(`${mcpIcon} Claude Code MCP Integration: ${mcpStatus.isConfigured ? 'Configured' : 'Not Configured'}`);
+      
+      if (!mcpStatus.isConfigured) {
+        mcpChecksPassed = false;
+        logger.info('   Action: Run "cgmb setup-mcp" to configure MCP integration');
+      } else if (mcpStatus.currentConfig) {
+        logger.info(`   Command: ${mcpStatus.currentConfig.command}`);
+        logger.info(`   Args: ${mcpStatus.currentConfig.args.join(' ')}`);
+      }
+      
+      if (mcpStatus.issues.length > 0) {
+        mcpStatus.issues.forEach(issue => {
+          logger.info(`   ⚠️  ${issue}`);
+        });
+      }
+      
       // Overall status
-      const allPassed = systemChecksPassed && authChecksPassed;
+      const allPassed = systemChecksPassed && authChecksPassed && mcpChecksPassed;
       
       logger.info('\n' + '═'.repeat(50));
       if (allPassed) {
@@ -525,9 +714,21 @@ program
           logger.info('   3. Run: cgmb verify');
         }
         
+        if (!mcpChecksPassed) {
+          logger.info('\n💡 To fix MCP integration:');
+          logger.info('   1. Run: cgmb setup-mcp');
+          logger.info('   2. Restart Claude Code');
+          logger.info('   3. Run: cgmb verify');
+        }
+        
         if (authResults.recommendations.length > 0) {
           logger.info('\n📝 Recommendations:');
           authResults.recommendations.forEach(rec => logger.info(`   • ${rec}`));
+        }
+        
+        if (mcpStatus.recommendations.length > 0) {
+          logger.info('\n🔗 MCP Recommendations:');
+          mcpStatus.recommendations.forEach(rec => logger.info(`   • ${rec}`));
         }
         
         process.exit(1);

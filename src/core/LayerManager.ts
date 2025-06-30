@@ -765,12 +765,20 @@ export class LayerManager {
         },
         {
           id: 'content_generation',
-          layer: 'gemini',
+          layer: 'aistudio',
           action: 'generate_content',
           input: {
             strategy: '@generation_strategy.output',
             source_files: context.files,
             prompt: context.prompt,
+            options: {
+              generation_type: 'auto_detect', // Will auto-detect image/video/audio from prompt
+              priority_models: {
+                image: 'imagen-3',
+                video: 'veo-2', 
+                audio: 'text-to-speech'
+              }
+            }
           },
           dependsOn: ['generation_strategy'],
         },

@@ -133,51 +133,72 @@ npm start
 
 **Note**: WSL environments may have multiple Node.js installations. Always use nvm to ensure the correct version.
 
-### Authentication Requirements (Choose One Method Per Service)
+### Authentication Requirements
 
-#### **Gemini Authentication**
-- **Method 1 (Recommended)**: OAuth via `gemini auth` command
-- **Method 2 (Alternative)**: Google AI Studio API key
+#### **AI Studio (Required for Generation Features)**
+- **Purpose**: Image/video/audio generation, multimodal file processing
+- **Method**: API Key from Google AI Studio
+- **Setup**: Get your key from [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+- **Environment**: Set `AI_STUDIO_API_KEY` in your `.env` file
 
-#### **Claude Code Authentication**  
-- **Required**: Separate Claude Code authentication needed
-- **Setup**: Run `claude auth` when prompted during usage
-- **Note**: Independent from Gemini/AI Studio authentication
+#### **Gemini CLI (Required for Real-time Features)**
+- **Purpose**: Real-time search, grounding, rapid text processing
+- **Method**: OAuth (Recommended) via `gemini auth` command
+- **Setup**: Run `gemini auth` and follow browser authentication
+- **Note**: No environment variable needed - uses OAuth token automatically
+
+#### **Claude Code (Required for All Features)**
+- **Purpose**: Complex reasoning, workflow orchestration, code analysis
+- **Method**: Session authentication via `claude auth`
+- **Setup**: Run `claude auth` when prompted
+- **Note**: Independent authentication system
 
 ### Setup
 
 ```bash
 # Get API key from: https://aistudio.google.com/app/apikey
 # Add to .env file:
-echo "GEMINI_API_KEY=your_api_key_here" >> .env
+echo "AI_STUDIO_API_KEY=your_api_key_here" >> .env
 
-# Run setup wizard
+# 1. Run setup wizard (creates .env configuration)
 cgmb setup
 
-# Set up authentication for all services
+# 2. Set up authentication for all services
 cgmb auth --interactive
+# This guides you through Gemini CLI OAuth, API keys, and Claude Code auth
 
-# Verify installation, authentication, and system health
+# 3. Configure Claude Code MCP integration
+cgmb setup-mcp
+# This automatically adds CGMB as an MCP server to Claude Code
+
+# 4. Verify everything is working
 cgmb verify
+# This checks system requirements, authentication, and MCP configuration
 
-# Optional: Auto-fix authentication issues if needed
-cgmb verify --fix
-
-# Add CGMB to Claude Code (one-time setup)
-claude mcp add cgmb
-
-# Now use Claude Code normally with enhanced capabilities!
+# 5. Restart Claude Code to load MCP integration
+# Then use Claude Code normally with enhanced capabilities!
 claude "Hello! Test the enhanced capabilities."
 ```
 
+**Automated MCP Integration**: CGMB now automatically configures Claude Code's MCP settings safely without overwriting existing configurations.
+
 ### Configuration
 
-Copy `.env.example` to `.env` and configure (all settings are optional):
+Copy `.env.example` to `.env` and configure:
 
 ```bash
-# Authentication (Optional - OAuth is recommended)
-GEMINI_API_KEY=your_api_key_here_optional  # Only if not using OAuth
-CLAUDE_API_KEY=your_api_key_here_optional  # Only if using Claude API directly
+# ===== AI Studio Authentication =====
+# Required for image/video/audio generation and multimodal processing
+# Get your API key from: https://aistudio.google.com/app/apikey
+AI_STUDIO_API_KEY=your_ai_studio_api_key_here
+
+# ===== Gemini CLI Authentication =====
+# Primary method: OAuth (run: gemini auth)
+# No API key needed - uses OAuth token automatically
+
+# ===== Claude Code Authentication =====
+# Run: claude auth (no environment variable needed)
+CLAUDE_API_KEY=your_claude_api_key_here_optional  # Only if using Claude API directly
 
 # CLI Tool Paths (Auto-detected if in PATH)
 CLAUDE_CODE_PATH=/usr/local/bin/claude
@@ -189,21 +210,31 @@ DEFAULT_LAYER_PRIORITY=adaptive
 ENABLE_CACHING=true
 ```
 
+**⚠️ Migration Note**: If you're upgrading from a previous version, rename `GEMINI_API_KEY` to `AI_STUDIO_API_KEY` in your `.env` file for clarity.
+
 
 ## 📖 Usage
 
-### Simple Setup with Claude Code
+### Simple Usage with Claude Code
+
+Once set up, CGMB enhances Claude Code transparently:
 
 ```bash
-# 1. Add CGMB as MCP server (one-time setup)
-claude mcp add cgmb
+# Image generation with AI Studio (Imagen 3)
+claude "Generate an image of a futuristic city"
 
-# 2. Use Claude Code normally - CGMB enhances automatically
+# Document analysis with multimodal processing
 claude "Analyze this image and describe what you see @image.png"
 claude "Summarize this PDF document @document.pdf"
+
+# Real-time information with Gemini grounding
 claude "What are the latest developments in AI technology?"
+
+# Complex file conversion
 claude "Convert this spreadsheet to markdown format @data.xlsx"
 ```
+
+**Enhanced with AI Studio Priority**: Image/video/audio generation now routes to AI Studio (Imagen 3, Veo 2) instead of Gemini 2.0 Flash for superior quality.
 
 ### Working Outside Project Directory
 
@@ -380,20 +411,56 @@ Execute complex multi-step workflows.
 
 ## 🔧 CLI Command Reference
 
-### `cgmb verify`
+### Core Commands
+
+#### `cgmb serve`
+Start the CGMB MCP server for integration with Claude Code.
+
+```bash
+cgmb serve                     # Start server with default settings
+cgmb serve --verbose          # Enable verbose logging
+cgmb serve --debug            # Enable debug logging
+cgmb serve -c /path/to/.env   # Use specific configuration file
+```
+
+**Process Management:**
+- Server runs continuously until manually stopped (Ctrl+C)
+- Automatic graceful shutdown handling
+- Environment variables loaded from multiple search paths
+- Supports directory-independent execution
+
+---
+
+#### `cgmb setup`
+Initial setup wizard for CGMB dependencies and configuration.
+
+```bash
+cgmb setup                     # Run complete setup
+cgmb setup --force            # Force reinstall dependencies
+```
+
+**Setup Tasks:**
+- ✅ Verifies Node.js version (≥22.0.0)
+- ✅ Checks for Claude Code and Gemini CLI
+- ✅ Creates .env configuration file from template
+- ✅ Creates logs directory structure
+- ✅ Provides next steps guidance
+
+---
+
+#### `cgmb verify`
 Comprehensive system verification and health check command.
 
-**Basic Usage:**
 ```bash
 cgmb verify                    # Standard verification
-cgmb verify --fix             # Auto-fix authentication issues  
-cgmb verify --verbose         # Detailed output (future)
+cgmb verify --fix             # Auto-fix authentication issues
 ```
 
 **Verification Checks:**
 - ✅ **System Requirements**: Node.js version, dependencies
 - ✅ **CLI Tools**: Claude Code, Gemini CLI availability  
 - ✅ **Authentication**: All service authentication status
+- ✅ **MCP Integration**: Claude Code MCP configuration
 - ✅ **Server Health**: CGMB server initialization test
 
 **Auto-Fix Features (`--fix`):**
@@ -418,14 +485,213 @@ cgmb verify --verbose         # Detailed output (future)
 🔐 Authentication Verification:
 ✅ Gemini: Authenticated
 ✅ Claude: Authenticated  
-❌ Aistudio: Not Authenticated
+✅ Aistudio: Authenticated
+
+🔗 MCP Configuration Verification:
+✅ Claude Code MCP Integration: Configured
+   Command: node
+   Args: /path/to/cgmb/dist/index.js
 
 🚀 Testing server initialization...
 ✓ Server initialization test passed
 
-💡 To fix authentication issues:
-   Run: cgmb verify --fix
-   Or: cgmb auth --interactive
+🎉 All verification checks passed!
+✨ CGMB is ready to use!
+💡 Try: cgmb serve
+```
+
+---
+
+### Authentication Commands
+
+#### `cgmb auth`
+Manage authentication for all AI services.
+
+```bash
+cgmb auth                           # Full authentication setup wizard
+cgmb auth --interactive            # Interactive authentication setup
+cgmb auth --service gemini         # Setup specific service
+cgmb auth --service aistudio       # Setup AI Studio authentication
+cgmb auth --method oauth           # Use OAuth method
+cgmb auth --method apikey          # Use API key method
+```
+
+**Supported Services:**
+- **Gemini**: OAuth (recommended) or API key
+- **AI Studio**: API key (same as Gemini)
+- **Claude**: OAuth through Claude Code CLI
+
+---
+
+#### `cgmb auth-status`
+Check authentication status for all services.
+
+```bash
+cgmb auth-status                    # Basic status check
+cgmb auth-status --verbose         # Detailed authentication info
+```
+
+**Example Output:**
+```
+🔐 Authentication Status Report
+
+══════════════════════════════════════════════════
+
+✅ Gemini: Authenticated
+   Method: oauth
+   User: user@example.com
+   Quota: 1450 requests remaining
+
+✅ Aistudio: Authenticated
+   Method: api_key
+   Plan: FREE
+
+✅ Claude: Authenticated
+
+══════════════════════════════════════════════════
+Overall Status: 🟢 READY
+
+💡 Recommendations:
+   • OAuth authentication provides better quota limits
+   • Consider upgrading to paid plan for higher limits
+```
+
+---
+
+#### `cgmb setup-guide`
+Display comprehensive authentication setup guide.
+
+```bash
+cgmb setup-guide               # Show step-by-step setup instructions
+```
+
+---
+
+### MCP Integration Commands
+
+#### `cgmb setup-mcp`
+Configure Claude Code MCP integration for CGMB automatically.
+
+```bash
+cgmb setup-mcp                     # Automatic MCP configuration
+cgmb setup-mcp --force            # Force update existing config
+cgmb setup-mcp --dry-run          # Show what would be done
+cgmb setup-mcp --manual           # Show manual setup instructions
+```
+
+**Features:**
+- ✅ **Safe Configuration**: Automatically backs up existing MCP settings
+- ✅ **Merge Strategy**: Adds CGMB without overwriting other MCP servers
+- ✅ **Auto-Detection**: Finds Claude Code configuration directory automatically
+- ✅ **Rollback Support**: Creates timestamped backups for safety
+
+**Example Output:**
+```
+🔧 Setting up Claude Code MCP integration...
+
+📊 Current MCP Configuration Status
+════════════════════════════════════════
+Configuration Path: ~/.claude-code/mcp_servers.json
+CGMB Configured: ❌ No
+
+✅ Successfully added CGMB MCP configuration
+📁 Configuration file: ~/.claude-code/mcp_servers.json
+💾 Backup created: ~/.claude-code/mcp_servers.json.backup.2025-06-30T03-15-30-000Z
+
+🎉 Setup Complete!
+
+Next steps:
+1. Restart Claude Code to load the new MCP configuration
+2. Run "cgmb verify" to test the connection
+3. Check that CGMB tools are available in Claude Code
+```
+
+---
+
+#### `cgmb mcp-status`
+Check Claude Code MCP configuration status.
+
+```bash
+cgmb mcp-status                    # Check current MCP configuration
+```
+
+**Example Output:**
+```
+📊 Claude Code MCP Configuration Status
+══════════════════════════════════════════════════
+
+Configuration Path: ~/.claude-code/mcp_servers.json
+CGMB Configured: ✅ Yes
+
+🔧 Current CGMB Configuration:
+   Command: node
+   Arguments: /usr/local/lib/node_modules/claude-gemini-multimodal-bridge/dist/index.js
+   Environment: NODE_ENV
+
+💡 Recommendations:
+   • CGMB MCP integration is properly configured
+   • Consider installing CGMB globally for better performance
+```
+
+---
+
+### Monitoring Commands
+
+#### `cgmb quota-status`
+Monitor Google AI Studio API quota usage.
+
+```bash
+cgmb quota-status                  # Basic quota status
+cgmb quota-status --detailed       # Detailed quota breakdown
+```
+
+**Example Output:**
+```
+📊 Google AI Studio API Quota Status
+=====================================
+Tier: FREE
+
+✅ Requests (Daily): 45/1500 (3%)
+   Remaining: 1455
+   Reset in: 18h
+
+✅ Tokens (Daily): 12450/50000 (25%)
+   Remaining: 37550
+
+✅ Overall Status: HEALTHY
+```
+
+---
+
+#### `cgmb detect-paths`
+Detect and verify CLI tool installations.
+
+```bash
+cgmb detect-paths                  # Detect tool paths
+cgmb detect-paths --fix           # Attempt to fix PATH issues
+```
+
+---
+
+#### `cgmb info`
+Display CGMB system information.
+
+```bash
+cgmb info                          # Basic system info
+cgmb info --env                   # Detailed environment info
+```
+
+---
+
+### Testing Commands
+
+#### `cgmb test`
+Run test multimodal processing request.
+
+```bash
+cgmb test                          # Basic functionality test
+cgmb test --file image.png         # Test with specific file
+cgmb test --prompt "Custom prompt" # Test with custom prompt
 ```
 
 ## 📊 Performance & Optimization

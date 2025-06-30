@@ -152,8 +152,12 @@ export class OAuthManager {
    * Detect current authentication method (OAuth vs API key)
    */
   private async detectAuthMethod(): Promise<'oauth' | 'api_key' | 'none'> {
-    // Check for API key first
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    // Check for API key first - prioritize new naming
+    const apiKey = process.env.AI_STUDIO_API_KEY || 
+                   process.env.GOOGLE_AI_STUDIO_API_KEY ||
+                   process.env.GEMINI_API_KEY ||  // Backward compatibility
+                   process.env.GOOGLE_API_KEY;   // Legacy support
+                   
     if (apiKey && apiKey.length > 10) {
       return 'api_key';
     }
@@ -175,7 +179,10 @@ export class OAuthManager {
    * Check API key authentication
    */
   private async checkApiKeyAuth(): Promise<AuthStatus> {
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const apiKey = process.env.AI_STUDIO_API_KEY || 
+                   process.env.GOOGLE_AI_STUDIO_API_KEY ||
+                   process.env.GEMINI_API_KEY ||  // Backward compatibility
+                   process.env.GOOGLE_API_KEY;   // Legacy support
     
     if (!apiKey) {
       return {

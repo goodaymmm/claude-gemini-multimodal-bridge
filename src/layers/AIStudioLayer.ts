@@ -197,6 +197,9 @@ export class AIStudioLayer implements LayerInterface {
           case 'convert':
             result = await this.convertFiles(task.files, task.outputFormat);
             break;
+          case 'generate_content':
+            result = await this.processGeneral(task);
+            break;
           default:
             result = await this.processGeneral(task);
         }
@@ -858,8 +861,11 @@ export class AIStudioLayer implements LayerInterface {
         cwd: process.cwd(),
         env: {
           ...process.env,
-          GEMINI_API_KEY: process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY,
-          GOOGLE_AI_STUDIO_API_KEY: process.env.GOOGLE_AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY,
+          // New preferred environment variable name
+          AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
+          // Backward compatibility
+          GEMINI_API_KEY: this.getAIStudioApiKey(),
+          GOOGLE_AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
         },
       });
 
@@ -911,6 +917,31 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Get AI Studio API key with priority order and deprecation warnings
+   */
+  private getAIStudioApiKey(): string {
+    // Priority order: AI_STUDIO_API_KEY > GOOGLE_AI_STUDIO_API_KEY > GEMINI_API_KEY (deprecated)
+    const apiKey = process.env.AI_STUDIO_API_KEY || 
+                   process.env.GOOGLE_AI_STUDIO_API_KEY || 
+                   process.env.GEMINI_API_KEY;
+
+    // Warn about deprecated environment variable names
+    if (!process.env.AI_STUDIO_API_KEY && process.env.GEMINI_API_KEY) {
+      logger.warn('GEMINI_API_KEY is deprecated. Please use AI_STUDIO_API_KEY instead.', {
+        migration: 'Update your .env file: GEMINI_API_KEY → AI_STUDIO_API_KEY'
+      });
+    }
+    
+    if (!process.env.AI_STUDIO_API_KEY && process.env.GOOGLE_AI_STUDIO_API_KEY) {
+      logger.warn('GOOGLE_AI_STUDIO_API_KEY is deprecated. Please use AI_STUDIO_API_KEY instead.', {
+        migration: 'Update your .env file: GOOGLE_AI_STUDIO_API_KEY → AI_STUDIO_API_KEY'
+      });
+    }
+
+    return apiKey || '';
+  }
+
+  /**
    * Test MCP server connection (lightweight test)
    */
   private async testMCPServerConnection(): Promise<void> {
@@ -919,9 +950,9 @@ export class AIStudioLayer implements LayerInterface {
       const { execSync } = await import('child_process');
       
       // Check if we have API key first
-      const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
+      const apiKey = this.getAIStudioApiKey();
       if (!apiKey) {
-        throw new Error('AI Studio API key not found. Set GEMINI_API_KEY or GOOGLE_AI_STUDIO_API_KEY environment variable');
+        throw new Error('AI Studio API key not found. Set AI_STUDIO_API_KEY environment variable. Get your key from: https://aistudio.google.com/app/apikey');
       }
       
       // Quick binary availability check only
