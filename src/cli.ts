@@ -903,6 +903,7 @@ program
   .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
   .option('--search', 'Enable search/grounding functionality')
   .option('-f, --file <path>', 'File to analyze with prompt')
+  .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
   .action(async (options) => {
     try {
       if (!options.prompt) {
@@ -913,6 +914,42 @@ program
       await loadEnvironmentSmart({ verbose: false });
       
       logger.info('🔍 Processing with Gemini CLI...');
+      
+      // Fast path: Direct Gemini CLI call (bypass CGMB layers)
+      if (options.fast && !options.file) {
+        logger.info('Using fast path (direct Gemini CLI call)...');
+        
+        const args = ['gemini'];
+        if (options.model && options.model !== 'gemini-2.5-pro') {
+          args.push('-m', options.model);
+        }
+        args.push('-p', `"${options.prompt}"`);
+        if (options.search) {
+          args.push('--grounding');
+        }
+        
+        try {
+          const result = execSync(args.join(' '), { 
+            encoding: 'utf8',
+            timeout: options.search ? 180000 : 90000,
+            stdio: 'pipe'
+          });
+          
+          logger.info('✅ Fast path Gemini CLI processing completed');
+          console.log('\n📋 Result:');
+          console.log('═'.repeat(50));
+          console.log(result);
+          console.log('\n📊 Metadata:');
+          console.log('Method: Direct Gemini CLI (fast path)');
+          console.log('Bypass: CGMB layer overhead eliminated');
+          return;
+        } catch (error) {
+          logger.warn('Fast path failed, falling back to CGMB layers', { 
+            error: (error as Error).message 
+          });
+          // Continue to normal processing
+        }
+      }
       
       // Import and use Gemini CLI layer directly
       const { GeminiCLILayer } = await import('./layers/GeminiCLILayer.js');
@@ -929,7 +966,7 @@ program
         result = await geminiLayer.execute({
           type: 'text_processing',
           prompt: options.prompt,
-          search: options.search
+          useSearch: options.search
         });
       }
       

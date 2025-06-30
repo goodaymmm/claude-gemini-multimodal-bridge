@@ -33,6 +33,9 @@ export class GeminiCLILayer implements LayerInterface {
   private searchCache: SearchCache;
   private geminiPath?: string;
   private isInitialized = false;
+  private isLightweightInitialized = false; // Fast initialization without full checks
+  private lastAuthCheck = 0; // Timestamp of last auth verification
+  private readonly AUTH_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours auth cache (OAuth tokens typically valid for 24h)
   private readonly DEFAULT_TIMEOUT = 120000; // 2 minutes
   private readonly MAX_RETRIES = 2;
   private readonly RATE_LIMIT = {
@@ -60,6 +63,38 @@ export class GeminiCLILayer implements LayerInterface {
     });
     
     this.resetDailyCounterIfNeeded();
+  }
+
+  /**
+   * Lightweight initialization for simple tasks (skips connection tests)
+   */
+  async initializeLightweight(): Promise<void> {
+    if (this.isLightweightInitialized) {
+      return;
+    }
+
+    logger.debug('Performing lightweight Gemini CLI initialization...');
+
+    // Find path only if not already set
+    if (!this.geminiPath) {
+      this.geminiPath = await this.findGeminiPath() || '';
+      if (!this.geminiPath) {
+        throw new Error('Gemini CLI executable not found');
+      }
+    }
+
+    // Skip auth verification if recent check exists
+    const now = Date.now();
+    if (now - this.lastAuthCheck > this.AUTH_CACHE_TTL) {
+      const authResult = await this.authVerifier.verifyGeminiAuth();
+      if (!authResult.success) {
+        throw new Error(`Gemini CLI authentication failed: ${authResult.error}`);
+      }
+      this.lastAuthCheck = now;
+    }
+
+    this.isLightweightInitialized = true;
+    logger.debug('Lightweight Gemini CLI initialization completed');
   }
 
   /**
@@ -158,8 +193,21 @@ export class GeminiCLILayer implements LayerInterface {
       async () => {
         const startTime = Date.now();
         
-        if (!this.isInitialized) {
-          await this.initialize();
+        // Use lightweight initialization for simple tasks
+        if (!this.isInitialized && !this.isLightweightInitialized) {
+          // For simple text processing, try lightweight init first
+          if (task.type === 'text_processing' && !task.files && !task.useSearch) {
+            try {
+              await this.initializeLightweight();
+            } catch (lightweightError) {
+              logger.debug('Lightweight initialization failed, trying full initialization', {
+                error: (lightweightError as Error).message
+              });
+              await this.initialize();
+            }
+          } else {
+            await this.initialize();
+          }
         }
 
         // Check quota limits before execution
@@ -745,12 +793,20 @@ export class GeminiCLILayer implements LayerInterface {
       return task.timeout;
     }
     
+    // Optimized timeouts based on task complexity
+    const baseTimeout = this.isLightweightInitialized ? 30000 : 60000; // 30s for lightweight, 60s for full init
+    
     // WebSearch tasks get extended timeout
     if (task.useSearch || task.action?.includes('search') || task.prompt?.toLowerCase().includes('search')) {
-      return Math.max(180000, this.getEstimatedDuration(task) + 30000); // Minimum 3 minutes for search
+      return Math.max(180000, this.getEstimatedDuration(task) + baseTimeout); // Minimum 3 minutes for search
     }
     
-    return Math.max(90000, this.getEstimatedDuration(task) + 15000); // Minimum 90s for other tasks
+    // Simple text processing gets shorter timeout
+    if (task.type === 'text_processing' && !task.files && !task.useSearch) {
+      return Math.max(30000, this.getEstimatedDuration(task) + 10000); // Minimum 30s for simple tasks
+    }
+    
+    return Math.max(90000, this.getEstimatedDuration(task) + baseTimeout); // Minimum 90s for other tasks
   }
 
   /**

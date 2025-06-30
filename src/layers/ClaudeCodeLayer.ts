@@ -25,11 +25,46 @@ export class ClaudeCodeLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private claudePath?: string;
   private isInitialized = false;
+  private isLightweightInitialized = false; // Fast initialization for simple tasks
+  private lastAuthCheck = 0; // Timestamp of last auth verification
+  private readonly AUTH_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours auth cache (same as normal Claude Code session)
   private readonly DEFAULT_TIMEOUT = 300000; // 5 minutes
   private readonly MAX_RETRIES = 3;
 
   constructor() {
     this.authVerifier = new AuthVerifier();
+  }
+
+  /**
+   * Lightweight initialization for simple tasks (skips connection tests)
+   */
+  async initializeLightweight(): Promise<void> {
+    if (this.isLightweightInitialized) {
+      return;
+    }
+
+    logger.debug('Performing lightweight Claude Code initialization...');
+
+    // Find path only if not already set
+    if (!this.claudePath) {
+      this.claudePath = await this.findClaudeCodePath() || '';
+      if (!this.claudePath) {
+        throw new Error('Claude Code executable not found');
+      }
+    }
+
+    // Skip auth verification if recent check exists
+    const now = Date.now();
+    if (now - this.lastAuthCheck > this.AUTH_CACHE_TTL) {
+      const authResult = await this.authVerifier.verifyClaudeCodeAuth();
+      if (!authResult.success) {
+        throw new Error(`Claude Code authentication failed: ${authResult.error}`);
+      }
+      this.lastAuthCheck = now;
+    }
+
+    this.isLightweightInitialized = true;
+    logger.debug('Lightweight Claude Code initialization completed');
   }
 
   /**
@@ -127,8 +162,14 @@ export class ClaudeCodeLayer implements LayerInterface {
       async () => {
         const startTime = Date.now();
         
-        if (!this.isInitialized) {
-          await this.initialize();
+        // Use lightweight initialization for simple tasks
+        if (!this.isInitialized && !this.isLightweightInitialized) {
+          // For simple text processing, use lightweight init
+          if (!task.workflow && !task.depth && task.action !== 'complex_reasoning') {
+            await this.initializeLightweight();
+          } else {
+            await this.initialize();
+          }
         }
 
         logger.info('Executing Claude Code task', {
