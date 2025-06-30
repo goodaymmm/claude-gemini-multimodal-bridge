@@ -223,8 +223,25 @@ export class MultimodalProcess {
       throw new Error(`Invalid arguments: ${validationResult.error.message}`);
     }
 
+    // Allow text-only workflows for certain workflow types (addresses Error2.md validation issue)
     if (args.files.length === 0) {
-      throw new Error('At least one file must be provided');
+      const textOnlyWorkflows = ['generation', 'analysis'];
+      const isTextOnlyAllowed = textOnlyWorkflows.includes(args.workflow);
+      
+      if (!isTextOnlyAllowed) {
+        throw new Error('At least one file must be provided for this workflow type');
+      }
+      
+      // For text-only workflows, ensure the prompt is sufficient
+      if (!args.prompt || args.prompt.trim().length < 10) {
+        throw new Error('For text-only workflows, a detailed prompt (minimum 10 characters) is required');
+      }
+      
+      logger.debug('Text-only workflow validated', {
+        workflow: args.workflow,
+        promptLength: args.prompt.length,
+        filesProvided: args.files.length
+      });
     }
 
     if (args.files.length > this.MAX_FILES) {

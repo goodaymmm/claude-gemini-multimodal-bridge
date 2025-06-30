@@ -401,6 +401,11 @@ export class AIStudioLayer implements LayerInterface {
         const result = await this.executeMCPCommand('generate_image', {
           prompt,
           options: imageOptions,
+          // Add responseModalities for proper AI Studio API format (per Error4.md analysis)
+          generationConfig: {
+            responseMimeType: 'image/jpeg',
+            responseModalities: ['TEXT', 'IMAGE']
+          }
         });
 
         const duration = Date.now() - startTime;
@@ -468,6 +473,11 @@ export class AIStudioLayer implements LayerInterface {
         const result = await this.executeMCPCommand('generate_video', {
           prompt,
           options: videoOptions,
+          // Add responseModalities for proper AI Studio API format (per Error4.md analysis)
+          generationConfig: {
+            responseMimeType: 'video/mp4',
+            responseModalities: ['TEXT', 'VIDEO']
+          }
         });
 
         const duration = Date.now() - startTime;
@@ -873,7 +883,30 @@ export class AIStudioLayer implements LayerInterface {
    * Execute MCP command
    */
   private async executeMCPCommand(command: string, params: any): Promise<any> {
-    const timeout = this.DEFAULT_TIMEOUT;
+    // Enhanced timeout calculation based on command type and complexity
+    // Addresses AI Studio timeout issues from Error4.md analysis
+    let timeout = this.DEFAULT_TIMEOUT; // Base: 180 seconds
+    
+    // Image generation requires significantly longer timeout (per Gemini analysis in Error4.md)
+    if (command === 'generate_image' || this.isImageGenerationCommand(command, params)) {
+      timeout = Math.max(240000, this.DEFAULT_TIMEOUT * 1.5); // Minimum 4 minutes for image generation
+      logger.debug('Extended timeout for image generation', {
+        command,
+        timeoutMs: timeout,
+        timeoutMinutes: Math.round(timeout / 60000),
+        reason: 'AI Studio image generation requires extended processing time (Error4.md analysis)'
+      });
+    }
+    
+    // Video generation requires even longer timeout
+    else if (command === 'generate_video' || this.isVideoGenerationCommand(command, params)) {
+      timeout = Math.max(300000, this.DEFAULT_TIMEOUT * 2); // Minimum 5 minutes for video generation
+    }
+    
+    // Complex multimodal processing also needs extended timeout
+    else if (command.includes('multimodal') || (params?.files && params.files.length > 3)) {
+      timeout = Math.max(240000, this.DEFAULT_TIMEOUT * 1.3); // Minimum 4 minutes for complex processing
+    }
     
     return new Promise<any>((resolve, reject) => {
       logger.debug('Executing MCP command', {
@@ -1250,5 +1283,24 @@ export class AIStudioLayer implements LayerInterface {
     const hasGenerationKeyword = generationKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
     
     return hasAudioKeyword && hasGenerationKeyword;
+  }
+
+  /**
+   * Helper methods for command type detection (for timeout calculation)
+   */
+  private isImageGenerationCommand(command: string, params: any): boolean {
+    if (command === 'generate_image') {return true;}
+    if (params?.prompt) {
+      return this.isImageGenerationRequest(params.prompt);
+    }
+    return false;
+  }
+
+  private isVideoGenerationCommand(command: string, params: any): boolean {
+    if (command === 'generate_video') {return true;}
+    if (params?.prompt) {
+      return this.isVideoGenerationRequest(params.prompt);
+    }
+    return false;
   }
 }
