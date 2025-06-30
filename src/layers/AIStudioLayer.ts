@@ -918,23 +918,49 @@ export class AIStudioLayer implements LayerInterface {
 
   /**
    * Get AI Studio API key with priority order and deprecation warnings
+   * Enhanced with validation and detailed error reporting
    */
   private getAIStudioApiKey(): string {
     // Priority order: AI_STUDIO_API_KEY > GOOGLE_AI_STUDIO_API_KEY > GEMINI_API_KEY (deprecated)
-    const apiKey = process.env.AI_STUDIO_API_KEY || 
-                   process.env.GOOGLE_AI_STUDIO_API_KEY || 
-                   process.env.GEMINI_API_KEY;
+    const preferredKey = process.env.AI_STUDIO_API_KEY;
+    const fallback1 = process.env.GOOGLE_AI_STUDIO_API_KEY;
+    const fallback2 = process.env.GEMINI_API_KEY; // Deprecated
+    
+    const apiKey = preferredKey || fallback1 || fallback2;
 
-    // Warn about deprecated environment variable names
-    if (!process.env.AI_STUDIO_API_KEY && process.env.GEMINI_API_KEY) {
-      logger.warn('GEMINI_API_KEY is deprecated. Please use AI_STUDIO_API_KEY instead.', {
-        migration: 'Update your .env file: GEMINI_API_KEY → AI_STUDIO_API_KEY'
+    // Enhanced logging for debugging authentication issues
+    logger.debug('AI Studio API key resolution', {
+      hasPreferredKey: !!preferredKey,
+      hasFallback1: !!fallback1,
+      hasFallback2: !!fallback2,
+      selectedKey: apiKey ? `${apiKey.substring(0, 8)}...` : 'none',
+      keyLength: apiKey?.length || 0
+    });
+
+    // Warn about deprecated environment variable names with specific migration guidance
+    if (!preferredKey && fallback2) {
+      logger.warn('GEMINI_API_KEY is deprecated for AI Studio. Please use AI_STUDIO_API_KEY instead.', {
+        migration: 'Update your .env file: GEMINI_API_KEY → AI_STUDIO_API_KEY',
+        source: 'Using GEMINI_API_KEY as fallback',
+        recommendedAction: 'Set AI_STUDIO_API_KEY to avoid this warning'
       });
     }
     
-    if (!process.env.AI_STUDIO_API_KEY && process.env.GOOGLE_AI_STUDIO_API_KEY) {
+    if (!preferredKey && fallback1) {
       logger.warn('GOOGLE_AI_STUDIO_API_KEY is deprecated. Please use AI_STUDIO_API_KEY instead.', {
-        migration: 'Update your .env file: GOOGLE_AI_STUDIO_API_KEY → AI_STUDIO_API_KEY'
+        migration: 'Update your .env file: GOOGLE_AI_STUDIO_API_KEY → AI_STUDIO_API_KEY',
+        source: 'Using GOOGLE_AI_STUDIO_API_KEY as fallback',
+        recommendedAction: 'Set AI_STUDIO_API_KEY for consistency'
+      });
+    }
+
+    // Validate API key format if present
+    if (apiKey && !this.validateApiKeyFormat(apiKey)) {
+      logger.error('Invalid AI Studio API key format detected', {
+        keyPrefix: apiKey.substring(0, 8),
+        keyLength: apiKey.length,
+        expectedFormat: 'Should start with "AI" and be at least 20 characters',
+        troubleshooting: 'Get a new key from https://aistudio.google.com/app/apikey'
       });
     }
 
@@ -942,40 +968,103 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Validate AI Studio API key format
+   */
+  private validateApiKeyFormat(apiKey: string): boolean {
+    if (!apiKey || typeof apiKey !== 'string') {
+      return false;
+    }
+    
+    // Google AI Studio API keys typically start with "AI" and are 39+ characters
+    return apiKey.length >= 20 && apiKey.startsWith('AI');
+  }
+
+  /**
    * Test MCP server connection (lightweight test)
+   * Enhanced with better error detection and troubleshooting guidance
    */
   private async testMCPServerConnection(): Promise<void> {
     try {
-      // Only do a very lightweight check - verify binary availability and API key
-      const { execSync } = await import('child_process');
-      
-      // Check if we have API key first
+      // Enhanced API key validation first
       const apiKey = this.getAIStudioApiKey();
       if (!apiKey) {
-        throw new Error('AI Studio API key not found. Set AI_STUDIO_API_KEY environment variable. Get your key from: https://aistudio.google.com/app/apikey');
+        const errorMsg = 'AI Studio API key not found. This will cause authentication failures as seen in Error.md.';
+        logger.error('AI Studio authentication missing', {
+          issue: 'No API key found in any environment variable',
+          searchedVars: ['AI_STUDIO_API_KEY', 'GOOGLE_AI_STUDIO_API_KEY', 'GEMINI_API_KEY'],
+          solution: 'Set AI_STUDIO_API_KEY environment variable',
+          getKeyUrl: 'https://aistudio.google.com/app/apikey',
+          errorReference: 'This addresses the AI Studio authentication issue from Error.md lines 70-86'
+        });
+        throw new Error(`${errorMsg} Set AI_STUDIO_API_KEY environment variable. Get your key from: https://aistudio.google.com/app/apikey`);
       }
+
+      // Validate API key format
+      if (!this.validateApiKeyFormat(apiKey)) {
+        const errorMsg = 'Invalid AI Studio API key format detected.';
+        logger.error('AI Studio API key format invalid', {
+          keyPrefix: apiKey.substring(0, 8),
+          keyLength: apiKey.length,
+          expectedFormat: 'Should start with "AI" and be at least 20 characters',
+          currentFormat: `Starts with "${apiKey.substring(0, 2)}", length: ${apiKey.length}`,
+          solution: 'Get a new key from https://aistudio.google.com/app/apikey'
+        });
+        throw new Error(`${errorMsg} Expected format: starts with "AI", minimum 20 characters. Get a new key from: https://aistudio.google.com/app/apikey`);
+      }
+
+      // Check system dependencies
+      const { execSync } = await import('child_process');
       
-      // Quick binary availability check only
       try {
         execSync('which npx', { 
           timeout: 5000,
           stdio: 'ignore'
         });
         
-        logger.debug('AI Studio MCP dependencies available', {
-          hasApiKey: !!apiKey,
-          npxAvailable: true
+        logger.debug('AI Studio MCP dependencies validation', {
+          hasValidApiKey: true,
+          apiKeyPrefix: apiKey.substring(0, 8),
+          npxAvailable: true,
+          mcpServerCommand: 'npx -y aistudio-mcp-server',
+          status: 'ready'
         });
         
-        // Skip actual MCP connection test during initialization to avoid timeout
-        // Connection will be tested when actually needed
+        // Test aistudio-mcp-server availability (lightweight check)
+        try {
+          execSync('npx -y aistudio-mcp-server --version', { 
+            timeout: 10000,
+            stdio: 'ignore',
+            env: {
+              ...process.env,
+              AI_STUDIO_API_KEY: apiKey
+            }
+          });
+          logger.debug('AI Studio MCP server binary verified');
+        } catch (mcpError) {
+          logger.warn('AI Studio MCP server verification failed, will attempt on first use', {
+            error: (mcpError as Error).message,
+            fallbackStrategy: 'Will try to download on first execution'
+          });
+          // Don't fail initialization - let it fail on actual use with better error message
+        }
         
       } catch (binaryError) {
         throw new Error('npx not available. Please ensure Node.js and npm are properly installed');
       }
       
     } catch (error) {
-      throw new Error(`AI Studio MCP server not available: ${(error as Error).message}`);
+      const enhancedError = new Error(`AI Studio MCP server not available: ${(error as Error).message}`);
+      logger.error('AI Studio MCP initialization failed', {
+        originalError: (error as Error).message,
+        troubleshooting: [
+          '1. Set AI_STUDIO_API_KEY environment variable',
+          '2. Get API key from https://aistudio.google.com/app/apikey',
+          '3. Ensure npx is available (npm install -g npm)',
+          '4. Install aistudio-mcp-server (npx -y aistudio-mcp-server --version)'
+        ],
+        errorReference: 'This addresses authentication issues similar to Error.md'
+      });
+      throw enhancedError;
     }
   }
 

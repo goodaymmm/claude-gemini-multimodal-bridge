@@ -413,6 +413,9 @@ export class GeminiCLILayer implements LayerInterface {
       throw new Error('Gemini CLI not initialized');
     }
 
+    // CRITICAL: Validate command arguments to prevent incorrect usage
+    this.validateGeminiCommand(args);
+
     // Update rate limiting
     this.requestCount++;
     this.dailyRequestCount++;
@@ -547,8 +550,9 @@ export class GeminiCLILayer implements LayerInterface {
       });
     } catch (error) {
       // Don't fail on version command issues - try a simple query instead
+      // CRITICAL FIX: Use buildGeminiCommand() instead of direct argument passing
       try {
-        const simpleArgs = ['Test connection'];
+        const simpleArgs = this.buildGeminiCommand('Test connection');
         await this.executeGeminiProcess(simpleArgs);
         logger.debug('Gemini CLI connection test successful (via simple query)');
       } catch (testError) {
@@ -707,5 +711,58 @@ export class GeminiCLILayer implements LayerInterface {
    */
   canMakeQuotaRequest(estimatedTokens: number = 1000) {
     return this.quotaMonitor.canMakeRequest(estimatedTokens);
+  }
+
+  /**
+   * Validate Gemini CLI command arguments to prevent incorrect usage patterns
+   */
+  private validateGeminiCommand(args: string[]): void {
+    // Allow system commands like --version, --help
+    const systemCommands = ['--version', '--help', '-h', '-v'];
+    if (args.length === 1 && systemCommands.includes(args[0])) {
+      return;
+    }
+
+    // Check for common incorrect patterns that caused the Error.md issue
+    const hasPromptFlag = args.includes('-p') || args.includes('--prompt');
+    const hasQuotedLongText = args.some(arg => 
+      arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@')
+    );
+
+    // CRITICAL: Detect the exact error pattern from Error.md (line 3)
+    // Where long prompts were passed as direct arguments without -p flag
+    if (hasQuotedLongText && !hasPromptFlag) {
+      const longArg = args.find(arg => arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@'));
+      logger.error('Invalid Gemini CLI usage detected', {
+        issue: 'Long prompt passed as direct argument instead of using -p flag',
+        problematicArg: longArg?.substring(0, 100) + '...',
+        correctUsage: 'Use buildGeminiCommand() or pass prompt with -p flag',
+        errorPattern: 'This matches the Error.md line 3 issue'
+      });
+      
+      throw new Error(
+        'Invalid Gemini CLI command: Long prompts must be passed with -p flag. ' +
+        'Use buildGeminiCommand() method instead of direct arguments. ' +
+        'This prevents the waste of API calls seen in Error.md line 3.'
+      );
+    }
+
+    // Additional validation: Ensure prompts use proper flags
+    if (!hasPromptFlag && args.length > 0 && !args[0].startsWith('-') && !args[0].startsWith('@')) {
+      // This might be a direct prompt argument
+      const potentialPrompt = args[0];
+      if (potentialPrompt.length > 20) { // Likely a prompt, not a command
+        logger.warn('Potential incorrect Gemini CLI usage', {
+          firstArg: potentialPrompt.substring(0, 50) + '...',
+          suggestion: 'Use -p flag for prompts'
+        });
+      }
+    }
+
+    logger.debug('Gemini CLI command validation passed', {
+      argsCount: args.length,
+      hasPromptFlag,
+      commandType: hasPromptFlag ? 'prompt-with-flag' : 'system-command'
+    });
   }
 }

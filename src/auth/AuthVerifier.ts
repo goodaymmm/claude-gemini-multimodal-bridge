@@ -107,22 +107,56 @@ export class AuthVerifier {
 
   /**
    * Verify AI Studio authentication
+   * Enhanced to address authentication issues from Error.md
    */
   async verifyAIStudioAuth(): Promise<AuthResult> {
     return safeExecute(
       async () => {
         logger.info('Verifying AI Studio authentication...');
 
-        const apiKey = process.env.AI_STUDIO_API_KEY || 
-                       process.env.GOOGLE_AI_STUDIO_API_KEY ||
-                       process.env.GEMINI_API_KEY; // Backward compatibility
+        // Enhanced environment variable resolution with priority order
+        const preferredKey = process.env.AI_STUDIO_API_KEY;
+        const fallback1 = process.env.GOOGLE_AI_STUDIO_API_KEY;
+        const fallback2 = process.env.GEMINI_API_KEY; // Deprecated
         
-        // Warn about deprecated environment variable names
-        if (!process.env.AI_STUDIO_API_KEY && process.env.GEMINI_API_KEY) {
-          logger.warn('GEMINI_API_KEY is deprecated for AI Studio. Please use AI_STUDIO_API_KEY instead.');
+        const apiKey = preferredKey || fallback1 || fallback2;
+        
+        // Enhanced logging for debugging authentication chain
+        logger.debug('AI Studio authentication verification', {
+          hasPreferredKey: !!preferredKey,
+          hasFallback1: !!fallback1,
+          hasFallback2: !!fallback2,
+          selectedKey: apiKey ? `${apiKey.substring(0, 8)}...` : 'none',
+          searchOrder: ['AI_STUDIO_API_KEY', 'GOOGLE_AI_STUDIO_API_KEY', 'GEMINI_API_KEY'],
+          errorReference: 'Addressing authentication issues from Error.md lines 70-86'
+        });
+
+        // Enhanced deprecation warnings with specific guidance
+        if (!preferredKey && fallback2) {
+          logger.warn('GEMINI_API_KEY is deprecated for AI Studio. Please use AI_STUDIO_API_KEY instead.', {
+            currentVar: 'GEMINI_API_KEY',
+            recommendedVar: 'AI_STUDIO_API_KEY',
+            migration: 'Update your .env file: GEMINI_API_KEY → AI_STUDIO_API_KEY',
+            reason: 'GEMINI_API_KEY is ambiguous - used for both Gemini CLI and AI Studio'
+          });
+        }
+        
+        if (!preferredKey && fallback1) {
+          logger.warn('GOOGLE_AI_STUDIO_API_KEY is deprecated. Please use AI_STUDIO_API_KEY instead.', {
+            currentVar: 'GOOGLE_AI_STUDIO_API_KEY',
+            recommendedVar: 'AI_STUDIO_API_KEY',
+            migration: 'Update your .env file: GOOGLE_AI_STUDIO_API_KEY → AI_STUDIO_API_KEY'
+          });
         }
         
         if (!apiKey) {
+          logger.error('AI Studio API key missing - this causes the authentication failure seen in Error.md', {
+            issue: 'No API key found in any environment variable',
+            searchedVars: ['AI_STUDIO_API_KEY', 'GOOGLE_AI_STUDIO_API_KEY', 'GEMINI_API_KEY'],
+            errorContext: 'This is the root cause of AI Studio authentication failures',
+            setupUrl: 'https://aistudio.google.com/app/apikey'
+          });
+          
           return {
             success: false,
             status: {
@@ -130,14 +164,22 @@ export class AuthVerifier {
               method: 'api_key',
               userInfo: undefined,
             },
-            error: 'AI Studio API key not found',
+            error: 'AI Studio API key not found. This causes authentication failures as seen in Error.md.',
             requiresAction: true,
             actionInstructions: 'Set AI_STUDIO_API_KEY environment variable with your AI Studio API key. Get it from: https://aistudio.google.com/app/apikey',
           };
         }
 
-        // Validate API key format
-        if (!this.oauthManager.validateApiKey(apiKey)) {
+        // Enhanced API key format validation
+        if (!this.validateAIStudioApiKeyFormat(apiKey)) {
+          logger.error('Invalid AI Studio API key format detected', {
+            keyPrefix: apiKey.substring(0, 8),
+            keyLength: apiKey.length,
+            expectedFormat: 'Should start with "AI" and be at least 20 characters',
+            currentFormat: `Starts with "${apiKey.substring(0, 2)}", length: ${apiKey.length}`,
+            troubleshooting: 'Verify the key was copied correctly from AI Studio'
+          });
+          
           return {
             success: false,
             status: {
@@ -145,30 +187,44 @@ export class AuthVerifier {
               method: 'api_key',
               userInfo: undefined,
             },
-            error: 'Invalid AI Studio API key format',
+            error: 'Invalid AI Studio API key format. Expected format: starts with "AI", minimum 20 characters.',
             requiresAction: true,
             actionInstructions: 'Verify your API key from https://aistudio.google.com/app/apikey and update AI_STUDIO_API_KEY in your .env file',
           };
         }
 
-        // Check if aistudio-mcp-server is available
+        // Check if aistudio-mcp-server is available with enhanced error reporting
         const hasAIStudioMCP = await this.checkAIStudioMCPAvailable();
         
         if (!hasAIStudioMCP) {
+          logger.warn('AI Studio MCP server not available, but API key is valid', {
+            apiKeyStatus: 'valid',
+            mcpServerStatus: 'not available',
+            solution: 'Install aistudio-mcp-server package',
+            installCommand: 'npm install -g aistudio-mcp-server'
+          });
+          
           return {
             success: false,
             status: {
-              isAuthenticated: true,
+              isAuthenticated: true, // API key is valid
               method: 'api_key',
               userInfo: {
                 planType: 'free',
               },
             },
-            error: 'AI Studio MCP server not available',
+            error: 'AI Studio MCP server not available (but API key is valid)',
             requiresAction: true,
             actionInstructions: 'Install AI Studio MCP: npm install -g aistudio-mcp-server',
           };
         }
+
+        logger.info('AI Studio authentication verification successful', {
+          method: 'api_key',
+          keySource: preferredKey ? 'AI_STUDIO_API_KEY' : fallback1 ? 'GOOGLE_AI_STUDIO_API_KEY' : 'GEMINI_API_KEY',
+          mcpServerAvailable: true,
+          status: 'ready'
+        });
 
         return {
           success: true,
@@ -185,9 +241,21 @@ export class AuthVerifier {
       {
         operationName: 'verify-aistudio-auth',
         layer: 'aistudio',
-        timeout: 5000,
+        timeout: 10000, // Increased timeout for MCP server check
       }
     );
+  }
+
+  /**
+   * Validate AI Studio API key format (dedicated method for AuthVerifier)
+   */
+  private validateAIStudioApiKeyFormat(apiKey: string): boolean {
+    if (!apiKey || typeof apiKey !== 'string') {
+      return false;
+    }
+    
+    // Google AI Studio API keys typically start with "AI" and are 39+ characters
+    return apiKey.length >= 20 && apiKey.startsWith('AI');
   }
 
   /**

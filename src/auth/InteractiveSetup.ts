@@ -431,50 +431,74 @@ export class InteractiveSetup {
     console.log(`
 🚀 CGMB Authentication Setup Guide
 
-⚠️  IMPORTANT: Complete these steps IN ORDER for best results
+⚠️  IMPORTANT: Complete these steps IN ORDER to avoid authentication issues
+
+🔧 FIXES ERROR.MD ISSUES:
+- Problem 1: Gemini CLI incorrect usage (fixed with proper -p flag usage)
+- Problem 2: AI Studio authentication failures (fixed with AI_STUDIO_API_KEY)
 
 STEP 1: Install Gemini CLI (DO THIS FIRST!)
 ============================================
 npm install -g @google/gemini-cli
 
-STEP 2: Gemini Authentication (CRITICAL!)
-==========================================
-🥇 RECOMMENDED: OAuth (Free & Secure)
+STEP 2: Gemini CLI Authentication (OAuth - Real-time Search)
+============================================================
+🥇 RECOMMENDED: OAuth (Free & Secure, No API Key Needed)
 1. Run: gemini auth
 2. Follow browser authentication flow
 3. Grant permissions when prompted
-4. ✅ Verify: gemini "test prompt"
+4. ✅ Verify: gemini -p "test prompt"
+   (Note: Use -p flag to avoid the Error.md line 3 issue!)
 
-STEP 3: AI Studio API Key Method (.env setup)
-==============================================
+STEP 3: AI Studio API Key (Image/Video/Audio Generation)
+=========================================================
 📖 Create API Key: https://aistudio.google.com/app/apikey
+🔑 IMPORTANT: Use NEW variable name to fix authentication issues!
+
 1. Visit: https://aistudio.google.com/app/apikey
 2. Sign in with Google account
 3. Click "Create API Key"
 4. Copy the generated key
-5. Add to .env file: echo "GEMINI_API_KEY=your_key_here" >> .env
-6. ✅ Verify: gemini "test prompt"
+5. Add to .env file: echo "AI_STUDIO_API_KEY=your_key_here" >> .env
+   ⚠️  OLD: GEMINI_API_KEY (deprecated, causes confusion)
+   ✅  NEW: AI_STUDIO_API_KEY (recommended, clear purpose)
+6. ✅ Verify: cgmb auth-status
 
-STEP 4: Install Claude Code & Other Tools
-==========================================
+STEP 4: Install Claude Code & Authentication
+=============================================
 npm install -g @anthropic-ai/claude-code
 
-Note: Claude Code requires separate authentication.
-Run 'claude auth' if prompted during usage.
+Note: Claude Code uses session authentication.
+Run 'claude auth' when prompted during first usage.
 
 STEP 5: Install CGMB
 =====================
 git clone <repo> && cd <repo>
 npm install && npm run build
+npm link  # Makes cgmb command globally available
 
-STEP 6: Verify Everything Works
-================================
-cgmb auth-status --verbose
-cgmb verify
+STEP 6: Verify Everything Works (Critical!)
+============================================
+cgmb auth-status --verbose     # Check all authentication
+cgmb verify                    # Complete system verification
+cgmb detect-paths              # Check tool availability
 
-💡 TIP: Complete Gemini auth BEFORE running cgmb commands!
-📊 Check Usage: cgmb quota-status
-🔍 Find Tools: cgmb detect-paths
+STEP 7: Test Enhanced Capabilities
+===================================
+cgmb serve                     # Start MCP server
+# In Claude Code:
+claude "Generate an image of a sunset"  # Uses AI Studio (Imagen 3)
+claude "Latest AI news"                 # Uses Gemini with search
+
+🔧 TROUBLESHOOTING:
+- Authentication issues: cgmb auth --interactive
+- Path problems: cgmb detect-paths --fix
+- Migration help: Use AI_STUDIO_API_KEY instead of GEMINI_API_KEY
+
+💡 KEY IMPROVEMENTS:
+- Gemini CLI commands now use proper -p flag (no wasted calls)
+- AI Studio authentication uses dedicated environment variable
+- Clear separation between OAuth (Gemini) and API key (AI Studio)
     `);
   }
 }

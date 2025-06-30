@@ -371,13 +371,36 @@ program
         }
       }
       
-      // Check for deprecated environment variables and warn
-      const deprecatedVars = ['GEMINI_API_KEY', 'GOOGLE_AI_STUDIO_API_KEY'];
-      for (const deprecatedVar of deprecatedVars) {
-        const value = process.env[deprecatedVar];
+      // Check for deprecated environment variables and warn with specific guidance
+      console.log('');
+      console.log('🔧 Environment Variable Migration:');
+      const deprecatedVars = [
+        { old: 'GEMINI_API_KEY', new: 'AI_STUDIO_API_KEY', purpose: 'AI Studio authentication' },
+        { old: 'GOOGLE_AI_STUDIO_API_KEY', new: 'AI_STUDIO_API_KEY', purpose: 'AI Studio authentication' }
+      ];
+      
+      for (const { old, new: newVar, purpose } of deprecatedVars) {
+        const value = process.env[old];
         if (value) {
-          console.log(`  ⚠️  ${deprecatedVar}: ${value.substring(0, 8)}... (DEPRECATED - use AI_STUDIO_API_KEY)`);
+          console.log(`  ⚠️  ${old}: ${value.substring(0, 8)}... (DEPRECATED)`);
+          console.log(`     → Migrate to: ${newVar} (for ${purpose})`);
+          console.log(`     → Add to .env: ${newVar}=${value}`);
         }
+      }
+      
+      // Check for proper AI Studio configuration
+      const hasProperAIStudioKey = !!process.env.AI_STUDIO_API_KEY;
+      const hasDeprecatedKeys = deprecatedVars.some(v => !!process.env[v.old]);
+      
+      if (!hasProperAIStudioKey && hasDeprecatedKeys) {
+        console.log('');
+        console.log('🔄 Migration Required:');
+        console.log('  AI Studio authentication detected using deprecated variable names.');
+        console.log('  This may cause the authentication failures seen in Error.md.');
+        console.log('  Please update your .env file to use AI_STUDIO_API_KEY.');
+      } else if (hasProperAIStudioKey) {
+        console.log('');
+        console.log('✅ Environment Configuration: Using recommended variable names');
       }
       
     } catch (error) {
