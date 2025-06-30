@@ -780,6 +780,30 @@ export class AIStudioLayer implements LayerInterface {
    * Get estimated duration for a task
    */
   getEstimatedDuration(task: any): number {
+    // Check for image generation tasks
+    if (task.action === 'generate_image' || 
+        task.action === 'image_generation' ||
+        task.type === 'image_generation' ||
+        (task.prompt && this.isImageGenerationRequest(task.prompt))) {
+      return 120000; // 2 minutes for image generation
+    }
+    
+    // Check for video generation tasks
+    if (task.action === 'generate_video' || 
+        task.action === 'video_generation' ||
+        task.type === 'video_generation' ||
+        (task.prompt && this.isVideoGenerationRequest(task.prompt))) {
+      return 180000; // 3 minutes for video generation
+    }
+    
+    // Check for audio generation tasks
+    if (task.action === 'generate_audio' || 
+        task.action === 'audio_generation' ||
+        task.type === 'audio_generation' ||
+        (task.prompt && this.isAudioGenerationRequest(task.prompt))) {
+      return 90000; // 1.5 minutes for audio generation
+    }
+    
     const baseTime = 15000; // 15 seconds base (increased from 5 seconds)
     
     if (task.files && task.files.length > 0) {

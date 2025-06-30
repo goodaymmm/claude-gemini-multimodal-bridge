@@ -813,19 +813,17 @@ const layerManager = new LayerManager(config);
 const result = await layerManager.executeWorkflow(customWorkflow, inputData, options);
 ```
 
-## 🧪 Testing
+## 🧪 Testing & Verification
 
 ```bash
-# Run all tests
-npm test
-
-# Run specific test suites
-npm run test:unit
-npm run test:integration  
-npm run test:e2e
+# Verify installation and authentication
+cgmb verify
 
 # Test with real APIs
 cgmb test --file example.pdf --prompt "Analyze this document"
+
+# Check system status
+cgmb info
 ```
 
 ## 🐛 Troubleshooting
