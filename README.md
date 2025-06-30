@@ -240,8 +240,8 @@ This ensures that CGMB is properly invoked as an MCP server within Claude Code.
 # 🚀 FAST PATH MODE (NEW!) - 90% faster response
 cgmb gemini -p "Quick question" --fast
 
-# Direct Gemini CLI with web search via grounding
-cgmb gemini -p "Latest AI trends in 2024-2025" --grounding
+# Direct Gemini CLI with automatic web search
+cgmb gemini -p "Latest AI trends in 2024-2025"
 
 # Direct AI Studio for multimodal processing  
 cgmb aistudio -p "Create business infographic" -f image1.png document.pdf
@@ -280,7 +280,7 @@ cgmb test -p "Analyze this content" -f document.pdf --timeout 180000
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `cgmb gemini --fast` | **Ultra-fast direct CLI** | `cgmb gemini -p "question" --fast` |
-| `cgmb gemini` | Direct Gemini CLI access | `cgmb gemini -p "question" --grounding` |
+| `cgmb gemini` | Direct Gemini CLI access | `cgmb gemini -p "question"` |
 | `cgmb aistudio` | AI Studio multimodal processing | `cgmb aistudio -p "create image" -f file.txt` |
 | `cgmb process` | Intelligent layer routing | `cgmb process -p "analyze" -w analysis` |
 | `cgmb test` | Enhanced testing | `cgmb test -p "test prompt" -f file.pdf` |

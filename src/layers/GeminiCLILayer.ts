@@ -507,10 +507,8 @@ export class GeminiCLILayer implements LayerInterface {
   } = {}): string[] {
     const args: string[] = [];
 
-    // Add search flag if enabled
-    if (options.search) {
-      args.push('--grounding');
-    }
+    // Note: Web search is built-in and enabled by default in Gemini CLI
+    // No special flags are needed - Gemini will automatically use web search when beneficial
 
     // Add files if provided
     if (options.files && options.files.length > 0) {

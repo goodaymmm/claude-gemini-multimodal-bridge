@@ -898,10 +898,9 @@ program
 // Direct Gemini CLI command
 program
   .command('gemini')
-  .description('Direct Gemini CLI processing (use --grounding for web search)')
+  .description('Direct Gemini CLI processing (web search enabled by default)')
   .option('-p, --prompt <text>', 'Prompt for Gemini CLI')
   .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
-  .option('--grounding', 'Enable web search functionality via Google grounding')
   .option('-f, --file <path>', 'File to analyze with prompt')
   .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
   .action(async (options) => {
@@ -924,14 +923,12 @@ program
           args.push('-m', options.model);
         }
         args.push('-p', `"${options.prompt}"`);
-        if (options.grounding) {
-          args.push('--grounding');
-        }
+        // Note: Web search is automatic in Gemini CLI, no flags needed
         
         try {
           const result = execSync(args.join(' '), { 
             encoding: 'utf8',
-            timeout: options.grounding ? 180000 : 90000,
+            timeout: 90000,
             stdio: 'pipe'
           });
           
@@ -1211,12 +1208,13 @@ async function checkCommand(command: string): Promise<boolean> {
 }
 
 // Handle unknown options with helpful error messages
-program.on('option:*', function() {
+program.on('option:*', function(this: any) {
   const unknownOption = this.args[0];
-  if (unknownOption === '--search') {
-    console.error(`\nError: Unknown option '--search'`);
-    console.error(`\n💡 Did you mean '--grounding'? This enables web search functionality.`);
-    console.error(`\nExample: cgmb gemini -p "your question" --grounding\n`);
+  if (unknownOption === '--search' || unknownOption === '--grounding') {
+    console.error(`\nError: Unknown option '${unknownOption}'`);
+    console.error(`\n💡 Web search is enabled by default in Gemini CLI - no flags needed!`);
+    console.error(`\nJust use: cgmb gemini -p "your question"`);
+    console.error(`\nGemini will automatically use web search when beneficial.\n`);
     process.exit(1);
   }
 });
