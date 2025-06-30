@@ -5,19 +5,20 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "cgmb": "dist/cli.js",
-    "cgmb-mcp-server": "dist/index.js"
+    "cgmb": "dist/cli.js"
   },
   "mcp": {
     "name": "cgmb",
     "description": "Claude-Gemini Multimodal Bridge - Multi-layer AI integration",
     "version": "1.0.0",
-    "command": "cgmb-mcp-server"
+    "command": "cgmb",
+    "args": ["serve"]
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/cli.js",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
+    "start": "cgmb serve",
+    "serve": "cgmb serve",
     "test": "jest",
     "test:unit": "jest --testPathPattern=tests/unit",
     "test:integration": "jest --testPathPattern=tests/integration",

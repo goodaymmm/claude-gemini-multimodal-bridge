@@ -70,7 +70,18 @@ graph TD
 
 ## 🚀 Quick Start
 
-### ✨ **NEW: Automatic Installation (Recommended)**
+> **WSL Users**: Run `nvm use 22.17` before installation if you encounter version errors.
+
+#### **Windows WSL Users**
+If you're using Windows WSL and encounter Node.js version or permission issues:
+
+```bash
+# Switch to required Node.js version
+nvm use 22.17  # or any 22.x version
+nvm current    # Verify version
+```
+
+### ✨ **Automatic Installation (Recommended)**
 
 🎉 **One-command setup** with automatic dependency resolution and MCP integration:
 
@@ -128,25 +139,6 @@ Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 # Authenticate Gemini CLI (OAuth recommended)
 gemini auth  # Follow browser authentication flow
-
-# Verify everything works
-cgmb verify
-cgmb auth-status --verbose
-```
-
-> **WSL Users**: Run `nvm use 22.17` before installation if you encounter version errors.
-
-#### **Windows WSL Users**
-If you're using Windows WSL and encounter Node.js version or permission issues:
-
-```bash
-# Switch to required Node.js version
-nvm use 22.17  # or any 22.x version
-nvm current    # Verify version
-
-# Then proceed with installation
-npm install && npm run build
-npm link
 ```
 
 ### Prerequisites
@@ -189,19 +181,15 @@ npm link
 # 2. Run setup wizard (creates .env configuration)
 cgmb setup
 
-# 3. Set up authentication for all services
-cgmb auth --interactive
-# This guides you through Gemini CLI OAuth, API keys, and Claude Code auth
-
-# 4. Configure Claude Code MCP integration
+# 3. Configure Claude Code MCP integration
 cgmb setup-mcp
 # This automatically adds CGMB as an MCP server to Claude Code
 
-# 5. Verify everything is working
+# 4. Verify everything is working
 cgmb verify
 # This checks system requirements, authentication, and MCP configuration
 
-# 6. Restart Claude Code to load MCP integration
+# 5. Restart Claude Code to load MCP integration
 # Then use Claude Code normally with enhanced capabilities!
 claude "Hello! Test the enhanced capabilities."
 ```

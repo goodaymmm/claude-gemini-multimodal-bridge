@@ -12,8 +12,8 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
-    "removeComments": false,
+    "sourceMap": false,
+    "removeComments": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
     "strictFunctionTypes": true,
@@ -28,7 +28,9 @@
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "emitDecoratorMetadata": true,
+    "preserveConstEnums": true,
+    "useDefineForClassFields": true
   },
   "include": [
     "src/**/*",
@@ -37,7 +39,9 @@
   "exclude": [
     "node_modules",
     "dist",
-    "**/*.js"
+    "**/*.js",
+    "scripts/**/*.cjs",
+    "*.md"
   ],
   "ts-node": {
     "esm": true

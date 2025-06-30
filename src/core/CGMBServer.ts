@@ -478,9 +478,24 @@ export class CGMBServer {
         ttl: parseInt(process.env.CACHE_TTL || '3600'),
       },
       logging: {
-        level: (process.env.LOG_LEVEL as any) || 'info',
+        level: this.validateLogLevel(process.env.LOG_LEVEL) || 'info',
         file: process.env.LOG_FILE,
       },
     };
+  }
+
+  /**
+   * Validate log level to ensure it matches Zod schema
+   */
+  private validateLogLevel(level?: string): 'error' | 'warn' | 'info' | 'debug' {
+    const validLevels = ['error', 'warn', 'info', 'debug'] as const;
+    
+    if (!level) return 'info';
+    
+    // Handle non-standard level names
+    const lowerLevel = level.toLowerCase();
+    if (lowerLevel === 'verbose') return 'debug';
+    
+    return validLevels.includes(lowerLevel as any) ? lowerLevel as any : 'info';
   }
 }

@@ -34,7 +34,7 @@ program
     try {
       // Set log level first if specified
       if (options.verbose) {
-        process.env.LOG_LEVEL = 'verbose';
+        process.env.LOG_LEVEL = 'debug';
       }
       
       if (options.debug) {
