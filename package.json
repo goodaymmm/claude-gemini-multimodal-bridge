@@ -1,7 +1,7 @@
 {
   "name": "claude-gemini-multimodal-bridge",
   "version": "1.0.0",
-  "description": "Multi-layer AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio for advanced multimodal processing",
+  "description": "Production-ready multi-layer AI integration bridge with enhanced CLI commands, direct API access, and seamless MCP integration for Claude Code, Gemini CLI, and Google AI Studio",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -23,13 +23,19 @@
     "test:unit": "jest --testPathPattern=tests/unit",
     "test:integration": "jest --testPathPattern=tests/integration",
     "test:e2e": "jest --testPathPattern=tests/e2e",
+    "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
     "setup": "./scripts/setup.sh",
     "verify": "./scripts/verify-dependencies.sh",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
+    "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
     "prepublish": "npm run clean && npm run build",
-    "postinstall": "node scripts/postinstall.cjs"
+    "postinstall": "node scripts/postinstall.cjs",
+    "demo:android": "node examples/android_monetization.js",
+    "demo:gemini": "node examples/gemini_search_demo.js",
+    "demo:aistudio": "node examples/aistudio_image_demo.js",
+    "demo:all": "npm run demo:android && npm run demo:gemini && npm run demo:aistudio"
   },
   "keywords": [
     "claude",
@@ -41,7 +47,13 @@
     "bridge",
     "claude-code",
     "gemini-cli",
-    "google-ai-studio"
+    "google-ai-studio",
+    "ai-cli",
+    "multimodal-ai",
+    "model-context-protocol",
+    "ai-orchestration",
+    "direct-api-integration",
+    "production-ready"
   ],
   "author": "goodaymmm",
   "license": "MIT",
@@ -75,7 +87,6 @@
     "rimraf": "^5.0.0"
   },
   "optionalDependencies": {
-    "aistudio-mcp-server": "^1.0.0",
     "@google/gemini-cli": "*"
   },
   "engines": {
@@ -86,6 +97,9 @@
     "dist",
     "README.md",
     "LICENSE",
-    "docs"
+    "docs",
+    "examples",
+    "scripts/postinstall.cjs",
+    ".env.example"
   ]
 }

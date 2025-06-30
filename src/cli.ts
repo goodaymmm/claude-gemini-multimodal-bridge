@@ -773,12 +773,13 @@ program
     }
   });
 
-// Test command
+// Test command - Enhanced with actual multimodal processing
 program
   .command('test')
   .description('Run a test multimodal processing request')
   .option('-f, --file <path>', 'Path to test file')
   .option('-p, --prompt <text>', 'Test prompt', 'Analyze this content')
+  .option('--timeout <ms>', 'Timeout in milliseconds', '120000')
   .action(async (options) => {
     try {
       // Load environment variables
@@ -789,18 +790,235 @@ program
       const server = new CGMBServer();
       await server.initialize();
       
-      // Create a simple test request
-      const testFiles = options.file ? [{ path: options.file, type: 'document' }] : [];
+      // Import MultimodalProcess for actual testing
+      const { MultimodalProcess } = await import('./tools/multimodalProcess.js');
+      const processor = new MultimodalProcess();
       
-      if (testFiles.length === 0) {
-        logger.warn('No test file provided, creating a text-only test');
+      if (options.file) {
+        // Test with provided file
+        logger.info(`Testing with file: ${options.file}`);
+        
+        const result = await processor.processSingleFile(
+          options.file,
+          options.prompt,
+          { timeout: parseInt(options.timeout) }
+        );
+        
+        logger.info('✅ File processing test completed successfully!');
+        logger.info(`Result: ${result.content.substring(0, 200)}...`);
+        logger.info(`Processing time: ${result.processing_time}ms`);
+        logger.info(`Layers involved: ${result.layers_involved?.join(', ')}`);
+        
+      } else {
+        // Test with text-only prompt
+        logger.info('Testing with text-only prompt...');
+        
+        const result = await processor.processMultimodal({
+          prompt: options.prompt,
+          files: [],
+          workflow: 'analysis',
+          options: { timeout: parseInt(options.timeout) }
+        });
+        
+        logger.info('✅ Text processing test completed successfully!');
+        logger.info(`Result: ${result.content.substring(0, 200)}...`);
+        logger.info(`Processing time: ${result.processing_time}ms`);
+        logger.info(`Layers involved: ${result.layers_involved?.join(', ')}`);
       }
       
-      logger.info('Test completed successfully!');
-      logger.info('CGMB is working correctly');
+      logger.info('🎉 CGMB test completed successfully!');
+      logger.info('All systems are working correctly');
       
     } catch (error) {
-      logger.error('Test failed', error as Error);
+      logger.error('❌ Test failed', error as Error);
+      logger.error('This might indicate authentication or configuration issues');
+      logger.info('💡 Try running: cgmb verify');
+      process.exit(1);
+    }
+  });
+
+// Direct Gemini CLI command
+program
+  .command('gemini')
+  .description('Direct Gemini CLI processing with search and grounding')
+  .option('-p, --prompt <text>', 'Prompt for Gemini CLI')
+  .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
+  .option('--search', 'Enable search/grounding functionality')
+  .option('-f, --file <path>', 'File to analyze with prompt')
+  .action(async (options) => {
+    try {
+      if (!options.prompt) {
+        logger.error('Prompt is required. Use: cgmb gemini -p "your question"');
+        process.exit(1);
+      }
+
+      await loadEnvironmentSmart({ verbose: false });
+      
+      logger.info('🔍 Processing with Gemini CLI...');
+      
+      // Import and use Gemini CLI layer directly
+      const { GeminiCLILayer } = await import('./layers/GeminiCLILayer.js');
+      const geminiLayer = new GeminiCLILayer();
+      
+      await geminiLayer.initialize();
+      
+      let result;
+      if (options.file) {
+        // Process with file
+        result = await geminiLayer.processFiles([{ path: options.file, type: 'document' }], options.prompt);
+      } else {
+        // Text-only processing
+        result = await geminiLayer.execute({
+          type: 'text_processing',
+          prompt: options.prompt,
+          search: options.search
+        });
+      }
+      
+      logger.info('✅ Gemini CLI processing completed');
+      console.log('\n📋 Result:');
+      console.log('═'.repeat(50));
+      
+      if ('data' in result) {
+        console.log(result.data);
+      } else if ('content' in result) {
+        console.log(result.content);
+      } else {
+        console.log('Processing completed');
+      }
+      
+      if (result.metadata) {
+        console.log('\n📊 Metadata:');
+        const metadata = result.metadata as any;
+        console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
+        console.log(`Model: ${metadata.model || 'N/A'}`);
+        console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
+      }
+      
+    } catch (error) {
+      logger.error('❌ Gemini CLI processing failed', error as Error);
+      logger.info('💡 Check authentication: cgmb auth-status');
+      process.exit(1);
+    }
+  });
+
+// Direct AI Studio command
+program
+  .command('aistudio')
+  .description('Direct AI Studio processing for multimodal content')
+  .option('-p, --prompt <text>', 'Prompt for AI Studio')
+  .option('-f, --files <paths...>', 'Files to process (images, documents, etc.)')
+  .option('-m, --model <model>', 'AI Studio model to use', 'gemini-2.0-flash-exp')
+  .action(async (options) => {
+    try {
+      if (!options.prompt) {
+        logger.error('Prompt is required. Use: cgmb aistudio -p "your question" -f file1 file2');
+        process.exit(1);
+      }
+
+      await loadEnvironmentSmart({ verbose: false });
+      
+      logger.info('🎨 Processing with AI Studio...');
+      
+      // Import and use AI Studio layer directly
+      const { AIStudioLayer } = await import('./layers/AIStudioLayer.js');
+      const aiStudioLayer = new AIStudioLayer();
+      
+      await aiStudioLayer.initialize();
+      
+      const files = options.files || [];
+      logger.info(`Processing ${files.length} files with AI Studio`);
+      
+      const result = await aiStudioLayer.execute({
+        type: 'multimodal_processing',
+        prompt: options.prompt,
+        files: files.map((f: string) => ({ path: f, type: 'document' })),
+        model: options.model
+      });
+      
+      logger.info('✅ AI Studio processing completed');
+      console.log('\n📋 Result:');
+      console.log('═'.repeat(50));
+      
+      if ('data' in result) {
+        console.log(result.data);
+      } else if ('content' in result) {
+        console.log(result.content);
+      } else {
+        console.log('Processing completed');
+      }
+      
+      if (result.metadata) {
+        console.log('\n📊 Metadata:');
+        const metadata = result.metadata as any;
+        console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
+        console.log(`Model: ${metadata.model || 'N/A'}`);
+        console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
+        console.log(`Files processed: ${files.length}`);
+      }
+      
+    } catch (error) {
+      logger.error('❌ AI Studio processing failed', error as Error);
+      logger.info('💡 Check authentication: cgmb auth-status');
+      process.exit(1);
+    }
+  });
+
+// Enhanced multimodal command for complex tasks
+program
+  .command('process')
+  .description('Process multimodal content with intelligent layer routing')
+  .option('-p, --prompt <text>', 'Processing prompt')
+  .option('-f, --files <paths...>', 'Files to process')
+  .option('-w, --workflow <type>', 'Workflow type: analysis, generation, conversion, extraction', 'analysis')
+  .option('--strategy <strategy>', 'Processing strategy: claude-first, gemini-first, aistudio-first, adaptive', 'adaptive')
+  .action(async (options) => {
+    try {
+      if (!options.prompt) {
+        logger.error('Prompt is required. Use: cgmb process -p "your task" -f file1 file2');
+        process.exit(1);
+      }
+
+      await loadEnvironmentSmart({ verbose: false });
+      
+      logger.info('🔀 Processing with intelligent layer routing...');
+      
+      const { MultimodalProcess } = await import('./tools/multimodalProcess.js');
+      const processor = new MultimodalProcess();
+      
+      const files = options.files ? options.files.map((path: string) => ({ path, type: 'document' })) : [];
+      
+      const result = await processor.processMultimodal({
+        prompt: options.prompt,
+        files,
+        workflow: options.workflow,
+        options: {
+          layer_priority: options.strategy === 'claude-first' ? 'claude' :
+                         options.strategy === 'gemini-first' ? 'gemini' :
+                         options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
+          detailed: true
+        }
+      });
+      
+      logger.info('✅ Multimodal processing completed');
+      console.log('\n📋 Result:');
+      console.log('═'.repeat(50));
+      console.log(result.content);
+      
+      console.log('\n📊 Processing Details:');
+      console.log(`Workflow: ${result.workflow_used}`);
+      console.log(`Processing time: ${result.processing_time}ms`);
+      console.log(`Layers involved: ${result.layers_involved?.join(', ')}`);
+      console.log(`Files processed: ${result.files_processed?.length || 0}`);
+      
+      if (result.metadata) {
+        console.log(`Total tokens: ${result.metadata.tokens_used || 'N/A'}`);
+        console.log(`Estimated cost: ${result.metadata.cost || 'N/A'}`);
+      }
+      
+    } catch (error) {
+      logger.error('❌ Multimodal processing failed', error as Error);
+      logger.info('💡 Try: cgmb verify');
       process.exit(1);
     }
   });

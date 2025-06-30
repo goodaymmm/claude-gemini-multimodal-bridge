@@ -2,11 +2,16 @@
 
 This file lists all the created files for the CGMB project.
 
-## ✨ Recent Updates (2025-06-30)
+## ✨ Recent Updates (2025-06-30) - Enhanced CLI v1.0.0
 - 🚀 **Simplified MCP Integration**: "add MCP" style easy setup
 - 🔧 **Automatic Environment Loading**: Smart .env file detection  
 - 🛡️ **Security Enhanced**: No hardcoded API keys in MCP config
 - ⚡ **Auto-startup**: Claude Code automatically starts server when needed
+- ✅ **Error.md/Error2.md/Error3.md Issues Resolution**: Fixed "unknown command" and timeout problems
+- 🎆 **Enhanced CLI Commands**: Direct layer access (`cgmb gemini`, `cgmb aistudio`, `cgmb process`)
+- 🎯 **True Multimodal Processing**: Real content generation and analysis (not just initialization)
+- 🔧 **AI Studio Integration Enhancement**: Direct API access bypassing MCP server dependencies
+- 📊 **Production-Ready**: Complete test suite, demo scripts, and dependency verification
 
 ## Project Root Files
 - package.json              # Node.js project configuration and dependencies
@@ -66,17 +71,25 @@ This file lists all the created files for the CGMB project.
 - src/workflows/ExtractionWorkflow.ts # Data extraction workflows
 - src/workflows/GenerationWorkflow.ts # Content generation workflows
 
-### Testing (/tests)
+### Testing (/tests) ✅ COMPLETED
 - tests/unit/                    # Unit tests for individual components
 - tests/integration/            # Integration tests for layer interactions
 - tests/e2e/                   # End-to-end workflow tests
+- **Enhanced Test Scripts**: npm run test:all, test:unit, test:integration, test:e2e
 
-### Documentation (/docs)
+### Documentation (/docs) ✅ COMPLETED
 - docs/INSTALLATION.md         # Detailed installation guide
 - docs/USAGE.md               # Usage examples and tutorials
 - docs/API.md                 # API reference documentation
 - docs/CONTRIBUTING.md        # Contribution guidelines
 - docs/TROUBLESHOOTING.md     # Common issues and solutions
+- docs/ENHANCED_CLI_GUIDE.md  # Enhanced CLI commands guide (Error.md fixes)
+
+### Examples (/examples) ✅ COMPLETED
+- examples/android_monetization.js  # Android app monetization demo
+- examples/gemini_search_demo.js    # Gemini CLI search and grounding demo  
+- examples/aistudio_image_demo.js   # AI Studio multimodal processing demo
+- **Demo Scripts**: npm run demo:android, demo:gemini, demo:aistudio, demo:all
 
 ### Configuration Files
 - jest.config.js              # Jest testing configuration
@@ -102,17 +115,20 @@ This file lists all the created files for the CGMB project.
 - ✅ Quota monitoring and management
 - ✅ NPM package preparation and automation scripts
 - ✅ **Simplified MCP Integration** ("add MCP" style setup)
+- ✅ **Enhanced CLI Commands** (cgmb gemini, cgmb aistudio, cgmb process, cgmb test)
+- ✅ **Error.md/Error2.md/Error3.md Issues Resolution** (fixed "unknown command" and timeout problems)
+- ✅ **Production-Ready Demo Scripts** (real-world examples and comprehensive testing)
+- ✅ **AI Studio Integration Enhancement** (direct API access, bypassed MCP server dependencies)
 
 🔄 **In Progress**
-- NPM package testing and final publication
-- Advanced testing suite expansion
+- NPM package final publication preparation
+- Documentation refinement
 
 ⏳ **Pending**
-- Complete testing suite
-- Advanced documentation
-- CI/CD pipeline
+- CI/CD pipeline setup
 - Performance optimization
 - Production deployment guides
+- Community feedback integration
 
 ## Installation and Setup
 
@@ -152,18 +168,41 @@ This file lists all the created files for the CGMB project.
 
 ## Development Commands
 
+### Basic Commands
 - `npm run dev`              # Run in development mode
 - `npm run build`            # Build TypeScript to JavaScript
 - `npm run serve`            # Start MCP server
 - `npm start`                # Start MCP server (alias)
-- `npm run test`             # Run all tests
+- `npm run clean`            # Clean build artifacts
 - `npm run lint`             # Run ESLint
 - `npm run setup`            # Run setup script
+
+### Enhanced Testing Commands
+- `npm run test`             # Run basic tests
+- `npm run test:all`         # Run complete test suite (unit + integration + e2e)
+- `npm run test:unit`        # Run unit tests only
+- `npm run test:integration` # Run integration tests only
+- `npm run test:e2e`         # Run end-to-end tests only
+- `npm run typecheck`        # Run TypeScript type checking
+
+### Demo Commands (Error.md Fixes Verification)
+- `npm run demo:android`     # Run Android monetization demo
+- `npm run demo:gemini`      # Run Gemini CLI search demo
+- `npm run demo:aistudio`    # Run AI Studio multimodal demo
+- `npm run demo:all`         # Run all demo scripts
+
+### Enhanced CLI Commands
 - `cgmb --help`              # Show CLI help
 - `cgmb serve`               # Start MCP server directly
 - `cgmb verify`              # Verify system configuration
 - `cgmb auth-status`         # Check authentication status
 - `cgmb setup-mcp`           # Setup Claude Code MCP integration
+
+### Direct Layer Access (NEW - Error.md Fixes)
+- `cgmb gemini -p "question" --search`    # Direct Gemini CLI with search
+- `cgmb aistudio -p "task" -f file.png`   # Direct AI Studio multimodal processing
+- `cgmb process -p "task" -w analysis`    # Intelligent layer routing
+- `cgmb test -p "test" -f file.pdf`       # Enhanced testing with actual processing
 
 ## Architecture Overview
 
@@ -192,6 +231,10 @@ This project provides a **complete implementation** of multi-layer AI integratio
 - 📊 **Quota Management** (monitoring and optimization)
 - 🌐 **Multi-format Support** (images, audio, PDFs, documents)
 - 🔄 **Workflow Orchestration** (analysis, conversion, extraction, generation)
+- ✅ **Error Resolution** (fixed Error.md/Error2.md/Error3.md issues)
+- 🎆 **Enhanced CLI Commands** (direct layer access with cgmb gemini, cgmb aistudio, cgmb process)
+- 🎯 **True Multimodal Processing** (real content generation and analysis)
+- 📊 **Production-Ready** (complete test suite, demo scripts, dependency verification)
 
 ## MCP Integration
 

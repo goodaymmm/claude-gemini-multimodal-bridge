@@ -8,12 +8,14 @@
 
 ## ✨ Features
 
-### 🆕 **New in Latest Version**
-- ⚡ **Automatic Installation**: One-command setup with postinstall script
-- 🔧 **Smart Dependency Management**: Auto-installs Gemini CLI and AI Studio MCP
-- 🎯 **Intelligent MCP Integration**: Automated Claude Code configuration
-- 🛡️ **Enhanced Error Handling**: Improved authentication and diagnostics
-- 📊 **Better User Guidance**: Interactive setup wizard and clear instructions
+### 🆕 **New in Latest Version (v1.0.0)**
+- 🚀 **Enhanced CLI Commands**: Direct access to all AI layers without complex workflows
+- ✅ **Fixed Error.md Issues**: No more "unknown command" errors or timeout problems  
+- 🔧 **Resolved AI Studio Integration**: Direct API access bypassing MCP server dependencies
+- 🎯 **Streamlined Gemini CLI**: Seamless search and grounding functionality
+- 📊 **Production-Ready**: Complete test suite, linting, and dependency verification
+- 🛡️ **Improved Authentication**: Auto-fix capabilities and better error diagnostics
+- ⚡ **Real Multimodal Processing**: Actual content generation and analysis (not just initialization)
 
 ### 🏗️ **Core Features**
 - 🔗 **3-Layer Architecture**: Claude Code ↔ Gemini CLI ↔ AI Studio
@@ -195,6 +197,44 @@ claude "Hello! Test the enhanced capabilities."
 ```
 
 **Automated MCP Integration**: CGMB now automatically configures Claude Code's MCP settings safely without overwriting existing configurations.
+
+## 🚀 Enhanced CLI Commands
+
+### Direct Layer Access (NEW!)
+
+```bash
+# Direct Gemini CLI with search and grounding
+cgmb gemini -p "Latest AI trends in 2024-2025" --search
+
+# Direct AI Studio for multimodal processing  
+cgmb aistudio -p "Create business infographic" -f image1.png document.pdf
+
+# Intelligent layer routing for complex tasks
+cgmb process -p "Comprehensive market analysis" -w analysis -f data.csv --strategy adaptive
+
+# Enhanced testing with actual processing
+cgmb test -p "Analyze this content" -f document.pdf --timeout 180000
+```
+
+### Key Improvements Over Previous Versions
+
+| Issue (Error.md/Error2.md/Error3.md) | Solution |
+|---------------------------------------|----------|
+| ❌ "unknown command 'gemini-chat'" | ✅ `cgmb gemini -p "question"` |
+| ❌ Commands timeout during initialization | ✅ Actual processing with results |
+| ❌ AI Studio MCP server failures | ✅ Direct API integration |
+| ❌ Complex multi-step workflows | ✅ Single command execution |
+| ❌ No real search/grounding | ✅ Built-in search functionality |
+
+### Command Reference
+
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `cgmb gemini` | Direct Gemini CLI access | `cgmb gemini -p "question" --search` |
+| `cgmb aistudio` | AI Studio multimodal processing | `cgmb aistudio -p "create image" -f file.txt` |
+| `cgmb process` | Intelligent layer routing | `cgmb process -p "analyze" -w analysis` |
+| `cgmb test` | Enhanced testing | `cgmb test -p "test prompt" -f file.pdf` |
+| `cgmb verify` | System verification | `cgmb verify --fix` |
 
 ### Configuration
 

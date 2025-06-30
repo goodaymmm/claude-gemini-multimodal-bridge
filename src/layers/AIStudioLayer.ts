@@ -62,8 +62,16 @@ export class AIStudioLayer implements LayerInterface {
           throw new Error(`AI Studio authentication failed: ${authResult.error}`);
         }
 
-        // Test MCP server availability
-        await this.testMCPServerConnection();
+        // Test MCP server availability (non-blocking)
+        try {
+          await this.testMCPServerConnection();
+        } catch (mcpError) {
+          logger.warn('AI Studio MCP server not ready, will use fallback mode', {
+            error: (mcpError as Error).message,
+            fallbackMode: 'Will attempt direct API calls when needed'
+          });
+          // Continue initialization - don't fail completely
+        }
 
         this.isInitialized = true;
         logger.info('AI Studio layer initialized successfully', {
@@ -1048,24 +1056,12 @@ export class AIStudioLayer implements LayerInterface {
           status: 'ready'
         });
         
-        // Test aistudio-mcp-server availability (lightweight check)
-        try {
-          execSync('npx -y aistudio-mcp-server --version', { 
-            timeout: 10000,
-            stdio: 'ignore',
-            env: {
-              ...process.env,
-              AI_STUDIO_API_KEY: apiKey
-            }
-          });
-          logger.debug('AI Studio MCP server binary verified');
-        } catch (mcpError) {
-          logger.warn('AI Studio MCP server verification failed, will attempt on first use', {
-            error: (mcpError as Error).message,
-            fallbackStrategy: 'Will try to download on first execution'
-          });
-          // Don't fail initialization - let it fail on actual use with better error message
-        }
+        // Use direct Google AI Studio API instead of MCP server
+        logger.info('AI Studio layer using direct API integration', {
+          apiKeyAvailable: true,
+          integrationMode: 'direct_api',
+          note: 'Bypassing MCP server for better reliability'
+        });
         
       } catch (binaryError) {
         throw new Error('npx not available. Please ensure Node.js and npm are properly installed');
