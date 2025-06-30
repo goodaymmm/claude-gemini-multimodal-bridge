@@ -136,3 +136,9 @@ config/secrets.json
 test-results/
 screenshots/
 videos/
+
+# Development notes and guides (not for GitHub)
+CLAUDE.md
+CLAUDE.ME
+NPM_PACKAGE_*.md
+Error*.md
