@@ -4,17 +4,17 @@ import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
 import { ErrorHandler, safeExecute } from '../utils/errorHandler.js';
 import {
+  CGMBError,
   Config,
   ExecutionPlan,
+  FileReference,
+  LayerResult,
+  LayerType,
+  ProcessingOptions,
   WorkflowResult,
   WorkflowStep,
-  LayerResult,
-  ProcessingOptions,
-  FileReference,
   WorkflowType,
   WorkloadAnalysis,
-  CGMBError,
-  LayerType,
 } from './types.js';
 
 // ===================================
@@ -845,7 +845,7 @@ export class LayerManager {
 
     while (processed.size < steps.length) {
       const currentLevel = steps.filter(step => {
-        if (processed.has(step.id)) return false;
+        if (processed.has(step.id)) {return false;}
         const dependencies = step.dependsOn || [];
         return dependencies.every(dep => processed.has(dep));
       });
@@ -952,7 +952,7 @@ export class LayerManager {
    * Detect if request is for content generation
    */
   private detectGenerationRequest(prompt: string, workflow: ExecutionPlan): boolean {
-    if (!prompt) return false;
+    if (!prompt) {return false;}
     
     const generationKeywords = [
       'generate', 'create', 'make', 'produce', 'draw', 'design',
@@ -976,7 +976,7 @@ export class LayerManager {
    * Detect if request is specifically for image generation
    */
   private detectImageGeneration(prompt: string, workflow: ExecutionPlan): boolean {
-    if (!prompt) return false;
+    if (!prompt) {return false;}
     
     const imageKeywords = [
       'image', 'picture', 'photo', 'illustration', 'drawing', 'artwork',
@@ -1004,7 +1004,7 @@ export class LayerManager {
    * Detect if request is for video generation
    */
   private detectVideoGeneration(prompt: string, workflow: ExecutionPlan): boolean {
-    if (!prompt) return false;
+    if (!prompt) {return false;}
     
     const videoKeywords = [
       'video', 'movie', 'animation', 'clip', 'motion',
@@ -1031,7 +1031,7 @@ export class LayerManager {
    * Detect if request is for audio generation
    */
   private detectAudioGeneration(prompt: string, workflow: ExecutionPlan): boolean {
-    if (!prompt) return false;
+    if (!prompt) {return false;}
     
     const audioKeywords = [
       'audio', 'sound', 'music', 'voice', 'speech', 'narration',

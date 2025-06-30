@@ -3,22 +3,22 @@ import { createWriteStream } from 'fs';
 import { mkdir } from 'fs/promises';
 import { dirname } from 'path';
 import { 
-  LayerInterface, 
-  LayerResult, 
-  MultimodalFile, 
-  MultimodalResult, 
-  ImageAnalysisType, 
+  AudioAnalysisResult, 
+  AudioGenOptions, 
+  FileReference, 
+  GenerationType, 
   ImageAnalysisResult, 
-  FileReference,
+  ImageAnalysisType, 
   ImageGenOptions,
-  VideoGenOptions,
-  AudioGenOptions,
+  LayerInterface,
+  LayerResult,
   MediaGenResult,
-  AudioAnalysisResult,
-  GenerationType
+  MultimodalFile,
+  MultimodalResult,
+  VideoGenOptions
 } from '../core/types.js';
 import { logger } from '../utils/logger.js';
-import { safeExecute, retry } from '../utils/errorHandler.js';
+import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 
 /**
@@ -29,7 +29,7 @@ export class AIStudioLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private mcpServerProcess?: any;
   private isInitialized = false;
-  private readonly DEFAULT_TIMEOUT = 120000; // 2 minutes for file processing
+  private readonly DEFAULT_TIMEOUT = 180000; // 3 minutes for file processing (increased from 2 minutes to fix timeout issues)
   private readonly MAX_RETRIES = 2;
   private readonly MAX_FILES = 10;
   private readonly MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
@@ -654,7 +654,7 @@ export class AIStudioLayer implements LayerInterface {
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {break;}
         fileStream.write(Buffer.from(value));
       }
 
@@ -707,8 +707,8 @@ export class AIStudioLayer implements LayerInterface {
     let cost = baseCosts[mediaType];
     
     // Quality multipliers
-    if (options.quality === 'high') cost *= 2;
-    if (options.quality === 'ultra') cost *= 4;
+    if (options.quality === 'high') {cost *= 2;}
+    if (options.quality === 'ultra') {cost *= 4;}
     
     // Video duration multiplier
     if (mediaType === 'video' && options.duration) {
@@ -770,14 +770,14 @@ export class AIStudioLayer implements LayerInterface {
    * Get estimated duration for a task
    */
   getEstimatedDuration(task: any): number {
-    const baseTime = 5000; // 5 seconds base
+    const baseTime = 15000; // 15 seconds base (increased from 5 seconds)
     
     if (task.files && task.files.length > 0) {
-      return baseTime + (task.files.length * 10000); // +10s per file
+      return baseTime + (task.files.length * 30000); // +30s per file (increased from 10s)
     }
     
     if (task.type === 'multimodal' || task.action === 'multimodal_processing') {
-      return baseTime * 3; // Multimodal takes longer
+      return baseTime * 4; // Multimodal takes longer (increased from 3x to 4x)
     }
     
     return baseTime;
@@ -1150,7 +1150,7 @@ export class AIStudioLayer implements LayerInterface {
       return task.timeout;
     }
     
-    return this.getEstimatedDuration(task) + 30000; // Add 30s buffer
+    return this.getEstimatedDuration(task) + 60000; // Add 60s buffer (increased from 30s)
   }
 
   /**
@@ -1182,7 +1182,7 @@ export class AIStudioLayer implements LayerInterface {
    */
   isFileTypeSupported(filePath: string): boolean {
     const ext = filePath.toLowerCase().match(/\.[^.]+$/)?.[0];
-    if (!ext) return false;
+    if (!ext) {return false;}
     
     return Object.values(this.SUPPORTED_FILE_TYPES)
       .some(types => types.includes(ext));
@@ -1214,7 +1214,7 @@ export class AIStudioLayer implements LayerInterface {
    * Detection methods for generation requests
    */
   private isImageGenerationRequest(prompt: string): boolean {
-    if (!prompt) return false;
+    if (!prompt) {return false;}
     
     const imageKeywords = ['image', 'picture', 'photo', 'illustration', 'drawing', 'artwork', 'visual', 'graphic', 'sketch', 'painting', 'render', '画像', '写真', 'イラスト', '絵', '図'];
     const generationKeywords = ['generate', 'create', 'make', 'produce', 'draw', 'design', '生成', '作成', '作る', '描く'];
@@ -1227,7 +1227,7 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   private isVideoGenerationRequest(prompt: string): boolean {
-    if (!prompt) return false;
+    if (!prompt) {return false;}
     
     const videoKeywords = ['video', 'movie', 'animation', 'clip', 'motion', '動画', 'ビデオ', 'ムービー', 'アニメーション'];
     const generationKeywords = ['generate', 'create', 'make', 'produce', '生成', '作成', '作る'];
@@ -1240,7 +1240,7 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   private isAudioGenerationRequest(prompt: string): boolean {
-    if (!prompt) return false;
+    if (!prompt) {return false;}
     
     const audioKeywords = ['audio', 'sound', 'music', 'voice', 'speech', 'narration', '音声', '音楽', 'サウンド', '声', 'ナレーション'];
     const generationKeywords = ['generate', 'create', 'make', 'produce', 'synthesize', '生成', '作成', '作る', '合成'];

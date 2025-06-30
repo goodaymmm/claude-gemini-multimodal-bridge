@@ -1,17 +1,17 @@
 import {
+  FileReference,
+  LayerResult,
+  MultimodalFile,
   MultimodalProcessArgs,
   MultimodalProcessArgsSchema,
   MultimodalProcessResult,
-  WorkflowType,
   ProcessingOptions,
-  LayerResult,
-  FileReference,
-  MultimodalFile,
   WorkflowResult,
+  WorkflowType,
 } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { logger } from '../utils/logger.js';
-import { safeExecute, retry } from '../utils/errorHandler.js';
+import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';
@@ -312,11 +312,11 @@ export class MultimodalProcess {
   private determineFileType(filePath: string): 'image' | 'audio' | 'pdf' | 'document' | 'text' | 'video' {
     const ext = path.extname(filePath).toLowerCase();
     
-    if (this.SUPPORTED_FORMATS.images.includes(ext)) return 'image';
-    if (ext === '.pdf') return 'pdf';
-    if (this.SUPPORTED_FORMATS.documents.includes(ext)) return 'document';
-    if (this.SUPPORTED_FORMATS.audio.includes(ext)) return 'audio';
-    if (this.SUPPORTED_FORMATS.video.includes(ext)) return 'video';
+    if (this.SUPPORTED_FORMATS.images.includes(ext)) {return 'image';}
+    if (ext === '.pdf') {return 'pdf';}
+    if (this.SUPPORTED_FORMATS.documents.includes(ext)) {return 'document';}
+    if (this.SUPPORTED_FORMATS.audio.includes(ext)) {return 'audio';}
+    if (this.SUPPORTED_FORMATS.video.includes(ext)) {return 'video';}
     
     return 'text'; // Default to text for unknown files
   }

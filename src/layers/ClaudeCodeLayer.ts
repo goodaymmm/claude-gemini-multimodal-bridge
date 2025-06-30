@@ -1,7 +1,7 @@
-import { spawn, execSync } from 'child_process';
-import { LayerInterface, LayerResult, ReasoningTask, ReasoningResult, WorkflowDefinition, WorkflowResult } from '../core/types.js';
+import { execSync, spawn } from 'child_process';
+import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
-import { safeExecute, retry } from '../utils/errorHandler.js';
+import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 
 /**
@@ -560,7 +560,7 @@ export class ClaudeCodeLayer implements LayerInterface {
     let inSteps = false;
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed) continue;
+      if (!trimmed) {continue;}
       
       if (/^\d+\./.test(trimmed) || /^[-*]/.test(trimmed)) {
         steps.push(trimmed);

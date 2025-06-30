@@ -1,9 +1,9 @@
 import {
+  AnalysisType,
   DocumentAnalysisArgs,
   DocumentAnalysisResult,
-  AnalysisType,
-  LayerResult,
   FileReference,
+  LayerResult,
   ReasoningTask,
 } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
@@ -11,7 +11,7 @@ import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
 import { GeminiCLILayer } from '../layers/GeminiCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
-import { safeExecute, retry } from '../utils/errorHandler.js';
+import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';

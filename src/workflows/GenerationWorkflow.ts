@@ -1,10 +1,10 @@
 import {
-  WorkflowDefinition,
-  WorkflowResult,
   ExecutionPlan,
-  ResourceEstimate,
   FileReference,
   ProcessingOptions,
+  ResourceEstimate,
+  WorkflowDefinition,
+  WorkflowResult,
 } from '../core/types.js';
 import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { DocumentAnalysis } from '../tools/documentAnalysis.js';
@@ -419,10 +419,10 @@ export class GenerationWorkflow implements WorkflowDefinition {
     const complexity = this.assessGenerationComplexity(inputs.sourceFiles, inputs.requirements, inputs.options);
     
     // Base requirements
-    let memory = 512; // MB
-    let cpu = 1.0;
-    let duration = 300000; // 5 minutes
-    let cost = 0.05;
+    const memory = 512; // MB
+    const cpu = 1.0;
+    const duration = 300000; // 5 minutes
+    const cost = 0.05;
 
     // Scale with content length and source files
     const lengthMultiplier = Math.min(contentLength / 1000, 5); // Max 5x for 5000+ words
@@ -983,27 +983,27 @@ export class GenerationWorkflow implements WorkflowDefinition {
     let complexityScore = 0;
 
     // Source file factor
-    if (sourceFiles && sourceFiles.length > 10) complexityScore += 3;
-    else if (sourceFiles && sourceFiles.length > 5) complexityScore += 2;
-    else if (sourceFiles && sourceFiles.length > 0) complexityScore += 1;
+    if (sourceFiles && sourceFiles.length > 10) {complexityScore += 3;}
+    else if (sourceFiles && sourceFiles.length > 5) {complexityScore += 2;}
+    else if (sourceFiles && sourceFiles.length > 0) {complexityScore += 1;}
 
     // Requirements complexity
-    if (requirements.length > 1000) complexityScore += 2;
-    else if (requirements.length > 500) complexityScore += 1;
+    if (requirements.length > 1000) {complexityScore += 2;}
+    else if (requirements.length > 500) {complexityScore += 1;}
 
     // Content length
     const estimatedLength = this.estimateContentLength(requirements, options);
-    if (estimatedLength > 5000) complexityScore += 3;
-    else if (estimatedLength > 2000) complexityScore += 2;
-    else if (estimatedLength > 1000) complexityScore += 1;
+    if (estimatedLength > 5000) {complexityScore += 3;}
+    else if (estimatedLength > 2000) {complexityScore += 2;}
+    else if (estimatedLength > 1000) {complexityScore += 1;}
 
     // Options complexity
-    if (options?.includeVisuals) complexityScore += 1;
-    if (options?.tone === 'technical') complexityScore += 1;
-    if (options?.includeRecommendations) complexityScore += 1;
+    if (options?.includeVisuals) {complexityScore += 1;}
+    if (options?.tone === 'technical') {complexityScore += 1;}
+    if (options?.includeRecommendations) {complexityScore += 1;}
 
-    if (complexityScore >= 6) return 'high';
-    if (complexityScore >= 3) return 'medium';
+    if (complexityScore >= 6) {return 'high';}
+    if (complexityScore >= 3) {return 'medium';}
     return 'low';
   }
 
@@ -1014,10 +1014,10 @@ export class GenerationWorkflow implements WorkflowDefinition {
     // Base estimation
     let estimatedLength = 1000; // Default 1000 words
 
-    if (options?.length === 'short') estimatedLength = 500;
-    else if (options?.length === 'medium') estimatedLength = 1500;
-    else if (options?.length === 'long') estimatedLength = 3000;
-    else if (typeof options?.length === 'number') estimatedLength = options.length;
+    if (options?.length === 'short') {estimatedLength = 500;}
+    else if (options?.length === 'medium') {estimatedLength = 1500;}
+    else if (options?.length === 'long') {estimatedLength = 3000;}
+    else if (typeof options?.length === 'number') {estimatedLength = options.length;}
 
     // Adjust based on requirements complexity
     if (requirements.length > 500) {

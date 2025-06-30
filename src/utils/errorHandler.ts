@@ -1,4 +1,4 @@
-import { CGMBError, LayerError, WorkflowError, LayerType } from '../core/types.js';
+import { CGMBError, LayerError, LayerType, WorkflowError } from '../core/types.js';
 import { logger } from './logger.js';
 
 // ===================================
@@ -195,7 +195,7 @@ export class ErrorHandler {
     }
 
     let code = 'UNKNOWN_ERROR';
-    let message = error.message;
+    const message = error.message;
 
     // Categorize common errors
     if (error.message.includes('timeout')) {

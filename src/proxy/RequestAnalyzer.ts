@@ -1,4 +1,4 @@
-import { RequestAnalysis, EnhancementPlan } from '../core/types.js';
+import { EnhancementPlan, RequestAnalysis } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 
@@ -250,8 +250,8 @@ export class RequestAnalyzer {
 
     // Determine priority
     let priority: 'low' | 'medium' | 'high' = 'low';
-    if (confidence > 0.7) priority = 'high';
-    else if (confidence > 0.4) priority = 'medium';
+    if (confidence > 0.7) {priority = 'high';}
+    else if (confidence > 0.4) {priority = 'medium';}
 
     return {
       needsGrounding,

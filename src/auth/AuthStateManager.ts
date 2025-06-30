@@ -1,4 +1,4 @@
-import { AuthStatus, AuthResult } from '../core/types.js';
+import { AuthStatus } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from './AuthVerifier.js';
@@ -34,7 +34,7 @@ export class AuthStateManager {
           });
           
           // Return without timestamp
-          const { timestamp, ...status } = cached;
+          const { timestamp: _timestamp, ...status } = cached;
           return status;
         }
 
@@ -328,7 +328,7 @@ export class AuthStateManager {
   private async cleanExpiredEntries(): Promise<void> {
     const expiredServices: string[] = [];
     
-    for (const [service, status] of this.authCache.entries()) {
+    for (const [service, _status] of this.authCache.entries()) {
       if (!this.isCacheValid(service)) {
         expiredServices.push(service);
       }

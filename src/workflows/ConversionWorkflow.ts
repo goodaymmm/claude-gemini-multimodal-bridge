@@ -1,10 +1,10 @@
 import {
-  WorkflowDefinition,
-  WorkflowResult,
   ExecutionPlan,
-  ResourceEstimate,
   FileReference,
   ProcessingOptions,
+  ResourceEstimate,
+  WorkflowDefinition,
+  WorkflowResult,
 } from '../core/types.js';
 import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { MultimodalProcess } from '../tools/multimodalProcess.js';
@@ -333,10 +333,10 @@ export class ConversionWorkflow implements WorkflowDefinition {
     const complexity = this.assessConversionComplexity(inputs.files, inputs.options);
     
     // Base requirements
-    let memory = 1024; // MB
-    let cpu = 1.5;
-    let duration = 120000; // 2 minutes
-    let cost = 0.02;
+    const memory = 1024; // MB
+    const cpu = 1.5;
+    const duration = 120000; // 2 minutes
+    const cost = 0.02;
 
     // Scale with file count and size
     const sizeMultiplier = Math.min(totalSize / (10 * 1024 * 1024), 10); // Max 10x for 100MB+
@@ -780,24 +780,24 @@ export class ConversionWorkflow implements WorkflowDefinition {
     let complexityScore = 0;
 
     // File count factor
-    if (files.length > 20) complexityScore += 3;
-    else if (files.length > 10) complexityScore += 2;
-    else if (files.length > 5) complexityScore += 1;
+    if (files.length > 20) {complexityScore += 3;}
+    else if (files.length > 10) {complexityScore += 2;}
+    else if (files.length > 5) {complexityScore += 1;}
 
     // File size factor
     const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
-    if (totalSize > 500 * 1024 * 1024) complexityScore += 3; // > 500MB
-    else if (totalSize > 100 * 1024 * 1024) complexityScore += 2; // > 100MB
-    else if (totalSize > 10 * 1024 * 1024) complexityScore += 1; // > 10MB
+    if (totalSize > 500 * 1024 * 1024) {complexityScore += 3;} // > 500MB
+    else if (totalSize > 100 * 1024 * 1024) {complexityScore += 2;} // > 100MB
+    else if (totalSize > 10 * 1024 * 1024) {complexityScore += 1;} // > 10MB
 
     // Options complexity
-    if (options?.quality === 'high') complexityScore += 1;
-    if (options?.preserveFormatting) complexityScore += 1;
-    if (options?.extractImages) complexityScore += 1;
-    if (options?.resize) complexityScore += 1;
+    if (options?.quality === 'high') {complexityScore += 1;}
+    if (options?.preserveFormatting) {complexityScore += 1;}
+    if (options?.extractImages) {complexityScore += 1;}
+    if (options?.resize) {complexityScore += 1;}
 
-    if (complexityScore >= 6) return 'high';
-    if (complexityScore >= 3) return 'medium';
+    if (complexityScore >= 6) {return 'high';}
+    if (complexityScore >= 3) {return 'medium';}
     return 'low';
   }
 

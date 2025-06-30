@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync, copyFileSync } from 'fs';
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { mkdir } from 'fs/promises';
-import { join, dirname } from 'path';
+import { dirname, join } from 'path';
 import { homedir } from 'os';
 import { logger } from './logger.js';
 
@@ -446,7 +446,7 @@ export class MCPConfigManager {
           recommendations.push('Consider installing CGMB globally for better performance');
         }
         
-        if (!config.env || !config.env.NODE_ENV) {
+        if (!config.env?.NODE_ENV) {
           issues.push('Missing environment variables in MCP configuration');
         }
       }

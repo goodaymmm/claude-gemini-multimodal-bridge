@@ -2,25 +2,25 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
-  ListToolsRequestSchema,
-  McpError,
-  ErrorCode,
   CallToolResult,
+  ErrorCode,
+  ListToolsRequestSchema,
   ListToolsResult,
+  McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { LayerManager } from './LayerManager.js';
 import { logger } from '../utils/logger.js';
 import { ErrorHandler, safeExecute } from '../utils/errorHandler.js';
 import {
-  MultimodalProcessArgs,
-  MultimodalProcessArgsSchema,
+  CGMBError,
   DocumentAnalysisArgs,
   DocumentAnalysisArgsSchema,
+  MultimodalProcessArgs,
+  MultimodalProcessArgsSchema,
+  ToolResult,
   WorkflowDefinitionArgs,
   WorkflowDefinitionArgsSchema,
-  ToolResult,
-  CGMBError,
 } from './types.js';
 import { Config, ConfigSchema } from './types.js';
 
@@ -490,11 +490,11 @@ export class CGMBServer {
   private validateLogLevel(level?: string): 'error' | 'warn' | 'info' | 'debug' {
     const validLevels = ['error', 'warn', 'info', 'debug'] as const;
     
-    if (!level) return 'info';
+    if (!level) {return 'info';}
     
     // Handle non-standard level names
     const lowerLevel = level.toLowerCase();
-    if (lowerLevel === 'verbose') return 'debug';
+    if (lowerLevel === 'verbose') {return 'debug';}
     
     return validLevels.includes(lowerLevel as any) ? lowerLevel as any : 'info';
   }

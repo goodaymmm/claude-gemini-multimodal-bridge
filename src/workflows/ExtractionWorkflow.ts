@@ -1,10 +1,10 @@
 import {
-  WorkflowDefinition,
-  WorkflowResult,
   ExecutionPlan,
-  ResourceEstimate,
   FileReference,
   ProcessingOptions,
+  ResourceEstimate,
+  WorkflowDefinition,
+  WorkflowResult,
 } from '../core/types.js';
 import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { DocumentAnalysis } from '../tools/documentAnalysis.js';
@@ -366,10 +366,10 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     const complexity = this.assessExtractionComplexity(inputs.files, inputs.options);
     
     // Base requirements
-    let memory = 1024; // MB
-    let cpu = 1.2;
-    let duration = 180000; // 3 minutes
-    let cost = 0.03;
+    const memory = 1024; // MB
+    const cpu = 1.2;
+    const duration = 180000; // 3 minutes
+    const cost = 0.03;
 
     // Scale with file count, size, and extraction types
     const sizeMultiplier = Math.min(totalSize / (50 * 1024 * 1024), 8); // Max 8x for 400MB+
@@ -810,15 +810,15 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     let complexityScore = 0;
 
     // File count factor
-    if (files.length > 15) complexityScore += 3;
-    else if (files.length > 8) complexityScore += 2;
-    else if (files.length > 3) complexityScore += 1;
+    if (files.length > 15) {complexityScore += 3;}
+    else if (files.length > 8) {complexityScore += 2;}
+    else if (files.length > 3) {complexityScore += 1;}
 
     // File size factor
     const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
-    if (totalSize > 200 * 1024 * 1024) complexityScore += 3; // > 200MB
-    else if (totalSize > 50 * 1024 * 1024) complexityScore += 2; // > 50MB
-    else if (totalSize > 10 * 1024 * 1024) complexityScore += 1; // > 10MB
+    if (totalSize > 200 * 1024 * 1024) {complexityScore += 3;} // > 200MB
+    else if (totalSize > 50 * 1024 * 1024) {complexityScore += 2;} // > 50MB
+    else if (totalSize > 10 * 1024 * 1024) {complexityScore += 1;} // > 10MB
 
     // Extraction type complexity
     const complexExtractionTypes = ['entities', 'forms', 'data', 'audio'];
@@ -827,12 +827,12 @@ export class ExtractionWorkflow implements WorkflowDefinition {
     }
 
     // Options complexity
-    if (options?.structuredOutput) complexityScore += 1;
-    if (options?.includeConfidence) complexityScore += 1;
-    if (options?.validateData) complexityScore += 1;
+    if (options?.structuredOutput) {complexityScore += 1;}
+    if (options?.includeConfidence) {complexityScore += 1;}
+    if (options?.validateData) {complexityScore += 1;}
 
-    if (complexityScore >= 6) return 'high';
-    if (complexityScore >= 3) return 'medium';
+    if (complexityScore >= 6) {return 'high';}
+    if (complexityScore >= 3) {return 'medium';}
     return 'low';
   }
 

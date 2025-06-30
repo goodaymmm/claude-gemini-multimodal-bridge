@@ -1,12 +1,12 @@
 import {
-  WorkflowDefinition,
-  WorkflowStep,
-  WorkflowResult,
+  AnalysisType,
   ExecutionPlan,
-  ResourceEstimate,
   FileReference,
   ProcessingOptions,
-  AnalysisType,
+  ResourceEstimate,
+  WorkflowDefinition,
+  WorkflowResult,
+  WorkflowStep,
 } from '../core/types.js';
 import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { DocumentAnalysis } from '../tools/documentAnalysis.js';
@@ -307,10 +307,10 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     const fileCount = inputs.files?.length || 0;
     const complexity = this.assessComplexity(inputs.files, inputs.prompt, inputs.options);
     
-    let baseMemory = 512; // MB
-    let baseCPU = 1.0;
-    let baseDuration = 300000; // 5 minutes
-    let baseCost = 0.05;
+    const baseMemory = 512; // MB
+    const baseCPU = 1.0;
+    const baseDuration = 300000; // 5 minutes
+    const baseCost = 0.05;
 
     // Scale based on file count
     const memoryMultiplier = Math.min(fileCount * 0.5, 4); // Max 4x
@@ -394,31 +394,31 @@ export class AnalysisWorkflow implements WorkflowDefinition {
     let complexityScore = 0;
 
     // File count factor
-    if (files.length > 10) complexityScore += 2;
-    else if (files.length > 5) complexityScore += 1;
+    if (files.length > 10) {complexityScore += 2;}
+    else if (files.length > 5) {complexityScore += 1;}
 
     // File size factor
     const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
-    if (totalSize > 100 * 1024 * 1024) complexityScore += 2; // > 100MB
-    else if (totalSize > 10 * 1024 * 1024) complexityScore += 1; // > 10MB
+    if (totalSize > 100 * 1024 * 1024) {complexityScore += 2;} // > 100MB
+    else if (totalSize > 10 * 1024 * 1024) {complexityScore += 1;} // > 10MB
 
     // File type diversity
     const fileTypes = this.categorizeFiles(files);
     const typeCount = Object.values(fileTypes).filter(arr => arr.length > 0).length;
-    if (typeCount > 3) complexityScore += 2;
-    else if (typeCount > 1) complexityScore += 1;
+    if (typeCount > 3) {complexityScore += 2;}
+    else if (typeCount > 1) {complexityScore += 1;}
 
     // Options complexity
-    if (options?.depth === 'deep') complexityScore += 2;
-    if (options?.extractMetadata) complexityScore += 1;
-    if (options?.structured) complexityScore += 1;
+    if (options?.depth === 'deep') {complexityScore += 2;}
+    if (options?.extractMetadata) {complexityScore += 1;}
+    if (options?.structured) {complexityScore += 1;}
 
     // Prompt complexity
-    if (prompt && prompt.length > 1000) complexityScore += 1;
-    if (prompt && /\b(compare|analyze|correlate|synthesize)\b/i.test(prompt)) complexityScore += 1;
+    if (prompt && prompt.length > 1000) {complexityScore += 1;}
+    if (prompt && /\b(compare|analyze|correlate|synthesize)\b/i.test(prompt)) {complexityScore += 1;}
 
-    if (complexityScore >= 6) return 'high';
-    if (complexityScore >= 3) return 'medium';
+    if (complexityScore >= 6) {return 'high';}
+    if (complexityScore >= 3) {return 'medium';}
     return 'low';
   }
 

@@ -1,4 +1,4 @@
-import { SetupResult, AuthResult } from '../core/types.js';
+import { AuthResult, SetupResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';

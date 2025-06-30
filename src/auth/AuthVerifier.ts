@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { AuthResult, VerificationResult, AuthStatus, AuthErrorCode, AuthenticationError } from '../core/types.js';
+import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';

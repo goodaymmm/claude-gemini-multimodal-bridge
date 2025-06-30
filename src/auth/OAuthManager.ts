@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'child_process';
-import { AuthStatus, AuthResult, AuthErrorCode, AuthenticationError, LayerType } from '../core/types.js';
+import { AuthenticationError, AuthErrorCode, AuthStatus } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 
