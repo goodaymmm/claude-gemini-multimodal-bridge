@@ -156,26 +156,26 @@ npm start
 ### Setup
 
 ```bash
-# Get API key from: https://aistudio.google.com/app/apikey
+# 1. Get API key from: https://aistudio.google.com/app/apikey
 # Add to .env file:
 echo "AI_STUDIO_API_KEY=your_api_key_here" >> .env
 
-# 1. Run setup wizard (creates .env configuration)
+# 2. Run setup wizard (creates .env configuration)
 cgmb setup
 
-# 2. Set up authentication for all services
+# 3. Set up authentication for all services
 cgmb auth --interactive
 # This guides you through Gemini CLI OAuth, API keys, and Claude Code auth
 
-# 3. Configure Claude Code MCP integration
+# 4. Configure Claude Code MCP integration
 cgmb setup-mcp
 # This automatically adds CGMB as an MCP server to Claude Code
 
-# 4. Verify everything is working
+# 5. Verify everything is working
 cgmb verify
 # This checks system requirements, authentication, and MCP configuration
 
-# 5. Restart Claude Code to load MCP integration
+# 6. Restart Claude Code to load MCP integration
 # Then use Claude Code normally with enhanced capabilities!
 claude "Hello! Test the enhanced capabilities."
 ```
