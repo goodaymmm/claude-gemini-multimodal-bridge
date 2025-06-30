@@ -184,8 +184,8 @@ export class SearchCache {
     const threshold = this.options.similarityThreshold || this.similarityThreshold;
 
     for (const entry of this.cache.values()) {
-      if (entry.metadata.searchEngine !== searchEngine) continue;
-      if (Date.now() > entry.expiresAt) continue;
+      if (entry.metadata.searchEngine !== searchEngine) {continue;}
+      if (Date.now() > entry.expiresAt) {continue;}
 
       const similarity = this.calculateSimilarity(
         normalizedQuery, 
@@ -225,7 +225,7 @@ export class SearchCache {
 
     for (let i = 0; i < evictCount && i < sortedEntries.length; i++) {
       const entry = sortedEntries[i];
-      if (entry && entry[0]) {
+      if (entry?.[0]) {
         this.cache.delete(entry[0]);
       }
     }
@@ -360,7 +360,7 @@ export class SearchCache {
   }
 
   private countResults(result: any): number {
-    if (Array.isArray(result)) return result.length;
+    if (Array.isArray(result)) {return result.length;}
     if (result && typeof result === 'object') {
       return Object.keys(result).length;
     }

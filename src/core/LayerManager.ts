@@ -189,7 +189,7 @@ export class LayerManager {
    */
   public async executeWorkflow(
     workflow: ExecutionPlan,
-    inputData: any,
+    inputData: Record<string, unknown>,
     options: ExecutionOptions
   ): Promise<WorkflowResult> {
     const startTime = Date.now();
@@ -257,11 +257,11 @@ export class LayerManager {
    */
   private async executeSequential(
     workflow: ExecutionPlan,
-    inputData: any,
+    inputData: Record<string, unknown>,
     options: ExecutionOptions
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
-    const stepOutputs: Record<string, any> = {};
+    const stepOutputs: Record<string, Record<string, unknown>> = {};
 
     // Sort steps by dependencies
     const sortedSteps = this.topologicalSort(workflow.steps);
@@ -320,7 +320,7 @@ export class LayerManager {
    */
   private async executeParallel(
     workflow: ExecutionPlan,
-    inputData: any,
+    inputData: Record<string, unknown>,
     options: ExecutionOptions
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
@@ -364,7 +364,7 @@ export class LayerManager {
    */
   private async executeAdaptive(
     workflow: ExecutionPlan,
-    inputData: any,
+    inputData: Record<string, unknown>,
     options: ExecutionOptions
   ): Promise<Record<string, LayerResult>> {
     // Analyze the workload to determine the best execution strategy
@@ -384,55 +384,32 @@ export class LayerManager {
     }
   }
 
-  /**
-   * Execute a single workflow step
-   */
-  private async executeStep(
-    step: WorkflowStep,
-    input: any,
-    options: ExecutionOptions
-  ): Promise<LayerResult> {
-    const layer = this.getLayer(step.layer);
-    
-    return safeExecute(
-      () => layer.execute({
-        action: step.action,
-        input,
-        step,
-      }),
-      {
-        operationName: `step-${step.id}`,
-        layer: step.layer,
-        timeout: step.timeout || options.timeout || 120000,
-      }
-    );
-  }
 
   /**
    * Analyze workload to determine optimal execution strategy
    */
   private async analyzeWorkload(
     workflow: ExecutionPlan,
-    inputData: any
+    inputData: Record<string, unknown>
   ): Promise<WorkloadAnalysis> {
     // Simple heuristic-based analysis
     // In a more sophisticated implementation, this could use ML models
     
-    const hasMultimodalFiles = inputData.files && inputData.files.length > 0;
-    const hasComplexPrompt = inputData.prompt && inputData.prompt.length > 1000;
+    const hasMultimodalFiles = inputData.files && Array.isArray(inputData.files) && inputData.files.length > 0;
+    const hasComplexPrompt = inputData.prompt && typeof inputData.prompt === 'string' && inputData.prompt.length > 1000;
     const multipleSteps = workflow.steps.length > 3;
     
     // Detect generation requests (especially image/video/audio generation)
-    const isGenerationRequest = this.detectGenerationRequest(inputData.prompt, workflow);
-    const isImageGeneration = this.detectImageGeneration(inputData.prompt, workflow);
-    const isVideoGeneration = this.detectVideoGeneration(inputData.prompt, workflow);
-    const isAudioGeneration = this.detectAudioGeneration(inputData.prompt, workflow);
+    const isGenerationRequest = this.detectGenerationRequest(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
+    const isImageGeneration = this.detectImageGeneration(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
+    const isVideoGeneration = this.detectVideoGeneration(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
+    const isAudioGeneration = this.detectAudioGeneration(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
     
     const requiresComplexReasoning = hasComplexPrompt || multipleSteps;
     const requiresMultimodalProcessing = hasMultimodalFiles || isGenerationRequest;
-    const requiresGrounding = inputData.prompt?.includes('search') || 
-                             inputData.prompt?.includes('latest') ||
-                             inputData.prompt?.includes('current');
+    const requiresGrounding = (typeof inputData.prompt === 'string' && inputData.prompt.includes('search')) || 
+                             (typeof inputData.prompt === 'string' && inputData.prompt.includes('latest')) ||
+                             (typeof inputData.prompt === 'string' && inputData.prompt.includes('current'));
 
     let estimatedComplexity: 'low' | 'medium' | 'high' = 'low';
     
@@ -452,7 +429,7 @@ export class LayerManager {
         isImageGeneration,
         isVideoGeneration, 
         isAudioGeneration,
-        prompt: inputData.prompt?.substring(0, 100) + '...'
+        prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 100) + '...' : 'No prompt'
       });
     } else if (requiresComplexReasoning) {
       recommendedLayer = 'claude';
@@ -473,13 +450,13 @@ export class LayerManager {
       requiresGrounding,
       estimatedComplexity,
       recommendedLayer,
-      prompt: inputData.prompt?.substring(0, 200) + '...'
+      prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 200) + '...' : 'No prompt'
     });
 
     return {
-      requiresComplexReasoning,
-      requiresMultimodalProcessing,
-      requiresGrounding,
+      requiresComplexReasoning: !!requiresComplexReasoning,
+      requiresMultimodalProcessing: !!requiresMultimodalProcessing,
+      requiresGrounding: !!requiresGrounding,
       estimatedComplexity,
       recommendedLayer,
       confidence: 0.7, // Simple confidence score
@@ -491,7 +468,7 @@ export class LayerManager {
    */
   private async executeHybrid(
     workflow: ExecutionPlan,
-    inputData: any,
+    inputData: Record<string, unknown>,
     options: ExecutionOptions,
     analysis: WorkloadAnalysis
   ): Promise<Record<string, LayerResult>> {
@@ -500,7 +477,7 @@ export class LayerManager {
     const results: Record<string, LayerResult> = {};
 
     // Execute high-priority steps first
-    for (const [priority, steps] of Object.entries(stepGroups)) {
+    for (const [_priority, steps] of Object.entries(stepGroups)) {
       if (steps.length === 1) {
         // Single step - execute directly
         const step = steps[0]!;
@@ -885,11 +862,11 @@ export class LayerManager {
   }
 
   private resolveStepInput(
-    input: Record<string, any>,
-    stepOutputs: Record<string, any>,
-    baseInput: any
-  ): any {
-    const resolved: Record<string, any> = { ...baseInput };
+    input: Record<string, unknown>,
+    stepOutputs: Record<string, Record<string, unknown>>,
+    baseInput: Record<string, unknown>
+  ): Record<string, unknown> {
+    const resolved: Record<string, unknown> = { ...baseInput };
 
     for (const [key, value] of Object.entries(input)) {
       if (typeof value === 'string' && value.startsWith('@')) {
@@ -898,9 +875,14 @@ export class LayerManager {
         const stepOutput = stepOutputs[stepId!];
         
         if (stepOutput) {
-          let resolvedValue = stepOutput;
+          let resolvedValue: unknown = stepOutput;
           for (const part of pathParts) {
-            resolvedValue = resolvedValue?.[part];
+            if (typeof resolvedValue === 'object' && resolvedValue !== null) {
+              resolvedValue = (resolvedValue as Record<string, unknown>)[part];
+            } else {
+              resolvedValue = undefined;
+              break;
+            }
           }
           resolved[key] = resolvedValue;
         } else {
@@ -975,7 +957,7 @@ export class LayerManager {
   /**
    * Detect if request is specifically for image generation
    */
-  private detectImageGeneration(prompt: string, workflow: ExecutionPlan): boolean {
+  private detectImageGeneration(prompt: string, _workflow: ExecutionPlan): boolean {
     if (!prompt) {return false;}
     
     const imageKeywords = [
@@ -1003,7 +985,7 @@ export class LayerManager {
   /**
    * Detect if request is for video generation
    */
-  private detectVideoGeneration(prompt: string, workflow: ExecutionPlan): boolean {
+  private detectVideoGeneration(prompt: string, _workflow: ExecutionPlan): boolean {
     if (!prompt) {return false;}
     
     const videoKeywords = [
@@ -1030,7 +1012,7 @@ export class LayerManager {
   /**
    * Detect if request is for audio generation
    */
-  private detectAudioGeneration(prompt: string, workflow: ExecutionPlan): boolean {
+  private detectAudioGeneration(prompt: string, _workflow: ExecutionPlan): boolean {
     if (!prompt) {return false;}
     
     const audioKeywords = [
@@ -1052,5 +1034,98 @@ export class LayerManager {
     );
     
     return hasAudioKeyword && hasGenerationKeyword;
+  }
+
+  /**
+   * Execute a single workflow step on the appropriate layer
+   */
+  private async executeStep(
+    step: WorkflowStep,
+    input: Record<string, unknown>,
+    options: ExecutionOptions
+  ): Promise<LayerResult> {
+    const startTime = Date.now();
+    
+    logger.debug(`Executing step ${step.id} on ${step.layer} layer`, {
+      stepId: step.id,
+      layer: step.layer,
+      action: step.action,
+    });
+
+    try {
+      // Get the appropriate layer
+      const layer = this.getLayer(step.layer);
+      
+      // Prepare the execution parameters
+      const executionParams = {
+        type: this.mapActionToTaskType(step.action),
+        action: step.action,
+        ...input,
+      };
+
+      // Execute the step with timeout
+      const result = await safeExecute(
+        () => layer.execute(executionParams),
+        {
+          operationName: `execute-step-${step.id}`,
+          layer: step.layer,
+          timeout: options.timeout || 300000,
+        }
+      );
+
+      const duration = Date.now() - startTime;
+
+      return {
+        success: true,
+        data: result,
+        metadata: {
+          layer: step.layer,
+          duration,
+          model: step.action,
+        },
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      logger.error(`Step ${step.id} failed on ${step.layer} layer`, {
+        error: (error as Error).message,
+        duration,
+        stepId: step.id,
+        layer: step.layer,
+        action: step.action,
+      });
+
+      return {
+        success: false,
+        error: (error as Error).message,
+        data: null,
+        metadata: {
+          layer: step.layer,
+          duration,
+          model: step.action,
+        },
+      };
+    }
+  }
+
+  /**
+   * Map workflow action to task type for layer execution
+   */
+  private mapActionToTaskType(action: string): string {
+    // Map common workflow actions to appropriate task types
+    const actionMap: Record<string, string> = {
+      'analyze_requirements': 'text_processing',
+      'process_multimodal': 'multimodal_processing',
+      'synthesize_results': 'text_processing',
+      'analyze_with_grounding': 'text_processing',
+      'process_documents': 'document_processing',
+      'extract_content': 'extraction',
+      'convert_format': 'conversion',
+      'analyze_source_content': 'content_analysis',
+      'develop_generation_strategy': 'strategy_development',
+      'generate_content': 'content_generation',
+    };
+
+    return actionMap[action] || 'text_processing';
   }
 }

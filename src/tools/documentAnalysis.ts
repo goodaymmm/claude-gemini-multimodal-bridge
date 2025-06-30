@@ -402,12 +402,12 @@ export class DocumentAnalysis {
     }
     
     // Step 2: Use Claude for deep reasoning and analysis
-    const reasoningTask: ReasoningTask = {
+    const reasoningTask = {
       prompt: this.buildComprehensiveAnalysisPrompt(documents, results),
-      depth: args.options?.depth || 'medium',
+      depth: args.options?.depth ?? 'medium',
       domain: 'document_analysis',
       context: `Analyzing ${documents.length} document(s) for comprehensive understanding`,
-    };
+    } as const;
     
     const reasoningResult = await this.claudeLayer.executeComplexReasoning(reasoningTask);
     

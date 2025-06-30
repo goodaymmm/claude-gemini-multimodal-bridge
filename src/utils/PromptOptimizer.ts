@@ -232,7 +232,7 @@ export class PromptOptimizer {
     })).sort((a, b) => b.importance - a.importance);
 
     // トークン制限内に収まるように選択
-    let selectedSentences: string[] = [];
+    const selectedSentences: string[] = [];
     let currentTokens = 0;
 
     for (const { sentence } of sentenceImportance) {
@@ -278,18 +278,18 @@ export class PromptOptimizer {
     // キーワード重要度
     const importantKeywords = ['最新', 'トレンド', '2024', '2025', '戦略', '方法', '分析'];
     importantKeywords.forEach(keyword => {
-      if (sentence.includes(keyword)) importance += 2;
+      if (sentence.includes(keyword)) {importance += 2;}
     });
 
     // 質問形式の重要度
-    if (sentence.includes('？') || sentence.includes('ですか')) importance += 1;
+    if (sentence.includes('？') || sentence.includes('ですか')) {importance += 1;}
 
     // 具体的要求の重要度
-    if (sentence.includes('具体的') || sentence.includes('詳しく')) importance += 1;
+    if (sentence.includes('具体的') || sentence.includes('詳しく')) {importance += 1;}
 
     // 文の長さによる重要度（適度な長さを重視）
     const length = sentence.length;
-    if (length >= 20 && length <= 100) importance += 1;
+    if (length >= 20 && length <= 100) {importance += 1;}
 
     return importance;
   }
@@ -336,11 +336,11 @@ export class PromptOptimizer {
     
     // 技術用語
     const techTerms = prompt.match(/[A-Z]{2,}|API|SDK|UI|UX/g);
-    if (techTerms) keywords.push(...techTerms.slice(0, 2));
+    if (techTerms) {keywords.push(...techTerms.slice(0, 2));}
 
     // カタカナ用語
     const katakanaTerms = prompt.match(/[ァ-ヶー]{3,}/g);
-    if (katakanaTerms) keywords.push(...katakanaTerms.slice(0, 3));
+    if (katakanaTerms) {keywords.push(...katakanaTerms.slice(0, 3));}
 
     return keywords;
   }

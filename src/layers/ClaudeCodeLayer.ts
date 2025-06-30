@@ -1,5 +1,18 @@
 import { execSync, spawn } from 'child_process';
 import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
+
+// Task interface for better type safety
+interface ClaudeCodeTask {
+  type?: string;
+  action?: string;
+  prompt?: string;
+  request?: string;
+  input?: string;
+  workflow?: WorkflowDefinition;
+  depth?: 'shallow' | 'medium' | 'deep';
+  files?: string[];
+  [key: string]: unknown;
+}
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
@@ -78,7 +91,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Check if this layer can handle the given task
    */
-  canHandle(task: any): boolean {
+  canHandle(task: ClaudeCodeTask): boolean {
     if (!task || typeof task !== 'object') {
       return false;
     }
@@ -109,7 +122,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Execute a task through Claude Code
    */
-  async execute(task: any): Promise<LayerResult> {
+  async execute(task: ClaudeCodeTask): Promise<LayerResult> {
     return safeExecute(
       async () => {
         const startTime = Date.now();
@@ -128,13 +141,15 @@ export class ClaudeCodeLayer implements LayerInterface {
         // Route to appropriate execution method based on task type/action
         switch (task.action || task.type) {
           case 'complex_reasoning':
-            result = await this.executeComplexReasoning(task);
+            const reasoningResult = await this.executeComplexReasoning(task);
+            result = reasoningResult.reasoning || 'Reasoning completed';
             break;
           case 'synthesize_response':
             result = await this.synthesizeResponse(task);
             break;
           case 'workflow':
-            result = await this.orchestrateWorkflow(task.workflow || task);
+            const workflowResult = await this.orchestrateWorkflow(task.workflow || task);
+            result = workflowResult.summary || 'Workflow completed';
             break;
           default:
             result = await this.executeGeneral(task);
@@ -165,22 +180,32 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Execute complex reasoning task
    */
-  async executeComplexReasoning(task: ReasoningTask): Promise<ReasoningResult> {
+  async executeComplexReasoning(task: ClaudeCodeTask): Promise<ReasoningResult> {
     return retry(
       async () => {
         logger.debug('Executing complex reasoning task', {
-          promptLength: task.prompt.length,
+          promptLength: task.prompt?.length || 0,
           depth: task.depth || 'medium',
           domain: task.domain,
         });
 
-        const prompt = this.buildReasoningPrompt(task);
+        const prompt = this.buildReasoningPrompt({
+          prompt: task.prompt || 'Please provide reasoning',
+          depth: task.depth,
+          context: task.context as string | undefined,
+          domain: task.domain as string | undefined,
+        });
         const result = await this.executeClaudeCommand(prompt, {
           timeout: this.DEFAULT_TIMEOUT,
           reasoning: true,
         });
 
-        return this.parseReasoningResult(result, task);
+        return this.parseReasoningResult(result, {
+          prompt: task.prompt || 'Please provide reasoning',
+          depth: task.depth,
+          context: task.context as string | undefined,
+          domain: task.domain as string | undefined,
+        });
       },
       {
         maxAttempts: this.MAX_RETRIES,
@@ -193,7 +218,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Synthesize response from multiple inputs
    */
-  async synthesizeResponse(task: any): Promise<string> {
+  async synthesizeResponse(task: ClaudeCodeTask): Promise<string> {
     return retry(
       async () => {
         logger.debug('Synthesizing response', {
@@ -220,21 +245,22 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Orchestrate workflow execution
    */
-  async orchestrateWorkflow(workflow: WorkflowDefinition): Promise<WorkflowResult> {
+  async orchestrateWorkflow(workflow: WorkflowDefinition | ClaudeCodeTask): Promise<WorkflowResult> {
     return retry(
       async () => {
         logger.info('Orchestrating workflow', {
-          stepCount: workflow.steps?.length || 0,
-          timeout: workflow.timeout,
+          stepCount: (workflow as WorkflowDefinition).steps?.length || 0,
+          timeout: (workflow as WorkflowDefinition).timeout || this.DEFAULT_TIMEOUT,
         });
 
-        const prompt = this.buildWorkflowPrompt(workflow);
+        const workflowDef = workflow as WorkflowDefinition;
+        const prompt = this.buildWorkflowPrompt(workflowDef);
         const result = await this.executeClaudeCommand(prompt, {
-          timeout: workflow.timeout || this.DEFAULT_TIMEOUT * 2,
+          timeout: workflowDef.timeout || this.DEFAULT_TIMEOUT * 2,
           workflow: true,
         });
 
-        return this.parseWorkflowResult(result, workflow);
+        return this.parseWorkflowResult(result, workflowDef);
       },
       {
         maxAttempts: this.MAX_RETRIES,
@@ -263,7 +289,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get cost estimation for a task
    */
-  getCost(task: any): number {
+  getCost(task: ClaudeCodeTask): number {
     // Claude Code is typically free for personal use
     return 0;
   }
@@ -271,7 +297,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get estimated duration for a task
    */
-  getEstimatedDuration(task: any): number {
+  getEstimatedDuration(task: ClaudeCodeTask): number {
     const baseTime = 5000; // 5 seconds base
     
     if (task.type === 'workflow' || task.action === 'workflow') {
@@ -292,7 +318,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Execute general Claude Code task
    */
-  private async executeGeneral(task: any): Promise<string> {
+  private async executeGeneral(task: ClaudeCodeTask): Promise<string> {
     const prompt = task.prompt || task.request || task.input || 'Please help with this task.';
     
     return await this.executeClaudeCommand(prompt, {
@@ -507,7 +533,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Build synthesis prompt
    */
-  private buildSynthesisPrompt(task: any): string {
+  private buildSynthesisPrompt(task: ClaudeCodeTask): string {
     let prompt = 'Please synthesize and respond to the following:\n\n';
     
     if (task.request) {
@@ -616,8 +642,8 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get task timeout
    */
-  private getTaskTimeout(task: any): number {
-    if (task.timeout) {
+  private getTaskTimeout(task: ClaudeCodeTask): number {
+    if (typeof task.timeout === 'number') {
       return task.timeout;
     }
     
@@ -627,7 +653,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Estimate tokens used
    */
-  private estimateTokensUsed(task: any, result: any): number {
+  private estimateTokensUsed(task: ClaudeCodeTask, result: string): number {
     const inputText = JSON.stringify(task);
     const outputText = typeof result === 'string' ? result : JSON.stringify(result);
     
@@ -638,7 +664,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Calculate cost
    */
-  private calculateCost(task: any, result: any): number {
+  private calculateCost(task: ClaudeCodeTask, result: string): number {
     // Claude Code is typically free
     return 0;
   }

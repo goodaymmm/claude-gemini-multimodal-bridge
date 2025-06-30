@@ -10,7 +10,7 @@ import { AuthVerifier } from './AuthVerifier.js';
 export class AuthStateManager {
   private authCache: Map<string, AuthStatus & { timestamp: number }> = new Map();
   private authVerifier: AuthVerifier;
-  private monitoringInterval?: NodeJS.Timeout;
+  private monitoringInterval?: NodeJS.Timeout | undefined;
   private readonly CACHE_TTL = 3600000; // 1 hour in milliseconds
   private readonly MONITOR_INTERVAL = 1800000; // 30 minutes in milliseconds
 
@@ -51,7 +51,7 @@ export class AuthStateManager {
       },
       {
         operationName: `get-auth-status-${service}`,
-        layer: service as any,
+        layer: service as 'gemini' | 'aistudio' | 'claude',
         timeout: 10000,
       }
     );
@@ -114,7 +114,7 @@ export class AuthStateManager {
   async stopAuthMonitoring(): Promise<void> {
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
-      this.monitoringInterval = undefined as any;
+      this.monitoringInterval = undefined;
       logger.info('Authentication monitoring stopped');
     }
   }
@@ -302,7 +302,7 @@ export class AuthStateManager {
    */
   private async validateStoredAuth(service: string): Promise<boolean> {
     try {
-      const result = await this.authVerifier.verifyServiceAuth(service as any);
+      const result = await this.authVerifier.verifyServiceAuth(service as 'gemini' | 'aistudio' | 'claude');
       return result.success;
     } catch {
       return false;
@@ -365,7 +365,12 @@ export class AuthStateManager {
     recommendations: string[];
   }> {
     const services = ['gemini', 'aistudio', 'claude'] as const;
-    const serviceDetails: Record<string, any> = {};
+    const serviceDetails: Record<string, {
+      isAuthenticated: boolean;
+      method: string;
+      status: string;
+      cacheAge?: number;
+    }> = {};
     
     for (const service of services) {
       const status = await this.getAuthStatus(service);
@@ -375,7 +380,7 @@ export class AuthStateManager {
         isAuthenticated: status.isAuthenticated,
         method: status.method,
         status: status.isAuthenticated ? 'OK' : 'Not Authenticated',
-        cacheAge: cached ? Date.now() - cached.timestamp : undefined,
+        ...(cached ? { cacheAge: Date.now() - cached.timestamp } : {}),
       };
     }
     

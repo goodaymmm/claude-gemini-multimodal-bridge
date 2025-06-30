@@ -11,14 +11,13 @@ import {
 
 import { LayerManager } from './LayerManager.js';
 import { logger } from '../utils/logger.js';
-import { ErrorHandler, safeExecute } from '../utils/errorHandler.js';
+import { safeExecute } from '../utils/errorHandler.js';
 import {
   CGMBError,
   DocumentAnalysisArgs,
   DocumentAnalysisArgsSchema,
   MultimodalProcessArgs,
   MultimodalProcessArgsSchema,
-  ToolResult,
   WorkflowDefinitionArgs,
   WorkflowDefinitionArgsSchema,
 } from './types.js';
@@ -368,7 +367,7 @@ export class CGMBServer {
           validatedArgs.workflow_definition,
           validatedArgs.input_data,
           {
-            executionMode: validatedArgs.execution_mode || 'adaptive',
+            executionMode: validatedArgs.execution_mode ?? 'adaptive',
             timeout: 600000, // 10 minutes for complex workflows
           }
         );
@@ -458,27 +457,27 @@ export class CGMBServer {
   private getDefaultConfig(): Config {
     return {
       gemini: {
-        api_key: process.env.GEMINI_API_KEY || '',
-        model: process.env.GEMINI_MODEL || 'gemini-2.5-pro',
-        timeout: parseInt(process.env.GEMINI_TIMEOUT || '60000'),
-        max_tokens: parseInt(process.env.GEMINI_MAX_OUTPUT_TOKENS || '16384'),
-        temperature: parseFloat(process.env.GEMINI_TEMPERATURE || '0.2'),
+        api_key: process.env.GEMINI_API_KEY ?? '',
+        model: process.env.GEMINI_MODEL ?? 'gemini-2.5-pro',
+        timeout: parseInt(process.env.GEMINI_TIMEOUT ?? '60000'),
+        max_tokens: parseInt(process.env.GEMINI_MAX_OUTPUT_TOKENS ?? '16384'),
+        temperature: parseFloat(process.env.GEMINI_TEMPERATURE ?? '0.2'),
       },
       claude: {
-        code_path: process.env.CLAUDE_CODE_PATH || '/usr/local/bin/claude',
-        timeout: parseInt(process.env.REQUEST_TIMEOUT || '300000'),
+        code_path: process.env.CLAUDE_CODE_PATH ?? '/usr/local/bin/claude',
+        timeout: parseInt(process.env.REQUEST_TIMEOUT ?? '300000'),
       },
       aistudio: {
         enabled: process.env.AISTUDIO_MCP_ENABLED !== 'false',
-        max_files: parseInt(process.env.GEMINI_MAX_FILES || '10'),
-        max_file_size: parseInt(process.env.GEMINI_MAX_TOTAL_FILE_SIZE || '100'),
+        max_files: parseInt(process.env.GEMINI_MAX_FILES ?? '10'),
+        max_file_size: parseInt(process.env.GEMINI_MAX_TOTAL_FILE_SIZE ?? '100'),
       },
       cache: {
         enabled: process.env.ENABLE_CACHING !== 'false',
-        ttl: parseInt(process.env.CACHE_TTL || '3600'),
+        ttl: parseInt(process.env.CACHE_TTL ?? '3600'),
       },
       logging: {
-        level: this.validateLogLevel(process.env.LOG_LEVEL) || 'info',
+        level: this.validateLogLevel(process.env.LOG_LEVEL) ?? 'info',
         file: process.env.LOG_FILE,
       },
     };

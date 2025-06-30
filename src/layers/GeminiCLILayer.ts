@@ -1,12 +1,25 @@
 import { execSync, spawn } from 'child_process';
 import { FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult } from '../core/types.js';
+
+// Task interface for better type safety
+interface GeminiTask {
+  type?: string;
+  action?: string;
+  prompt?: string;
+  request?: string;
+  input?: string;
+  useSearch?: boolean;
+  needsGrounding?: boolean;
+  files?: FileReference[];
+  [key: string]: unknown;
+}
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { OAuthManager } from '../auth/OAuthManager.js';
 import { getQuotaMonitor, QuotaMonitor } from '../utils/quotaMonitor.js';
-import { PromptOptimizer, OptimizationOptions } from '../utils/PromptOptimizer.js';
-import { SearchCache, CacheOptions } from '../utils/SearchCache.js';
+import { OptimizationOptions, PromptOptimizer } from '../utils/PromptOptimizer.js';
+import { CacheOptions, SearchCache } from '../utils/SearchCache.js';
 
 /**
  * GeminiCLILayer handles Gemini CLI integration with enhanced authentication support
@@ -109,7 +122,7 @@ export class GeminiCLILayer implements LayerInterface {
   /**
    * Check if this layer can handle the given task
    */
-  canHandle(task: any): boolean {
+  canHandle(task: GeminiTask): boolean {
     if (!task || typeof task !== 'object') {
       return false;
     }
@@ -140,7 +153,7 @@ export class GeminiCLILayer implements LayerInterface {
   /**
    * Execute a task through Gemini CLI
    */
-  async execute(task: any): Promise<LayerResult> {
+  async execute(task: GeminiTask): Promise<LayerResult> {
     return safeExecute(
       async () => {
         const startTime = Date.now();
@@ -173,13 +186,19 @@ export class GeminiCLILayer implements LayerInterface {
         // Route to appropriate execution method based on task type/action
         switch (task.action || task.type) {
           case 'grounded_search':
-            result = await this.executeWithGrounding(task.prompt || task.request, task);
+            const groundedResult = await this.executeWithGrounding(task.prompt || task.request || '', {
+              useSearch: task.useSearch || false,
+              files: task.files?.map(f => f.path) || [],
+              context: task.context as string | undefined,
+            });
+            result = groundedResult.content || 'Search completed';
             break;
           case 'contextual_analysis':
             result = await this.executeContextualAnalysis(task);
             break;
           case 'multimodal':
-            result = await this.processFiles(task.files, task.prompt || task.request);
+            const multimodalResult = await this.processFiles(task.files || [], task.prompt || task.request || '');
+            result = multimodalResult.content || 'Processing completed';
             break;
           default:
             result = await this.executeGeneral(task);
@@ -342,7 +361,7 @@ export class GeminiCLILayer implements LayerInterface {
   /**
    * Execute contextual analysis
    */
-  async executeContextualAnalysis(task: any): Promise<string> {
+  async executeContextualAnalysis(task: GeminiTask): Promise<string> {
     return retry(
       async () => {
         logger.debug('Executing contextual analysis', {
@@ -356,7 +375,7 @@ export class GeminiCLILayer implements LayerInterface {
         }
 
         const args = this.buildGeminiCommand(prompt, {
-          search: task.useSearch,
+          search: task.useSearch || false,
         });
 
         const output = await this.executeGeminiProcess(args);
@@ -389,7 +408,7 @@ export class GeminiCLILayer implements LayerInterface {
   /**
    * Get cost estimation for a task
    */
-  getCost(task: any): number {
+  getCost(task: GeminiTask): number {
     // Free tier: 1000 requests/day, then paid
     // Assuming free tier usage, cost is 0
     return 0;

@@ -10,11 +10,11 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
-  ListToolsRequestSchema,
-  McpError,
   ErrorCode,
   GetPromptRequestSchema,
-  ListPromptsRequestSchema
+  ListPromptsRequestSchema,
+  ListToolsRequestSchema,
+  McpError
 } from '@modelcontextprotocol/sdk/types.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { z } from 'zod';
@@ -320,9 +320,9 @@ class AIStudioMCPServer {
       
       // Extract image data from response
       let imageData = null;
-      let downloadUrl = null;
+      const downloadUrl = null;
       
-      if (result.candidates && result.candidates[0] && result.candidates[0].content.parts) {
+      if (result.candidates?.[0]?.content.parts) {
         for (const part of result.candidates[0].content.parts) {
           if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
             imageData = part.inlineData.data;

@@ -318,7 +318,7 @@ export class OAuthManager {
   /**
    * Check if cached auth status is still valid
    */
-  private isCacheValid(service: string): boolean {
+  private isCacheValid(_service: string): boolean {
     // For now, always revalidate to ensure accuracy
     // In the future, could implement TTL-based caching
     return false;
