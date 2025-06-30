@@ -468,14 +468,29 @@ export class MCPConfigManager {
     return `
 # Manual Claude Code MCP Setup Instructions
 
-## 1. Find your Claude Code configuration directory
+## Method A: Using Claude CLI (Recommended for v1.0.35+)
+
+If your Claude Code CLI supports the new MCP command:
+
+\`\`\`bash
+# Add CGMB to Claude Code
+claude mcp add claude-gemini-multimodal-bridge cgmb serve -e NODE_ENV=production
+
+# Verify the configuration
+claude mcp list
+claude mcp get claude-gemini-multimodal-bridge
+\`\`\`
+
+## Method B: Manual Configuration File (Legacy Method)
+
+### 1. Find your Claude Code configuration directory
 Common locations:
 - ~/.claude-code/
 - ~/.config/claude-code/
 - ~/Library/Application Support/Claude Code/ (macOS)
 - ~/AppData/Roaming/Claude Code/ (Windows)
 
-## 2. Create or edit mcp_servers.json
+### 2. Create or edit mcp_servers.json
 Add the following configuration to your mcp_servers.json file:
 
 \`\`\`json
@@ -490,24 +505,25 @@ Add the following configuration to your mcp_servers.json file:
 }
 \`\`\`
 
-## 3. Restart Claude Code
+### 3. Restart Claude Code
 After saving the configuration, restart Claude Code to load the new MCP server.
 
-## 4. Verify connection
+### 4. Verify connection
 Run: cgmb verify
 Then check if CGMB tools are available in Claude Code.
 
 ⚠️  **Important Notes:**
 - If the file already contains other MCP servers, add the CGMB configuration to the existing "mcpServers" object
 - Make sure to keep valid JSON syntax (proper commas, brackets, etc.)
-- Replace "your_api_key_here" with your actual Gemini API key if needed
+- The new CLI method (Method A) is preferred as it handles configuration automatically
 
 ## 5. Troubleshooting
 If the MCP server doesn't load:
 - Check Claude Code logs for error messages
-- Verify the file path in "args" exists and is accessible
+- Verify the cgmb command is in your PATH: which cgmb
 - Ensure your API keys are properly set in environment variables
 - Try running the command manually: ${cgmbConfig.command} ${cgmbConfig.args.join(' ')}
+- For new CLI method issues, check: claude mcp list
 `;
   }
 

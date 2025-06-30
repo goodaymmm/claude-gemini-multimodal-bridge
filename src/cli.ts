@@ -440,7 +440,65 @@ program
       
       console.log('🔧 Setting up Claude Code MCP integration...\n');
       
-      // Check current status first
+      // Check Claude Code CLI version and use appropriate method
+      let claudeVersion = '';
+      try {
+        claudeVersion = execSync('claude --version', { encoding: 'utf8' }).trim();
+        console.log(`Claude Code CLI version: ${claudeVersion}`);
+      } catch (error) {
+        console.log('⚠️  Could not detect Claude Code CLI version');
+      }
+      
+      // Check if claude mcp command is available (v1.0.35+)
+      let hasNewMCPCommand = false;
+      try {
+        execSync('claude mcp --help', { stdio: 'ignore' });
+        hasNewMCPCommand = true;
+        console.log('✅ Detected new Claude Code CLI with mcp command support\n');
+      } catch {
+        console.log('ℹ️  Using legacy MCP configuration method\n');
+      }
+      
+      // If new MCP command is available, use it instead
+      if (hasNewMCPCommand && !options.force) {
+        try {
+          // Check if already configured with new method
+          const mcpListOutput = execSync('claude mcp list', { encoding: 'utf8' });
+          if (mcpListOutput.includes('claude-gemini-multimodal-bridge')) {
+            console.log('✅ CGMB is already configured in Claude Code MCP');
+            console.log('\nCurrent configuration:');
+            const mcpGetOutput = execSync('claude mcp get claude-gemini-multimodal-bridge', { encoding: 'utf8' });
+            console.log(mcpGetOutput);
+            
+            if (!options.force) {
+              console.log('\n💡 To reconfigure, use: cgmb setup-mcp --force');
+              return;
+            }
+          }
+          
+          // Add CGMB using new method
+          console.log('Adding CGMB to Claude Code using new MCP command...');
+          const addCommand = 'claude mcp add claude-gemini-multimodal-bridge cgmb serve -e NODE_ENV=production';
+          
+          if (options.dryRun) {
+            console.log(`🧪 Dry Run: Would execute: ${addCommand}`);
+            return;
+          }
+          
+          execSync(addCommand, { stdio: 'inherit' });
+          console.log('\n✅ Successfully added CGMB to Claude Code MCP!');
+          console.log('\nNext steps:');
+          console.log('1. Restart Claude Code to load the new MCP configuration');
+          console.log('2. Run "cgmb verify" to test the connection');
+          console.log('3. Check that CGMB tools are available in Claude Code');
+          return;
+        } catch (error) {
+          console.log('⚠️  Failed to use new MCP command, falling back to legacy method');
+          logger.debug('MCP command error', { error: (error as Error).message });
+        }
+      }
+      
+      // Check current status first (legacy method)
       const status = await getMCPStatus();
       
       console.log('📊 Current MCP Configuration Status');
