@@ -5,6 +5,8 @@ import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { OAuthManager } from '../auth/OAuthManager.js';
 import { getQuotaMonitor, QuotaMonitor } from '../utils/quotaMonitor.js';
+import { PromptOptimizer, OptimizationOptions } from '../utils/PromptOptimizer.js';
+import { SearchCache, CacheOptions } from '../utils/SearchCache.js';
 
 /**
  * GeminiCLILayer handles Gemini CLI integration with enhanced authentication support
@@ -14,9 +16,11 @@ export class GeminiCLILayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private oauthManager: OAuthManager;
   private quotaMonitor: QuotaMonitor;
+  private promptOptimizer: PromptOptimizer;
+  private searchCache: SearchCache;
   private geminiPath?: string;
   private isInitialized = false;
-  private readonly DEFAULT_TIMEOUT = 60000; // 1 minute
+  private readonly DEFAULT_TIMEOUT = 120000; // 2 minutes
   private readonly MAX_RETRIES = 2;
   private readonly RATE_LIMIT = {
     requests: 60,
@@ -32,6 +36,16 @@ export class GeminiCLILayer implements LayerInterface {
     this.authVerifier = new AuthVerifier();
     this.oauthManager = new OAuthManager();
     this.quotaMonitor = getQuotaMonitor(); // Defaults to free tier
+    
+    // Initialize prompt optimizer and search cache
+    this.promptOptimizer = new PromptOptimizer();
+    this.searchCache = new SearchCache({
+      ttl: parseInt(process.env.CACHE_TTL || '1800000'), // 30 minutes default
+      maxEntries: parseInt(process.env.MAX_CACHE_ENTRIES || '1000'),
+      enableMetrics: process.env.ENABLE_CACHING === 'true',
+      similarityThreshold: 0.8
+    });
+    
     this.resetDailyCounterIfNeeded();
   }
 
@@ -72,7 +86,7 @@ export class GeminiCLILayer implements LayerInterface {
       {
         operationName: 'initialize-gemini-cli-layer',
         layer: 'gemini',
-        timeout: 30000,
+        timeout: 90000,
       }
     );
   }
@@ -204,26 +218,74 @@ export class GeminiCLILayer implements LayerInterface {
   async executeWithGrounding(prompt: string, context: GroundingContext): Promise<GroundedResult> {
     return retry(
       async () => {
+        const startTime = Date.now();
+        let optimizedPrompt = prompt;
+        
         logger.debug('Executing grounded search', {
           promptLength: prompt.length,
           useSearch: context.useSearch,
           searchQuery: context.searchQuery?.substring(0, 50),
         });
 
-        const args = this.buildGeminiCommand(prompt, {
+        // Check cache first for search tasks
+        if (context.useSearch !== false) {
+          const cachedResult = await this.searchCache.get(prompt, 'gemini');
+          if (cachedResult) {
+            logger.debug('Cache hit for grounded search', {
+              promptLength: prompt.length,
+              cacheAge: Date.now() - cachedResult.timestamp
+            });
+            return cachedResult;
+          }
+        }
+
+        // Optimize prompt for search tasks
+        if (context.useSearch !== false && prompt.length > 500) {
+          try {
+            const optimization = await this.promptOptimizer.optimizeForWebSearch(prompt, {
+              maxTokens: 4000,
+              preserveContext: true,
+              removeRedundancy: true,
+              extractKeywords: true,
+              useTemplates: true
+            });
+            
+            optimizedPrompt = optimization.optimizedPrompt;
+            
+            logger.info('Prompt optimized for search', {
+              originalLength: prompt.length,
+              optimizedLength: optimizedPrompt.length,
+              reductionPercentage: optimization.reductionPercentage.toFixed(1),
+              methods: optimization.optimizationMethods.join(', ')
+            });
+          } catch (error) {
+            logger.warn('Prompt optimization failed, using original', { error });
+            optimizedPrompt = prompt;
+          }
+        }
+
+        const args = this.buildGeminiCommand(optimizedPrompt, {
           search: context.useSearch !== false, // Default to true
           files: context.files || [],
           context: context.context || '',
         });
 
         const output = await this.executeGeminiProcess(args);
+        const processingTime = Date.now() - startTime;
         
-        return {
+        const result: GroundedResult = {
           content: output.trim(),
           sources: this.extractSources(output),
           grounded: true,
           search_used: context.useSearch !== false,
         };
+
+        // Cache the result for search tasks
+        if (context.useSearch !== false) {
+          await this.searchCache.set(prompt, result, 'gemini', processingTime);
+        }
+        
+        return result;
       },
       {
         maxAttempts: this.MAX_RETRIES,
@@ -664,7 +726,12 @@ export class GeminiCLILayer implements LayerInterface {
       return task.timeout;
     }
     
-    return Math.max(30000, this.getEstimatedDuration(task) + 15000); // Minimum 30s
+    // WebSearch tasks get extended timeout
+    if (task.useSearch || task.action?.includes('search') || task.prompt?.toLowerCase().includes('search')) {
+      return Math.max(180000, this.getEstimatedDuration(task) + 30000); // Minimum 3 minutes for search
+    }
+    
+    return Math.max(90000, this.getEstimatedDuration(task) + 15000); // Minimum 90s for other tasks
   }
 
   /**
@@ -786,5 +853,281 @@ export class GeminiCLILayer implements LayerInterface {
     // Estimate based on output length
     const outputTokens = Math.ceil(result.length / 4);
     return basePrice + (outputTokens * 0.000001); // Rough token pricing
+  }
+
+  /**
+   * Process multiple search queries in parallel for improved performance
+   */
+  async executeParallelSearch(queries: string[], context: GroundingContext): Promise<GroundedResult[]> {
+    const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_REQUESTS || '3');
+    const results: GroundedResult[] = [];
+    
+    logger.info('Starting parallel search execution', {
+      queryCount: queries.length,
+      maxConcurrent
+    });
+
+    // Process queries in batches to avoid overwhelming the API
+    for (let i = 0; i < queries.length; i += maxConcurrent) {
+      const batch = queries.slice(i, i + maxConcurrent);
+      const batchPromises = batch.map(async (query) => {
+        try {
+          return await this.executeWithGrounding(query, context);
+        } catch (error) {
+          logger.warn('Parallel search query failed', { 
+            query: query.substring(0, 50), 
+            error: (error as Error).message 
+          });
+          return {
+            content: `Search failed: ${(error as Error).message}`,
+            sources: [],
+            grounded: false,
+            search_used: true,
+          };
+        }
+      });
+
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      batchResults.forEach((result) => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          results.push({
+            content: `Batch processing failed: ${result.reason}`,
+            sources: [],
+            grounded: false,
+            search_used: true,
+          });
+        }
+      });
+
+      // Rate limiting between batches
+      if (i + maxConcurrent < queries.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+
+    logger.info('Parallel search execution completed', {
+      totalQueries: queries.length,
+      successfulResults: results.filter(r => r.grounded).length
+    });
+
+    return results;
+  }
+
+  /**
+   * Batch optimize multiple prompts for better efficiency
+   */
+  async batchOptimizePrompts(prompts: string[], options: OptimizationOptions = {}): Promise<string[]> {
+    const optimizedPrompts: string[] = [];
+    
+    logger.debug('Starting batch prompt optimization', { count: prompts.length });
+
+    // Process optimization in parallel for better performance
+    const optimizationPromises = prompts.map(async (prompt) => {
+      try {
+        if (prompt.length > 500) {
+          const optimization = await this.promptOptimizer.optimizeForWebSearch(prompt, options);
+          return optimization.optimizedPrompt;
+        }
+        return prompt;
+      } catch (error) {
+        logger.warn('Prompt optimization failed in batch', { 
+          prompt: prompt.substring(0, 50), 
+          error 
+        });
+        return prompt;
+      }
+    });
+
+    const results = await Promise.allSettled(optimizationPromises);
+    
+    results.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        optimizedPrompts.push(result.value);
+      } else {
+        optimizedPrompts.push(''); // Fallback for failed optimization
+      }
+    });
+
+    logger.debug('Batch prompt optimization completed', {
+      originalCount: prompts.length,
+      optimizedCount: optimizedPrompts.length
+    });
+
+    return optimizedPrompts;
+  }
+
+  /**
+   * Smart query splitting for complex prompts
+   */
+  async splitComplexQuery(prompt: string): Promise<string[]> {
+    // Split complex queries into smaller, focused sub-queries
+    const queries: string[] = [];
+    
+    // Look for numbered points or bullet points
+    const numberedPattern = /(?:^|\n)\s*[0-9]+\.\s*([^.\n]+)/gm;
+    const bulletPattern = /(?:^|\n)\s*[•\-*]\s*([^.\n]+)/gm;
+    
+    let match;
+    
+    // Extract numbered items
+    while ((match = numberedPattern.exec(prompt)) !== null) {
+      const query = match[1]?.trim();
+      if (query && query.length > 10) {
+        queries.push(query);
+      }
+    }
+    
+    // Extract bullet points if no numbered items found
+    if (queries.length === 0) {
+      while ((match = bulletPattern.exec(prompt)) !== null) {
+        const query = match[1]?.trim();
+        if (query && query.length > 10) {
+          queries.push(query);
+        }
+      }
+    }
+    
+    // If no structured content found, split by sentences for very long prompts
+    if (queries.length === 0 && prompt.length > 2000) {
+      const sentences = prompt.split(/[。！？]/).filter(s => s.trim().length > 50);
+      queries.push(...sentences.slice(0, 5)); // Limit to 5 sentences
+    }
+    
+    // Fallback: return original prompt if no split possible
+    if (queries.length === 0) {
+      queries.push(prompt);
+    }
+    
+    logger.debug('Query splitting completed', {
+      originalLength: prompt.length,
+      splitCount: queries.length,
+      avgQueryLength: queries.reduce((sum, q) => sum + q.length, 0) / queries.length
+    });
+    
+    return queries;
+  }
+
+  /**
+   * Connection pooling for Gemini CLI processes
+   */
+  private connectionPool: Map<string, { process: any; lastUsed: number; isAvailable: boolean }> = new Map();
+  private readonly maxPoolSize = 5;
+  private readonly connectionTimeout = 300000; // 5 minutes
+
+  /**
+   * Get or create a pooled connection
+   */
+  private async getPooledConnection(commandHash: string): Promise<any> {
+    // Cleanup expired connections
+    this.cleanupExpiredConnections();
+    
+    // Try to reuse existing connection
+    const existingConnection = this.connectionPool.get(commandHash);
+    if (existingConnection && existingConnection.isAvailable) {
+      existingConnection.lastUsed = Date.now();
+      existingConnection.isAvailable = false;
+      return existingConnection.process;
+    }
+    
+    // Create new connection if pool not full
+    if (this.connectionPool.size < this.maxPoolSize) {
+      const process = null; // Will be created when needed
+      this.connectionPool.set(commandHash, {
+        process,
+        lastUsed: Date.now(),
+        isAvailable: false
+      });
+      return process;
+    }
+    
+    // Pool is full, wait for available connection
+    return await this.waitForAvailableConnection();
+  }
+
+  /**
+   * Release connection back to pool
+   */
+  private releaseConnection(commandHash: string): void {
+    const connection = this.connectionPool.get(commandHash);
+    if (connection) {
+      connection.isAvailable = true;
+      connection.lastUsed = Date.now();
+    }
+  }
+
+  /**
+   * Cleanup expired connections
+   */
+  private cleanupExpiredConnections(): void {
+    const now = Date.now();
+    for (const [hash, connection] of this.connectionPool.entries()) {
+      if (now - connection.lastUsed > this.connectionTimeout) {
+        try {
+          connection.process?.kill?.();
+        } catch (error) {
+          // Ignore cleanup errors
+        }
+        this.connectionPool.delete(hash);
+      }
+    }
+  }
+
+  /**
+   * Wait for available connection
+   */
+  private async waitForAvailableConnection(): Promise<any> {
+    return new Promise((resolve) => {
+      const checkAvailable = () => {
+        for (const connection of this.connectionPool.values()) {
+          if (connection.isAvailable) {
+            connection.isAvailable = false;
+            connection.lastUsed = Date.now();
+            resolve(connection.process);
+            return;
+          }
+        }
+        // Check again after 100ms
+        setTimeout(checkAvailable, 100);
+      };
+      checkAvailable();
+    });
+  }
+
+  /**
+   * Get search cache statistics
+   */
+  getCacheStats() {
+    return this.searchCache.getStats();
+  }
+
+  /**
+   * Clear search cache
+   */
+  async clearCache(): Promise<void> {
+    await this.searchCache.clear();
+  }
+
+  /**
+   * Cleanup expired cache entries
+   */
+  async cleanupCache(): Promise<number> {
+    return await this.searchCache.cleanup();
+  }
+
+  /**
+   * Export cache to file
+   */
+  async exportCache(filePath: string): Promise<void> {
+    await this.searchCache.exportToFile(filePath);
+  }
+
+  /**
+   * Import cache from file
+   */
+  async importCache(filePath: string): Promise<void> {
+    await this.searchCache.importFromFile(filePath);
   }
 }

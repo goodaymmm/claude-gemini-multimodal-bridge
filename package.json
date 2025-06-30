@@ -1,7 +1,7 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.0.0",
-  "description": "Production-ready multi-layer AI integration bridge with enhanced CLI commands, direct API access, and seamless MCP integration for Claude Code, Gemini CLI, and Google AI Studio",
+  "version": "1.0.1",
+  "description": "Production-ready multi-layer AI integration bridge with performance optimizations, intelligent caching, prompt optimization, and seamless MCP integration for Claude Code, Gemini CLI, and Google AI Studio",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -10,7 +10,7 @@
   "mcp": {
     "name": "cgmb",
     "description": "Claude-Gemini Multimodal Bridge - Multi-layer AI integration with custom AI Studio MCP server",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "command": "cgmb",
     "args": ["serve"],
     "servers": {
@@ -31,6 +31,9 @@
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "typecheck": "tsc --noEmit",
+    "test:unit": "echo \"Unit tests not yet implemented\" && exit 0",
+    "test:integration": "npm run verify && cgmb test",
+    "benchmark": "node scripts/benchmark.js",
     "clean": "rimraf dist",
     "prepublish": "npm run clean && npm run build",
     "postinstall": "node scripts/postinstall.cjs",
@@ -49,6 +52,9 @@
     "ai-integration",
     "workflow-automation",
     "bridge",
+    "performance-optimization",
+    "intelligent-caching",
+    "prompt-optimization",
     "claude-code",
     "gemini-cli",
     "google-ai-studio",
@@ -57,7 +63,10 @@
     "model-context-protocol",
     "ai-orchestration",
     "direct-api-integration",
-    "production-ready"
+    "production-ready",
+    "search-cache",
+    "adaptive-timeouts",
+    "parallel-processing"
   ],
   "author": "goodaymmm",
   "license": "MIT",
