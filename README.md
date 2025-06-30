@@ -200,6 +200,20 @@ claude "Hello! Test the enhanced capabilities."
 
 **Automated MCP Integration**: CGMB now automatically configures Claude Code's MCP settings safely without overwriting existing configurations.
 
+## ⚠️ Important Usage Note
+
+**CGMB Trigger Requirement**: When using CGMB through Claude Code, you must include "CGMB" in your prompts to activate the multimodal bridge functionality.
+
+### Examples:
+```
+✅ "CGMB, analyze this document for key insights"
+✅ "Help me with CGMB to process these images"
+✅ "Using CGMB, search for the latest AI trends"
+❌ "Analyze this document" (won't trigger CGMB)
+```
+
+This ensures that CGMB is properly invoked as an MCP server within Claude Code.
+
 ## 🚀 Enhanced CLI Commands
 
 ### Direct Layer Access (NEW!)

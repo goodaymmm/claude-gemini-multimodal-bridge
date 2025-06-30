@@ -664,7 +664,7 @@ export class GeminiCLILayer implements LayerInterface {
       return task.timeout;
     }
     
-    return this.getEstimatedDuration(task) + 15000; // Add 15s buffer
+    return Math.max(30000, this.getEstimatedDuration(task) + 15000); // Minimum 30s
   }
 
   /**
