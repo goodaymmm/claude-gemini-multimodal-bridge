@@ -901,7 +901,7 @@ program
   .description('Direct Gemini CLI processing with search and grounding')
   .option('-p, --prompt <text>', 'Prompt for Gemini CLI')
   .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
-  .option('--search', 'Enable search/grounding functionality')
+  .option('--grounding', 'Enable search/grounding functionality')
   .option('-f, --file <path>', 'File to analyze with prompt')
   .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
   .action(async (options) => {
@@ -924,14 +924,14 @@ program
           args.push('-m', options.model);
         }
         args.push('-p', `"${options.prompt}"`);
-        if (options.search) {
+        if (options.grounding) {
           args.push('--grounding');
         }
         
         try {
           const result = execSync(args.join(' '), { 
             encoding: 'utf8',
-            timeout: options.search ? 180000 : 90000,
+            timeout: options.grounding ? 180000 : 90000,
             stdio: 'pipe'
           });
           
@@ -966,7 +966,7 @@ program
         result = await geminiLayer.execute({
           type: 'text_processing',
           prompt: options.prompt,
-          useSearch: options.search
+          useSearch: options.grounding
         });
       }
       

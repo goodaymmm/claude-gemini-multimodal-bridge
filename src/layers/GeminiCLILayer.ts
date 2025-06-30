@@ -509,7 +509,7 @@ export class GeminiCLILayer implements LayerInterface {
 
     // Add search flag if enabled
     if (options.search) {
-      args.push('--search');
+      args.push('--grounding');
     }
 
     // Add files if provided
