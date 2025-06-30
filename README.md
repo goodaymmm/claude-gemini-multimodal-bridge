@@ -11,11 +11,12 @@
 ### 🆕 **New in Latest Version (v1.0.0)**
 - 🚀 **Enhanced CLI Commands**: Direct access to all AI layers without complex workflows
 - ✅ **Fixed Error.md Issues**: No more "unknown command" errors or timeout problems  
-- 🔧 **Resolved AI Studio Integration**: Direct API access bypassing MCP server dependencies
+- 🔧 **Custom AI Studio MCP Server**: Built-in MCP server replaces non-existent aistudio-mcp-server package
 - 🎯 **Streamlined Gemini CLI**: Seamless search and grounding functionality
 - 📊 **Production-Ready**: Complete test suite, linting, and dependency verification
 - 🛡️ **Improved Authentication**: Auto-fix capabilities and better error diagnostics
 - ⚡ **Real Multimodal Processing**: Actual content generation and analysis (not just initialization)
+- 🖼️ **AI Studio Image Generation**: Direct support for Imagen models through custom MCP server
 
 ### 🏗️ **Core Features**
 - 🔗 **3-Layer Architecture**: Claude Code ↔ Gemini CLI ↔ AI Studio
@@ -93,7 +94,7 @@ npm install -g claude-gemini-multimodal-bridge
 
 # That's it! The postinstall script automatically:
 # ✅ Installs Gemini CLI (@google/gemini-cli)
-# ✅ Installs AI Studio MCP Server (aistudio-mcp-server)  
+# ✅ Builds custom AI Studio MCP Server (included in package)
 # ✅ Sets up Claude Code MCP integration
 # ✅ Creates .env template file
 # ✅ Verifies system requirements
@@ -122,12 +123,13 @@ If automatic installation fails, you can install manually:
 # Install required components
 npm install -g @anthropic-ai/claude-code
 npm install -g @google/gemini-cli
-npm install -g aistudio-mcp-server
 
 # Clone and build CGMB
 git clone https://github.com/goodaymmm/claude-gemini-multimodal-bridge.git
 cd claude-gemini-multimodal-bridge
 npm install && npm run build && npm link
+
+# Note: AI Studio MCP Server is built-in to CGMB, no separate installation needed
 ```
 
 ### 🔑 **Authentication Setup**
@@ -825,6 +827,70 @@ cgmb test --file example.pdf --prompt "Analyze this document"
 # Check system status
 cgmb info
 ```
+
+## 🖼️ Custom AI Studio MCP Server
+
+CGMB includes a built-in custom MCP server for AI Studio integration, replacing the non-existent `aistudio-mcp-server` package. This server provides direct access to Google AI Studio capabilities including image generation with Imagen models.
+
+### Features
+
+- **Image Generation**: Generate images using AI Studio's Imagen models
+- **Image Analysis**: Analyze images using Gemini's multimodal capabilities
+- **Document Processing**: Extract and analyze content from various document formats
+- **Multimodal Processing**: Handle multiple files and modalities simultaneously
+
+### Available Tools
+
+#### `generate_image`
+Generate images using AI Studio API with Imagen models.
+
+```json
+{
+  "prompt": "A futuristic city at sunset",
+  "numberOfImages": 2,
+  "aspectRatio": "16:9",
+  "personGeneration": "ALLOW",
+  "model": "gemini-2.0-flash-preview-image-generation"
+}
+```
+
+#### `analyze_image`
+Analyze images using Gemini multimodal capabilities.
+
+```json
+{
+  "imagePath": "/path/to/image.jpg",
+  "prompt": "Describe what you see in detail",
+  "model": "gemini-2.0-flash-exp"
+}
+```
+
+#### `multimodal_process`
+Process multiple files with custom instructions.
+
+```json
+{
+  "files": [
+    {"path": "/path/to/doc.pdf", "type": "document"},
+    {"path": "/path/to/image.png", "type": "image"}
+  ],
+  "instructions": "Compare these files and summarize key points"
+}
+```
+
+### Running the MCP Server Standalone
+
+```bash
+# Run the AI Studio MCP server directly
+npm run mcp:aistudio
+
+# Test with a dummy API key
+npm run mcp:test
+```
+
+### Integration with Claude Code
+
+The AI Studio MCP server is automatically integrated when you run `cgmb serve`. It handles all AI Studio-related requests transparently, providing enhanced multimodal capabilities to Claude Code.
 
 ## 🐛 Troubleshooting
 

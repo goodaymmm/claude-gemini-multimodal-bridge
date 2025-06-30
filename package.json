@@ -9,10 +9,17 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "Claude-Gemini Multimodal Bridge - Multi-layer AI integration",
+    "description": "Claude-Gemini Multimodal Bridge - Multi-layer AI integration with custom AI Studio MCP server",
     "version": "1.0.0",
     "command": "cgmb",
-    "args": ["serve"]
+    "args": ["serve"],
+    "servers": {
+      "ai-studio": {
+        "description": "Custom AI Studio MCP server for image generation and multimodal processing",
+        "command": "node",
+        "args": ["dist/mcp-servers/ai-studio-mcp-server.js"]
+      }
+    }
   },
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
@@ -30,7 +37,9 @@
     "demo:android": "node examples/android_monetization.js",
     "demo:gemini": "node examples/gemini_search_demo.js",
     "demo:aistudio": "node examples/aistudio_image_demo.js",
-    "demo:all": "npm run demo:android && npm run demo:gemini && npm run demo:aistudio"
+    "demo:all": "npm run demo:android && npm run demo:gemini && npm run demo:aistudio",
+    "mcp:aistudio": "node dist/mcp-servers/ai-studio-mcp-server.js",
+    "mcp:test": "AI_STUDIO_API_KEY=test node dist/mcp-servers/ai-studio-mcp-server.js"
   },
   "keywords": [
     "claude",
@@ -62,6 +71,8 @@
   "homepage": "https://github.com/goodaymmm/claude-gemini-multimodal-bridge#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "@google/generative-ai": "^0.24.1",
+    "ansi-escapes": "^7.0.0",
     "zod": "^3.22.0",
     "winston": "^3.11.0",
     "node-cache": "^5.1.2",

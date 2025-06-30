@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { createWriteStream } from 'fs';
 import { mkdir } from 'fs/promises';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { 
   AudioAnalysisResult, 
   AudioGenOptions, 
@@ -939,8 +939,9 @@ export class AIStudioLayer implements LayerInterface {
         timeout,
       });
 
-      // Use npx to run aistudio-mcp-server
-      const child = spawn('npx', ['-y', 'aistudio-mcp-server', command, JSON.stringify(params)], {
+      // Use our custom AI Studio MCP server with proper MCP protocol
+      const mcpServerPath = join(process.cwd(), 'dist', 'mcp-servers', 'ai-studio-mcp-server.js');
+      const child = spawn('node', [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
         env: {
@@ -961,6 +962,20 @@ export class AIStudioLayer implements LayerInterface {
         reject(new Error(`AI Studio MCP command timeout after ${timeout}ms`));
       }, timeout);
 
+      // Send MCP request
+      const mcpRequest = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: command,
+          arguments: params
+        }
+      };
+
+      child.stdin.write(JSON.stringify(mcpRequest) + '\n');
+      child.stdin.end();
+
       child.stdout.on('data', (data) => {
         output += data.toString();
       });
@@ -974,7 +989,23 @@ export class AIStudioLayer implements LayerInterface {
         
         if (code === 0) {
           try {
-            const result = JSON.parse(output.trim() || '{}');
+            // Parse MCP response
+            const lines = output.trim().split('\n').filter(line => line.trim());
+            let result = {};
+            
+            for (const line of lines) {
+              try {
+                const mcpResponse = JSON.parse(line);
+                if (mcpResponse.result) {
+                  result = mcpResponse.result;
+                  break;
+                }
+              } catch (parseError) {
+                // Skip non-JSON lines (like server startup messages)
+                continue;
+              }
+            }
+            
             logger.debug('MCP command completed successfully', {
               command,
               outputLength: output.length,

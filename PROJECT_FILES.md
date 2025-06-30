@@ -2,7 +2,7 @@
 
 This file lists all the created files for the CGMB project.
 
-## ✨ Recent Updates (2025-06-30) - Enhanced CLI v1.0.0
+## ✨ Recent Updates (2025-07-01) - Enhanced CLI v1.0.0
 - 🚀 **Simplified MCP Integration**: "add MCP" style easy setup
 - 🔧 **Automatic Environment Loading**: Smart .env file detection  
 - 🛡️ **Security Enhanced**: No hardcoded API keys in MCP config
@@ -10,7 +10,8 @@ This file lists all the created files for the CGMB project.
 - ✅ **Error.md/Error2.md/Error3.md Issues Resolution**: Fixed "unknown command" and timeout problems
 - 🎆 **Enhanced CLI Commands**: Direct layer access (`cgmb gemini`, `cgmb aistudio`, `cgmb process`)
 - 🎯 **True Multimodal Processing**: Real content generation and analysis (not just initialization)
-- 🔧 **AI Studio Integration Enhancement**: Direct API access bypassing MCP server dependencies
+- 🔧 **Custom AI Studio MCP Server**: Built-in MCP server replaces non-existent aistudio-mcp-server package
+- 🖼️ **AI Studio Image Generation**: Direct support for Imagen models through custom MCP server
 - 📊 **Production-Ready**: Demo scripts and dependency verification
 
 ## Project Root Files
@@ -41,6 +42,9 @@ This file lists all the created files for the CGMB project.
 - src/layers/ClaudeCodeLayer.ts   # Claude Code integration layer
 - src/layers/GeminiCLILayer.ts    # Gemini CLI integration layer  
 - src/layers/AIStudioLayer.ts     # Google AI Studio MCP layer
+
+### MCP Servers (/src/mcp-servers) ✅ COMPLETED
+- src/mcp-servers/ai-studio-mcp-server.ts  # Custom AI Studio MCP server implementation
 
 ### Additional Utilities (/src/utils) ✅ COMPLETED
 - src/utils/envLoader.ts         # Smart environment variable loading
@@ -112,7 +116,8 @@ This file lists all the created files for the CGMB project.
 - ✅ **Enhanced CLI Commands** (cgmb gemini, cgmb aistudio, cgmb process, cgmb test)
 - ✅ **Error.md/Error2.md/Error3.md Issues Resolution** (fixed "unknown command" and timeout problems)
 - ✅ **Production-Ready Demo Scripts** (real-world examples for practical use)
-- ✅ **AI Studio Integration Enhancement** (direct API access, bypassed MCP server dependencies)
+- ✅ **Custom AI Studio MCP Server** (built-in server replaces non-existent npm package)
+- ✅ **AI Studio Image Generation** (Imagen models support through Gemini API)
 
 🔄 **In Progress**
 - NPM package final publication preparation
@@ -178,6 +183,10 @@ This file lists all the created files for the CGMB project.
 - `npm run demo:gemini`      # Run Gemini CLI search demo
 - `npm run demo:aistudio`    # Run AI Studio multimodal demo
 - `npm run demo:all`         # Run all demo scripts
+
+### MCP Server Commands
+- `npm run mcp:aistudio`     # Run AI Studio MCP server standalone
+- `npm run mcp:test`         # Test MCP server with dummy API key
 
 ### Enhanced CLI Commands
 - `cgmb --help`              # Show CLI help
