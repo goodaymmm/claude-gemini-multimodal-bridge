@@ -898,10 +898,10 @@ program
 // Direct Gemini CLI command
 program
   .command('gemini')
-  .description('Direct Gemini CLI processing with search and grounding')
+  .description('Direct Gemini CLI processing (use --grounding for web search)')
   .option('-p, --prompt <text>', 'Prompt for Gemini CLI')
   .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
-  .option('--grounding', 'Enable search/grounding functionality')
+  .option('--grounding', 'Enable web search functionality via Google grounding')
   .option('-f, --file <path>', 'File to analyze with prompt')
   .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
   .action(async (options) => {
@@ -1209,6 +1209,17 @@ async function checkCommand(command: string): Promise<boolean> {
     throw new Error(`Command failed: ${command}`);
   }
 }
+
+// Handle unknown options with helpful error messages
+program.on('option:*', function() {
+  const unknownOption = this.args[0];
+  if (unknownOption === '--search') {
+    console.error(`\nError: Unknown option '--search'`);
+    console.error(`\n💡 Did you mean '--grounding'? This enables web search functionality.`);
+    console.error(`\nExample: cgmb gemini -p "your question" --grounding\n`);
+    process.exit(1);
+  }
+});
 
 // Parse command line arguments
 program.parse();
