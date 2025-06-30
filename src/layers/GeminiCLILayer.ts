@@ -719,23 +719,23 @@ export class GeminiCLILayer implements LayerInterface {
   private validateGeminiCommand(args: string[]): void {
     // Allow system commands like --version, --help
     const systemCommands = ['--version', '--help', '-h', '-v'];
-    if (args.length === 1 && systemCommands.includes(args[0])) {
+    if (args.length === 1 && args[0] && systemCommands.includes(args[0])) {
       return;
     }
 
     // Check for common incorrect patterns that caused the Error.md issue
     const hasPromptFlag = args.includes('-p') || args.includes('--prompt');
     const hasQuotedLongText = args.some(arg => 
-      arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@')
+      arg && arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@')
     );
 
     // CRITICAL: Detect the exact error pattern from Error.md (line 3)
     // Where long prompts were passed as direct arguments without -p flag
     if (hasQuotedLongText && !hasPromptFlag) {
-      const longArg = args.find(arg => arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@'));
+      const longArg = args.find(arg => arg && arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@'));
       logger.error('Invalid Gemini CLI usage detected', {
         issue: 'Long prompt passed as direct argument instead of using -p flag',
-        problematicArg: longArg?.substring(0, 100) + '...',
+        problematicArg: longArg ? longArg.substring(0, 100) + '...' : 'unknown',
         correctUsage: 'Use buildGeminiCommand() or pass prompt with -p flag',
         errorPattern: 'This matches the Error.md line 3 issue'
       });
@@ -748,10 +748,10 @@ export class GeminiCLILayer implements LayerInterface {
     }
 
     // Additional validation: Ensure prompts use proper flags
-    if (!hasPromptFlag && args.length > 0 && !args[0].startsWith('-') && !args[0].startsWith('@')) {
+    if (!hasPromptFlag && args.length > 0 && args[0] && !args[0].startsWith('-') && !args[0].startsWith('@')) {
       // This might be a direct prompt argument
       const potentialPrompt = args[0];
-      if (potentialPrompt.length > 20) { // Likely a prompt, not a command
+      if (potentialPrompt && potentialPrompt.length > 20) { // Likely a prompt, not a command
         logger.warn('Potential incorrect Gemini CLI usage', {
           firstArg: potentialPrompt.substring(0, 50) + '...',
           suggestion: 'Use -p flag for prompts'
