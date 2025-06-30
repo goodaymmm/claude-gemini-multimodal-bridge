@@ -27,7 +27,8 @@
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "clean": "rimraf dist",
-    "prepublish": "npm run clean && npm run build"
+    "prepublish": "npm run clean && npm run build",
+    "postinstall": "node scripts/postinstall.cjs"
   },
   "keywords": [
     "claude",
@@ -71,6 +72,10 @@
     "@typescript-eslint/parser": "^6.13.0",
     "eslint": "^8.54.0",
     "rimraf": "^5.0.0"
+  },
+  "optionalDependencies": {
+    "aistudio-mcp-server": "^1.0.0",
+    "@google/gemini-cli": "*"
   },
   "engines": {
     "node": ">=22.0.0",

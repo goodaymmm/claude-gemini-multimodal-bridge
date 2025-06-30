@@ -8,6 +8,14 @@
 
 ## ✨ Features
 
+### 🆕 **New in Latest Version**
+- ⚡ **Automatic Installation**: One-command setup with postinstall script
+- 🔧 **Smart Dependency Management**: Auto-installs Gemini CLI and AI Studio MCP
+- 🎯 **Intelligent MCP Integration**: Automated Claude Code configuration
+- 🛡️ **Enhanced Error Handling**: Improved authentication and diagnostics
+- 📊 **Better User Guidance**: Interactive setup wizard and clear instructions
+
+### 🏗️ **Core Features**
 - 🔗 **3-Layer Architecture**: Claude Code ↔ Gemini CLI ↔ AI Studio
 - 🎯 **Adaptive Execution**: Automatically routes tasks to optimal AI layer
 - 📊 **Multimodal Processing**: Images, Audio, PDFs, Documents
@@ -62,39 +70,67 @@ graph TD
 
 ## 🚀 Quick Start
 
-### Prerequisites (Required First!)
+### ✨ **NEW: Automatic Installation (Recommended)**
 
-⚠️  **IMPORTANT**: Complete authentication setup BEFORE installing CGMB
+🎉 **One-command setup** with automatic dependency resolution and MCP integration:
 
 ```bash
-# 1. Install Gemini CLI first
-npm install -g @google/gemini-cli
+# Automatic installation with postinstall magic
+npm install -g claude-gemini-multimodal-bridge
 
-# 2. Authenticate Gemini CLI (CRITICAL!)
-gemini auth  # Follow OAuth flow in browser
-# OR set API key: export GEMINI_API_KEY=your_key
-
-# 3. Verify authentication works
-gemini "Hello, test prompt"
-
-# 4. Install Claude Code (requires separate auth)
-npm install -g @anthropic-ai/claude-code
+# That's it! The postinstall script automatically:
+# ✅ Installs Gemini CLI (@google/gemini-cli)
+# ✅ Installs AI Studio MCP Server (aistudio-mcp-server)  
+# ✅ Sets up Claude Code MCP integration
+# ✅ Creates .env template file
+# ✅ Verifies system requirements
 ```
 
-### Installation
+### 🔧 **Interactive Setup**
 
-**Option 1: Clone and Build (Recommended)**
+After installation, run the guided authentication setup:
+
 ```bash
-# Clone the repository
+# Interactive authentication wizard
+cgmb auth --interactive
+
+# This will guide you through:
+# 1. Gemini CLI OAuth authentication
+# 2. AI Studio API key setup
+# 3. Claude Code verification
+# 4. MCP integration confirmation
+```
+
+### 📋 **Manual Installation (If Needed)**
+
+If automatic installation fails, you can install manually:
+
+```bash
+# Install required components
+npm install -g @anthropic-ai/claude-code
+npm install -g @google/gemini-cli
+npm install -g aistudio-mcp-server
+
+# Clone and build CGMB
 git clone https://github.com/goodaymmm/claude-gemini-multimodal-bridge.git
 cd claude-gemini-multimodal-bridge
+npm install && npm run build && npm link
+```
 
-# Install dependencies and build
-npm install
-npm run build
+### 🔑 **Authentication Setup**
 
-# Make CLI globally available
-npm link
+Get your API key from [Google AI Studio](https://aistudio.google.com/app/apikey):
+
+```bash
+# Set your API key (NEW variable name)
+echo "AI_STUDIO_API_KEY=your_key_here" >> .env
+
+# Authenticate Gemini CLI (OAuth recommended)
+gemini auth  # Follow browser authentication flow
+
+# Verify everything works
+cgmb verify
+cgmb auth-status --verbose
 ```
 
 > **WSL Users**: Run `nvm use 22.17` before installation if you encounter version errors.

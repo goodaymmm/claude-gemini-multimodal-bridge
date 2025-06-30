@@ -199,14 +199,15 @@ export class MCPConfigManager {
   }
 
   /**
-   * Add CGMB configuration safely
+   * Add CGMB configuration safely with enhanced error handling
    */
   async addCGMBConfiguration(options: {
     force?: boolean;
     skipBackup?: boolean;
     dryRun?: boolean;
+    interactive?: boolean;
   } = {}): Promise<ConfigManagerResult> {
-    const { force = false, skipBackup = false, dryRun = false } = options;
+    const { force = false, skipBackup = false, dryRun = false, interactive = false } = options;
 
     try {
       const configPath = this.findConfigPath();
@@ -223,6 +224,13 @@ export class MCPConfigManager {
       
       // Check if CGMB is already configured
       if (existingConfig.mcpServers[this.CGMB_SERVER_NAME] && !force) {
+        const currentConfig = existingConfig.mcpServers[this.CGMB_SERVER_NAME];
+        logger.info('CGMB MCP configuration already exists', {
+          configPath,
+          currentCommand: currentConfig?.command,
+          currentArgs: currentConfig?.args
+        });
+        
         return {
           success: true,
           message: 'CGMB is already configured in Claude Code MCP settings',
@@ -264,14 +272,44 @@ export class MCPConfigManager {
       // Generate CGMB configuration
       const cgmbConfig = this.generateCGMBConfig();
       
+      // Validate the generated configuration
+      if (!cgmbConfig.command || !cgmbConfig.args || cgmbConfig.args.length === 0) {
+        return {
+          success: false,
+          message: 'Failed to generate valid CGMB configuration. Please check your installation.',
+          action: 'error'
+        };
+      }
+      
+      logger.info('Generated CGMB configuration', {
+        command: cgmbConfig.command,
+        args: cgmbConfig.args,
+        env: Object.keys(cgmbConfig.env || {})
+      });
+      
       // Add CGMB configuration to existing config
       existingConfig.mcpServers[this.CGMB_SERVER_NAME] = cgmbConfig;
 
       // Write updated configuration
       const configContent = JSON.stringify(existingConfig, null, 2);
-      writeFileSync(configPath, configContent, 'utf8');
+      
+      try {
+        writeFileSync(configPath, configContent, 'utf8');
+      } catch (writeError) {
+        logger.error('Failed to write MCP configuration file', {
+          configPath,
+          error: (writeError as Error).message
+        });
+        
+        return {
+          success: false,
+          message: `Failed to write configuration file: ${(writeError as Error).message}. Check file permissions.`,
+          configPath,
+          action: 'error'
+        };
+      }
 
-      const action = existingConfig.mcpServers[this.CGMB_SERVER_NAME] ? 'updated' : 'added';
+      const action = force && existingConfig.mcpServers[this.CGMB_SERVER_NAME] ? 'updated' : 'added';
       
       logger.info('Successfully updated Claude Code MCP configuration', {
         configPath,
@@ -458,7 +496,99 @@ After saving the configuration, restart Claude Code to load the new MCP server.
 ## 4. Verify connection
 Run: cgmb verify
 Then check if CGMB tools are available in Claude Code.
+
+⚠️  **Important Notes:**
+- If the file already contains other MCP servers, add the CGMB configuration to the existing "mcpServers" object
+- Make sure to keep valid JSON syntax (proper commas, brackets, etc.)
+- Replace "your_api_key_here" with your actual Gemini API key if needed
+
+## 5. Troubleshooting
+If the MCP server doesn't load:
+- Check Claude Code logs for error messages
+- Verify the file path in "args" exists and is accessible
+- Ensure your API keys are properly set in environment variables
+- Try running the command manually: ${cgmbConfig.command} ${cgmbConfig.args.join(' ')}
 `;
+  }
+
+  /**
+   * Check if the generated CGMB path actually exists
+   */
+  private validateCGMBPath(cgmbPath: string): boolean {
+    try {
+      return existsSync(cgmbPath);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get detailed diagnostic information for troubleshooting
+   */
+  async getDiagnosticInfo(): Promise<{
+    configPath: string | null;
+    configExists: boolean;
+    cgmbInstallation: {
+      path: string | null;
+      exists: boolean;
+      accessible: boolean;
+    };
+    recommendations: string[];
+  }> {
+    const configPath = this.findConfigPath();
+    const cgmbConfig = this.generateCGMBConfig();
+    const recommendations: string[] = [];
+    
+    // Check CGMB installation
+    let cgmbPath: string | null = null;
+    let cgmbExists = false;
+    let cgmbAccessible = false;
+    
+    if (cgmbConfig.command === 'node' && cgmbConfig.args.length > 0) {
+      const firstArg = cgmbConfig.args[0];
+      if (firstArg) {
+        cgmbPath = firstArg;
+        cgmbExists = this.validateCGMBPath(cgmbPath);
+        
+        if (cgmbExists) {
+          try {
+            // Try to access the file
+            const stats = require('fs').statSync(cgmbPath);
+            cgmbAccessible = stats.isFile();
+          } catch {
+            cgmbAccessible = false;
+          }
+        }
+      }
+    }
+    
+    // Generate recommendations
+    if (!cgmbExists) {
+      recommendations.push('CGMB installation not found. Run "npm run build" to build the project.');
+    }
+    
+    if (!cgmbAccessible) {
+      recommendations.push('CGMB file exists but is not accessible. Check file permissions.');
+    }
+    
+    if (!configPath) {
+      recommendations.push('Claude Code configuration directory not found. Ensure Claude Code is installed.');
+    }
+    
+    if (configPath && !existsSync(configPath)) {
+      recommendations.push('Claude Code MCP configuration file does not exist yet. This is normal for first-time setup.');
+    }
+    
+    return {
+      configPath,
+      configExists: configPath ? existsSync(configPath) : false,
+      cgmbInstallation: {
+        path: cgmbPath,
+        exists: cgmbExists,
+        accessible: cgmbAccessible
+      },
+      recommendations
+    };
   }
 }
 

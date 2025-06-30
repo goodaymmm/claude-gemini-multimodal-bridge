@@ -438,15 +438,14 @@ program
         return;
       }
       
-      console.log('🔧 Setting up Claude Code MCP integration...');
-      console.log('');
+      console.log('🔧 Setting up Claude Code MCP integration...\n');
       
       // Check current status first
       const status = await getMCPStatus();
       
       console.log('📊 Current MCP Configuration Status');
-      console.log('═'.repeat(40));
-      console.log(`Configuration Path: ${status.configPath || 'Not found'}`);
+      console.log('═'.repeat(60));
+      console.log(`Configuration Path: ${status.configPath || '❌ Claude Code config not found'}`);
       console.log(`CGMB Configured: ${status.isConfigured ? '✅ Yes' : '❌ No'}`);
       
       if (status.currentConfig) {
@@ -454,13 +453,20 @@ program
         console.log(`Current Args: ${status.currentConfig.args.join(' ')}`);
       }
       
-      console.log('');
+      if (status.recommendations.length > 0) {
+        console.log('\n💡 System Status:');
+        status.recommendations.forEach(rec => {
+          const icon = rec.includes('properly configured') ? '✅' : 'ℹ️';
+          console.log(`   ${icon} ${rec}`);
+        });
+      }
       
       if (status.issues.length > 0) {
-        console.log('⚠️  Issues Found:');
+        console.log('\n⚠️  Issues Detected:');
         status.issues.forEach(issue => console.log(`   • ${issue}`));
-        console.log('');
       }
+      
+      console.log('');
       
       if (options.dryRun) {
         console.log('🧪 Dry Run Mode - Showing what would be done:');
