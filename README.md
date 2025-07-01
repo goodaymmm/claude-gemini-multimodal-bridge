@@ -8,7 +8,15 @@
 
 ## ✨ Features
 
-### 🆕 **New in Latest Version (v1.0.6 - Response Edition)**
+### 🆕 **New in Latest Version (v1.0.7 - Intelligence Edition)**
+- 🎯 **Critical Timeout Fix**: Resolved 30-second timeout issue for search-enabled prompts across all languages
+- 🧠 **Intelligent Routing**: New AI-powered routing system with multi-language temporal keyword detection
+- 🔄 **Enhanced Retry Logic**: Production-grade retry mechanism with exponential backoff and structured error responses
+- ⚡ **Dynamic Timeouts**: Tiered timeout strategy (45s/180s/variable) based on task complexity and file size
+- 🏷️ **CGMB Keywords**: Enhanced Claude Code recognition with "CGMB" triggers in all tool descriptions
+- 🌍 **Global Support**: Improved handling for Japanese, English, Chinese prompts requesting current information
+
+### 🆕 **Previous Updates (v1.0.6 - Response Edition)**
 - ⚡ **Instant Response**: Fixed CLI commands hanging after result display - now exits immediately after showing results
 - 🤖 **Enhanced Claude Code Recognition**: Improved MCP tool descriptions for better natural language detection
 - 📝 **Better Tool Discovery**: Added comprehensive descriptions to help Claude Code automatically recognize capabilities
@@ -337,22 +345,26 @@ ENABLE_CACHING=true
 
 ### Simple Usage with Claude Code
 
-Once set up, CGMB enhances Claude Code transparently:
+Once set up, CGMB enhances Claude Code transparently. For best recognition, use "CGMB" keyword:
 
 ```bash
+# Enhanced recognition with CGMB keyword
+claude "CGMB analyze this image and describe what you see @image.png"
+claude "CGMB summarize this PDF document @document.pdf"
+
+# Current information with intelligent search routing
+claude "CGMB what are the latest AI security trends for 2025?"
+claude "CGMB 2024年から2025年にかけてのAndroidアプリセキュリティの最新動向を教えて"
+
 # Image generation with AI Studio (Imagen 3)
-claude "Generate an image of a futuristic city"
+claude "CGMB generate an image of a futuristic city"
 
-# Document analysis with multimodal processing
-claude "Analyze this image and describe what you see @image.png"
-claude "Summarize this PDF document @document.pdf"
-
-# Real-time information with Gemini grounding
-claude "What are the latest developments in AI technology?"
-
-# Complex file conversion
-claude "Convert this spreadsheet to markdown format @data.xlsx"
+# Complex multimodal workflows
+claude "CGMB convert this spreadsheet to markdown format @data.xlsx"
+claude "CGMB compare these documents and highlight differences @doc1.pdf @doc2.pdf"
 ```
+
+**🎯 Pro Tip**: While CGMB works without the keyword, using "CGMB" ensures optimal tool selection and routing within Claude Code.
 
 **Enhanced with AI Studio Priority**: Image/video/audio generation now routes to AI Studio (Imagen 3, Veo 2) instead of Gemini 2.0 Flash for superior quality.
 

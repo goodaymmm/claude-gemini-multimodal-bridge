@@ -38,8 +38,8 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.0.5',
-        description: 'AI multimodal processor with web search - analyze files, search web, generate content naturally'
+        version: '1.0.7',
+        description: 'CGMB - AI multimodal processor with intelligent web search, file analysis, and content generation. Claude-Gemini Multimodal Bridge for seamless AI integration.'
       },
       {
         capabilities: {
@@ -132,8 +132,8 @@ export class CGMBServer {
       return {
         tools: [
           {
-            name: 'multimodal_process',
-            description: 'AI-powered multimodal content processor with web search, image analysis, and document processing. Key features: • Web Search: Ask about current events, trends, or any topic - Gemini automatically searches the web • Image Analysis: Process images, diagrams, screenshots with AI vision • Document Processing: Analyze PDFs, text files, code files • No special flags needed - just describe what you want. Examples: "analyze the latest AI security trends", "summarize this PDF document", "explain this architecture diagram"',
+            name: 'cgmb_multimodal_process',
+            description: 'CGMB AI-powered multimodal content processor with intelligent web search, image analysis, and document processing. Claude-Gemini Multimodal Bridge features: • Intelligent Web Search: Ask about current events, trends, or any topic - CGMB automatically determines when web search is needed • Advanced Image Analysis: Process images, diagrams, screenshots with AI vision • Smart Document Processing: Analyze PDFs, text files, code files with context understanding • No special flags needed - just describe what you want to CGMB. Examples: "CGMB analyze the latest AI security trends", "CGMB summarize this PDF document", "CGMB explain this architecture diagram"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -188,8 +188,8 @@ export class CGMBServer {
             },
           },
           {
-            name: 'document_analysis',
-            description: 'Advanced document analysis for PDFs, text files, code files, and more. Automatically summarizes, compares, extracts key information, or translates content. Just provide file paths and specify what type of analysis you need.',
+            name: 'cgmb_document_analysis',
+            description: 'CGMB Advanced document analysis for PDFs, text files, code files, and more. Claude-Gemini Multimodal Bridge automatically summarizes, compares, extracts key information, or translates content with intelligent processing. Just provide file paths and specify what type of analysis you need to CGMB. Examples: "CGMB analyze this contract", "CGMB compare these documents"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -212,8 +212,8 @@ export class CGMBServer {
             },
           },
           {
-            name: 'workflow_orchestration',
-            description: 'Orchestrate complex multi-step AI workflows combining web search, document analysis, image processing, and content generation. Perfect for comprehensive research, analysis, and content creation tasks.',
+            name: 'cgmb_workflow_orchestration',
+            description: 'CGMB Orchestrate complex multi-step AI workflows combining intelligent web search, document analysis, image processing, and content generation. Claude-Gemini Multimodal Bridge is perfect for comprehensive research, analysis, and content creation tasks. Use CGMB for advanced workflow automation across multiple AI layers.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -255,13 +255,16 @@ export class CGMBServer {
         let result: CallToolResult;
 
         switch (name) {
-          case 'multimodal_process':
+          case 'cgmb_multimodal_process':
+          case 'multimodal_process': // Backward compatibility
             result = await this.handleMultimodalProcess(args);
             break;
-          case 'document_analysis':
+          case 'cgmb_document_analysis':
+          case 'document_analysis': // Backward compatibility
             result = await this.handleDocumentAnalysis(args);
             break;
-          case 'workflow_orchestration':
+          case 'cgmb_workflow_orchestration':
+          case 'workflow_orchestration': // Backward compatibility
             result = await this.handleWorkflowOrchestration(args);
             break;
           default:

@@ -974,7 +974,7 @@ program
         result = await geminiLayer.execute({
           type: 'text_processing',
           prompt: options.prompt,
-          useSearch: options.grounding
+          useSearch: true  // Default to true - Gemini CLI has intelligent search decision-making
         });
       }
       

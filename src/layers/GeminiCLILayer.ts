@@ -187,47 +187,132 @@ export class GeminiCLILayer implements LayerInterface {
   }
 
   /**
-   * Execute a task through Gemini CLI
+   * Execute a task through Gemini CLI with enhanced retry logic
+   * Implements Gemini's architectural recommendations for production reliability
    */
   async execute(task: GeminiTask): Promise<LayerResult> {
+    const maxRetries = 2;
+    const startTime = Date.now();
+    let lastError: Error | null = null;
+    
+    // Pre-execution setup (only done once)
+    await this.setupForExecution(task);
+    
+    // Retry loop with exponential backoff
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      try {
+        logger.debug('Gemini CLI execution attempt', {
+          attempt,
+          maxRetries: maxRetries + 1,
+          taskType: task.type,
+          useSearch: task.useSearch
+        });
+        
+        const result = await this.executeTaskWithTimeout(task, startTime, attempt);
+        
+        if (attempt > 1) {
+          logger.info('Gemini CLI task succeeded after retry', {
+            attempt,
+            taskType: task.type,
+            totalDuration: Date.now() - startTime
+          });
+        }
+        
+        return result;
+        
+      } catch (error) {
+        lastError = error as Error;
+        
+        // Check if this is a retryable error
+        const isRetryable = this.isRetryableError(lastError);
+        const isLastAttempt = attempt === maxRetries + 1;
+        
+        if (isRetryable && !isLastAttempt) {
+          const backoffTime = Math.min(2000 * Math.pow(2, attempt - 1), 8000); // Cap at 8 seconds
+          
+          logger.warn('Gemini CLI task failed, retrying', {
+            attempt,
+            error: lastError.message,
+            retryAfter: backoffTime,
+            isRetryable
+          });
+          
+          // Exponential backoff wait
+          await new Promise(resolve => setTimeout(resolve, backoffTime));
+          
+        } else {
+          // Log final failure
+          logger.error('Gemini CLI task failed permanently', {
+            attempt,
+            totalAttempts: maxRetries + 1,
+            error: lastError.message,
+            isRetryable,
+            totalDuration: Date.now() - startTime
+          });
+          
+          // Throw structured error as recommended by Gemini
+          throw this.createStructuredError(lastError, task, {
+            attempts: attempt,
+            totalDuration: Date.now() - startTime,
+            isRetryable
+          });
+        }
+      }
+    }
+    
+    // This should never be reached, but safety fallback
+    throw this.createStructuredError(lastError || new Error('Unknown execution failure'), task, {
+      attempts: maxRetries + 1,
+      totalDuration: Date.now() - startTime,
+      isRetryable: false
+    });
+  }
+
+  /**
+   * Pre-execution setup (extracted from execute for cleaner retry logic)
+   */
+  private async setupForExecution(task: GeminiTask): Promise<void> {
+    // Use lightweight initialization for simple tasks
+    if (!this.isInitialized && !this.isLightweightInitialized) {
+      if (task.type === 'text_processing' && !task.files && task.useSearch === false) {
+        try {
+          await this.initializeLightweight();
+        } catch (lightweightError) {
+          logger.debug('Lightweight initialization failed, trying full initialization', {
+            error: (lightweightError as Error).message
+          });
+          await this.initialize();
+        }
+      } else {
+        await this.initialize();
+      }
+    }
+
+    // Check quota limits before execution
+    const estimatedTokens = QuotaMonitor.estimateTokens(
+      JSON.stringify(task), 
+      task.files?.length || 0
+    );
+    const quotaCheck = this.quotaMonitor.canMakeRequest(estimatedTokens);
+    if (!quotaCheck.allowed) {
+      throw new Error(`Quota limit exceeded: ${quotaCheck.reason}. ${quotaCheck.waitTime ? `Wait ${Math.ceil(quotaCheck.waitTime / 1000)}s` : 'Try again later'}`);
+    }
+
+    // Check legacy rate limits
+    await this.checkRateLimit();
+  }
+
+  /**
+   * Execute the actual task with timeout (extracted for cleaner retry logic)
+   */
+  private async executeTaskWithTimeout(task: GeminiTask, startTime: number, attempt: number): Promise<LayerResult> {
     return safeExecute(
       async () => {
-        const startTime = Date.now();
-        
-        // Use lightweight initialization for simple tasks
-        if (!this.isInitialized && !this.isLightweightInitialized) {
-          // For simple text processing, try lightweight init first
-          if (task.type === 'text_processing' && !task.files && !task.useSearch) {
-            try {
-              await this.initializeLightweight();
-            } catch (lightweightError) {
-              logger.debug('Lightweight initialization failed, trying full initialization', {
-                error: (lightweightError as Error).message
-              });
-              await this.initialize();
-            }
-          } else {
-            await this.initialize();
-          }
-        }
-
-        // Check quota limits before execution
-        const estimatedTokens = QuotaMonitor.estimateTokens(
-          JSON.stringify(task), 
-          task.files?.length || 0
-        );
-        const quotaCheck = this.quotaMonitor.canMakeRequest(estimatedTokens);
-        if (!quotaCheck.allowed) {
-          throw new Error(`Quota limit exceeded: ${quotaCheck.reason}. ${quotaCheck.waitTime ? `Wait ${Math.ceil(quotaCheck.waitTime / 1000)}s` : 'Try again later'}`);
-        }
-
-        // Check legacy rate limits
-        await this.checkRateLimit();
-
         logger.info('Executing Gemini CLI task', {
           taskType: task.type || 'general',
           action: task.action || 'execute',
-          useSearch: task.useSearch || false,
+          useSearch: task.useSearch !== false, // Log actual effective value
+          attempt
         });
 
         let result: any;
@@ -236,7 +321,7 @@ export class GeminiCLILayer implements LayerInterface {
         switch (task.action || task.type) {
           case 'grounded_search':
             const groundedResult = await this.executeWithGrounding(task.prompt || task.request || '', {
-              useSearch: task.useSearch || false,
+              useSearch: task.useSearch !== false, // Use corrected logic
               files: task.files?.map(f => f.path) || [],
               context: task.context as string | undefined,
             });
@@ -269,6 +354,7 @@ export class GeminiCLILayer implements LayerInterface {
             cost: this.calculateCost(task, result),
             model: 'gemini-2.5-pro',
             quota_status: this.quotaMonitor.getQuotaStatus(),
+            retry_attempt: attempt,
           },
         };
       },
@@ -278,6 +364,61 @@ export class GeminiCLILayer implements LayerInterface {
         timeout: this.getTaskTimeout(task),
       }
     );
+  }
+
+  /**
+   * Determine if an error is retryable
+   */
+  private isRetryableError(error: Error): boolean {
+    const retryablePatterns = [
+      /timeout/i,
+      /network/i,
+      /connection/i,
+      /temporary/i,
+      /rate limit/i,
+      /server error/i,
+      /503/,
+      /502/,
+      /504/
+    ];
+    
+    // Check if error message matches retryable patterns
+    const isRetryable = retryablePatterns.some(pattern => pattern.test(error.message));
+    
+    // Don't retry authentication errors or quota exceeded errors
+    const nonRetryablePatterns = [
+      /authentication/i,
+      /unauthorized/i,
+      /forbidden/i,
+      /quota.*exceeded/i,
+      /api key/i,
+      /permission/i
+    ];
+    
+    const isNonRetryable = nonRetryablePatterns.some(pattern => pattern.test(error.message));
+    
+    return isRetryable && !isNonRetryable;
+  }
+
+  /**
+   * Create structured error response as recommended by Gemini
+   */
+  private createStructuredError(error: Error, task: GeminiTask, metadata: any): Error {
+    const structuredError = new Error(error.message);
+    (structuredError as any).details = {
+      error: 'ProcessingTimeout',
+      message: error.message,
+      layer: 'GeminiCLILayer',
+      taskDetails: {
+        type: task.type,
+        useSearch: task.useSearch !== false,
+        action: task.action,
+        hasFiles: !!(task.files && task.files.length > 0)
+      },
+      executionMetadata: metadata
+    };
+    
+    return structuredError;
   }
 
   /**
@@ -801,27 +942,58 @@ export class GeminiCLILayer implements LayerInterface {
   }
 
   /**
-   * Get task timeout
+   * Enhanced task timeout calculation based on Gemini's architectural recommendations
+   * Implements dynamic, tiered timeout strategy for production reliability
    */
   private getTaskTimeout(task: any): number {
     if (task.timeout) {
       return task.timeout;
     }
     
-    // Optimized timeouts based on task complexity
-    const baseTimeout = this.isLightweightInitialized ? 30000 : 60000; // 30s for lightweight, 60s for full init
+    const baseTimeout = 10000; // Base overhead (reduced from previous implementation)
     
-    // WebSearch tasks get extended timeout
-    if (task.useSearch || task.action?.includes('search') || task.prompt?.toLowerCase().includes('search')) {
-      return Math.max(180000, this.getEstimatedDuration(task) + baseTimeout); // Minimum 3 minutes for search
+    // Tier 3: Multimodal tasks get variable timeouts based on file size
+    if (task.type === 'multimodal_processing' && task.files && task.files.length > 0) {
+      let totalFileSizeMB = 0;
+      for (const file of task.files) {
+        if (file.size) {
+          totalFileSizeMB += file.size / (1024 * 1024);
+        } else {
+          // Estimate 5MB per file if size unknown
+          totalFileSizeMB += 5;
+        }
+      }
+      const timePerMB = 5000; // 5 seconds per MB (tunable parameter)
+      const multimodalBase = 30000; // 30s base for multimodal
+      
+      const calculatedTimeout = Math.max(multimodalBase, (totalFileSizeMB * timePerMB) + baseTimeout);
+      logger.debug('Calculated multimodal timeout', {
+        totalFileSizeMB: totalFileSizeMB.toFixed(2),
+        calculatedTimeout,
+        files: task.files.length
+      });
+      return calculatedTimeout;
     }
     
-    // Simple text processing gets shorter timeout
-    if (task.type === 'text_processing' && !task.files && !task.useSearch) {
-      return Math.max(30000, this.getEstimatedDuration(task) + 10000); // Minimum 30s for simple tasks
+    // Tier 2: Search-enabled tasks (default unless explicitly disabled)
+    if (task.useSearch !== false) {
+      const searchTimeout = 180000; // 3 minutes for search-enabled tasks
+      logger.debug('Using search-enabled timeout', {
+        timeout: searchTimeout,
+        useSearch: task.useSearch,
+        taskType: task.type
+      });
+      return searchTimeout;
     }
     
-    return Math.max(90000, this.getEstimatedDuration(task) + baseTimeout); // Minimum 90s for other tasks
+    // Tier 1: Simple, non-search tasks (only when explicitly disabled)
+    const simpleTimeout = 45000; // 45 seconds for confirmed simple processing
+    logger.debug('Using simple processing timeout', {
+      timeout: simpleTimeout,
+      useSearch: task.useSearch,
+      taskType: task.type
+    });
+    return simpleTimeout;
   }
 
   /**
