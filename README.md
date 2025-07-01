@@ -35,7 +35,11 @@ CGMB operates as an **MCP (Model Context Protocol) server** with enterprise-grad
 
 ```mermaid
 flowchart TD
-    A[Claude Code] --> B[CGMB Server]
+    subgraph top [" "]
+        A[Claude Code]
+    end
+    
+    A --> B[CGMB Server]
     
     B --> C[Gemini CLI]
     B --> D[Claude Code] 
@@ -45,7 +49,14 @@ flowchart TD
     D --> F
     E --> F
     
+    subgraph bottom [" "]
+        F
+    end
+    
     F --> A
+    
+    style top fill:none,stroke:none
+    style bottom fill:none,stroke:none
 ```
 
 ### How It Works
