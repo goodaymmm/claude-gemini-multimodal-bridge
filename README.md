@@ -8,81 +8,14 @@
 
 ## ✨ Features
 
-### 🆕 **Latest Version (v1.1.1 - Critical Fixes)**
-- 🐛 **CRITICAL: Fixed Empty Prompts Bug**: Fixed double-quoting issue in fast path execution causing prompts to become empty on 2nd+ runs
-- 🔧 **Improved Argument Handling**: Replaced `execSync(args.join(' '))` with proper `spawn()` for better shell argument processing
-- 🎯 **Enhanced MCP Triggering**: Updated all tool descriptions to clearly emphasize CGMB keyword requirement for Claude Code integration
-- 📝 **Code Consistency**: Cleaned up conflicting comments about stdin usage, unified on command-argument approach
-- ⚡ **Process Communication**: Unified all execution methods to use `-p` flag approach (no stdin processing)
-- 🔍 **Better Debugging**: Enhanced error messages and logging for prompt handling issues
+### 🆕 **Latest Version (v1.0.0 - Initial Release)**
+- 🚀 **Multi-layer AI Integration**: Seamless connection between Claude Code, Gemini CLI, and Google AI Studio
+- 🎯 **MCP Protocol Support**: Full Model Context Protocol integration for Claude Code compatibility
+- ⚡ **Performance Optimization**: Intelligent caching and fast-path execution for improved response times
+- 🔧 **Simple Setup**: Easy installation and configuration with `cgmb setup-mcp`
+- 📝 **Natural Interface**: User-friendly commands like `cgmb chat` for intuitive interaction
+- 🔍 **Robust Error Handling**: Comprehensive authentication and connection diagnostics
 
-### 🆕 **Previous Version (v1.1.0 - UX Revolution)**
-- 💬 **NEW: `cgmb chat` Command**: Natural, user-friendly Gemini interaction (`cgmb chat "question"`)
-- 🧠 **Smart Prompt Detection**: Auto-detects prompts without requiring `-p` flag
-- 🔧 **Reference Implementation**: Fixed API "function response parts" errors using mcp-gemini-cli pattern
-- 🎯 **Enhanced Error Messages**: Specific guidance for authentication and configuration issues
-- ⚡ **Simplified Authentication**: Streamlined OAuth-first approach with better error handling
-- 📖 **Improved Help**: Better examples, troubleshooting tips, and usage guidance
-- 🔄 **Backward Compatible**: All existing commands continue to work
-- 🐛 **Bug Fixes**: Resolved Error.md (UX navigation) and Error2.md (API authentication) issues
-
-### 🆕 **Previous Updates (v1.0.8 - Performance Revolution)**
-- 🚀 **90% Performance Boost**: Reference implementation optimization achieving mcp-gemini-cli speeds
-- ⚡ **Ultra-Fast Path**: Simple prompts bypass heavy initialization (5min → 30sec for Claude Code processing)
-- 🔧 **Claude Code Duplication Fix**: Eliminated duplicate terminal launches during serve mode
-- 🎯 **Smart Routing**: Intelligent fast-path detection for simple analysis tasks
-- 🌐 **Lightweight MCP Responses**: Streamlined output matching reference implementation patterns
-- 🔄 **Connection Pooling**: Reduced Gemini CLI timeout from 2min → 10sec with process reuse
-
-### 🆕 **Previous Updates (v1.0.7 - Intelligence Edition)**
-- 🎯 **Critical Timeout Fix**: Resolved 30-second timeout issue for search-enabled prompts across all languages
-- 🧠 **Intelligent Routing**: New AI-powered routing system with multi-language temporal keyword detection
-- 🔄 **Enhanced Retry Logic**: Production-grade retry mechanism with exponential backoff and structured error responses
-- ⚡ **Dynamic Timeouts**: Tiered timeout strategy (45s/180s/variable) based on task complexity and file size
-- 🏷️ **CGMB Keywords**: Enhanced Claude Code recognition with "CGMB" triggers in all tool descriptions
-- 🌍 **Global Support**: Improved handling for Japanese, English, Chinese prompts requesting current information
-
-### 🆕 **Previous Updates (v1.0.6 - Response Edition)**
-- ⚡ **Instant Response**: Fixed CLI commands hanging after result display - now exits immediately after showing results
-- 🤖 **Enhanced Claude Code Recognition**: Improved MCP tool descriptions for better natural language detection
-- 📝 **Better Tool Discovery**: Added comprehensive descriptions to help Claude Code automatically recognize capabilities
-- 🔍 **Smart Option Handling**: Friendly guidance when using unsupported options like `--search`
-- 🎯 **Natural Integration**: Claude Code now recognizes CGMB for "multimodal", "web search", and "file analysis" requests
-
-### 🆕 **Previous Updates (v1.0.5 - Stability Edition)**
-- 🛠️ **Critical Gemini CLI Fix**: Resolved timeout issues with proper stdin handling (`stdin.end()`)
-- 🔄 **Enhanced Process Communication**: Switched from command-line arguments to stdin for reliable prompt transmission
-- 🐛 **Robust Error Handling**: Added spawn process failure detection and graceful termination
-- 🔍 **Debug Mode**: New `CGMB_DEBUG=true` environment variable for development diagnostics
-- ⚡ **Promise Wrapper**: Proper async/await handling for Gemini CLI processes
-- 🎯 **Security Hardening**: Fixed potential issues with long prompts and special characters
-- 📊 **Improved Logging**: Better error messages and debugging information
-
-### 🆕 **Previous Updates (v1.0.4 - Performance Edition)**
-- 🚀 **Fast Path Mode**: `--fast` option for direct CLI calls (90% faster response times)
-- ⚡ **Lightweight Initialization**: Smart authentication caching reduces overhead by 95%
-- 🎯 **Optimized Authentication TTL**: 
-  - Claude Code: 24 hours (same as normal sessions)
-  - Gemini CLI: 24 hours (OAuth token validity)
-  - AI Studio: 7 days (API key longevity)
-- 🔧 **Persistent MCP Processes**: AI Studio MCP server reuses processes (70% startup reduction)
-- ⚡ **Adaptive Timeouts**: Context-aware timeout management for optimal performance
-- 🚀 **Layer Bypass Technology**: Direct API access when CGMB layers aren't needed
-- 📈 **Performance Monitoring**: Real-time performance tracking and optimization
-
-### 🆕 **Previous Updates (v1.0.1)**
-- ⚡ **Performance Optimizations**: PromptOptimizer and SearchCache for faster processing
-- 🎯 **Intelligent Timeout Management**: Adaptive timeout settings for different AI layers
-- 🚀 **Enhanced CLI Commands**: Direct access to all AI layers without complex workflows
-- ✅ **Fixed Error.md Issues**: No more "unknown command" errors or timeout problems  
-- 🔧 **Custom AI Studio MCP Server**: Built-in MCP server replaces non-existent aistudio-mcp-server package
-- 🎯 **Streamlined Gemini CLI**: Seamless search and grounding functionality with optimized prompts
-- 📊 **Production-Ready**: Complete test suite, linting, and dependency verification
-- 🛡️ **Improved Authentication**: Auto-fix capabilities and better error diagnostics
-- ⚡ **Real Multimodal Processing**: Actual content generation and analysis (not just initialization)
-- 🖼️ **AI Studio Image Generation**: Direct support for Imagen models through custom MCP server
-- 💾 **Smart Caching**: Search result caching for improved response times
-- 🔄 **Parallel Processing**: Enhanced concurrent request handling
 
 ### 🏗️ **Core Features**
 - 🔗 **3-Layer Architecture**: Claude Code ↔ Gemini CLI ↔ AI Studio

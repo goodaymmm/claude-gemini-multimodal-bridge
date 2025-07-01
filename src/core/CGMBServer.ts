@@ -41,8 +41,8 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.1.1',
-        description: 'claude-gemini-multimodal-bridge - AI multimodal processor with intelligent web search, file analysis, and content generation. Critical fixes for prompt handling and MCP integration.'
+        version: '1.0.0',
+        description: 'claude-gemini-multimodal-bridge - Multi-layer AI integration bridge with intelligent caching, performance optimization, and seamless MCP integration for Claude Code.'
       },
       {
         capabilities: {

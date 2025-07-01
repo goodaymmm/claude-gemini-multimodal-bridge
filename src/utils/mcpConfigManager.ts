@@ -118,44 +118,12 @@ export class MCPConfigManager {
 
   /**
    * Generate CGMB server configuration
+   * Always uses the cgmb command for consistency with npm package distribution
    */
   private generateCGMBConfig(): MCPServerConfig {
-    // Try to find the CGMB installation
-    const possiblePaths = [
-      // Current project (development)
-      process.cwd(),
-      // Global npm installation
-      join(homedir(), '.npm-global', 'lib', 'node_modules', 'claude-gemini-multimodal-bridge'),
-      join('/usr', 'local', 'lib', 'node_modules', 'claude-gemini-multimodal-bridge'),
-      // Alternative global paths
-      join('/usr', 'lib', 'node_modules', 'claude-gemini-multimodal-bridge'),
-    ];
-
-    let cgmbPath = '';
-    
-    // Find the best path
-    for (const path of possiblePaths) {
-      const distPath = join(path, 'dist', 'index.js');
-      if (existsSync(distPath)) {
-        cgmbPath = distPath;
-        break;
-      }
-    }
-
-    if (!cgmbPath) {
-      // Fallback to npx with serve command
-      return {
-        command: 'npx',
-        args: ['claude-gemini-multimodal-bridge', 'serve'],
-        env: {
-          NODE_ENV: 'production'
-        }
-      };
-    }
-
     return {
-      command: 'node',
-      args: [cgmbPath, 'serve'],
+      command: 'cgmb',
+      args: ['serve'],
       env: {
         NODE_ENV: 'production'
       }
@@ -527,16 +495,6 @@ If the MCP server doesn't load:
 `;
   }
 
-  /**
-   * Check if the generated CGMB path actually exists
-   */
-  private validateCGMBPath(cgmbPath: string): boolean {
-    try {
-      return existsSync(cgmbPath);
-    } catch {
-      return false;
-    }
-  }
 
   /**
    * Get detailed diagnostic information for troubleshooting
@@ -545,46 +503,23 @@ If the MCP server doesn't load:
     configPath: string | null;
     configExists: boolean;
     cgmbInstallation: {
-      path: string | null;
-      exists: boolean;
-      accessible: boolean;
+      command: string;
+      available: boolean;
     };
     recommendations: string[];
   }> {
     const configPath = this.findConfigPath();
-    const cgmbConfig = this.generateCGMBConfig();
     const recommendations: string[] = [];
     
-    // Check CGMB installation
-    let cgmbPath: string | null = null;
-    let cgmbExists = false;
-    let cgmbAccessible = false;
-    
-    if (cgmbConfig.command === 'node' && cgmbConfig.args.length > 0) {
-      const firstArg = cgmbConfig.args[0];
-      if (firstArg) {
-        cgmbPath = firstArg;
-        cgmbExists = this.validateCGMBPath(cgmbPath);
-        
-        if (cgmbExists) {
-          try {
-            // Try to access the file
-            const stats = require('fs').statSync(cgmbPath);
-            cgmbAccessible = stats.isFile();
-          } catch {
-            cgmbAccessible = false;
-          }
-        }
-      }
-    }
-    
-    // Generate recommendations
-    if (!cgmbExists) {
-      recommendations.push('CGMB installation not found. Run "npm run build" to build the project.');
-    }
-    
-    if (!cgmbAccessible) {
-      recommendations.push('CGMB file exists but is not accessible. Check file permissions.');
+    // Check CGMB command availability
+    let cgmbAvailable = false;
+    try {
+      const { execSync } = require('child_process');
+      execSync('cgmb --version', { stdio: 'ignore', timeout: 5000 });
+      cgmbAvailable = true;
+    } catch {
+      cgmbAvailable = false;
+      recommendations.push('CGMB command not found. Run "npm link" for development or "npm install -g claude-gemini-multimodal-bridge" for production.');
     }
     
     if (!configPath) {
@@ -599,9 +534,8 @@ If the MCP server doesn't load:
       configPath,
       configExists: configPath ? existsSync(configPath) : false,
       cgmbInstallation: {
-        path: cgmbPath,
-        exists: cgmbExists,
-        accessible: cgmbAccessible
+        command: 'cgmb',
+        available: cgmbAvailable
       },
       recommendations
     };

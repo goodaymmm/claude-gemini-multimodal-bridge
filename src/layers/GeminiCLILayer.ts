@@ -212,12 +212,11 @@ export class GeminiCLILayer implements LayerInterface {
 
       const prompt = task.prompt || task.request || task.input || '';
       
-      // Build minimal args (no complex validation)
-      const args = this.buildGeminiCommand({
-        files: task.files ? task.files.map((f: any) => f.path || f) : []
-      });
+      if (!prompt.trim()) {
+        throw new Error('No prompt provided for Gemini CLI execution');
+      }
 
-      // Use reference implementation method for better compatibility
+      // Use reference implementation method directly (simplified pattern)
       const result = await this.executeGeminiCLIReference(prompt, { 
         model: (task.model as string) || 'gemini-2.5-pro' 
       });
@@ -880,57 +879,18 @@ export class GeminiCLILayer implements LayerInterface {
       throw new Error('Gemini CLI not initialized');
     }
 
-    // Special handling for --version command (no prompt needed)
-    if (args.includes('--version')) {
-      return new Promise<string>((resolve, reject) => {
-        const { spawn } = require('child_process');
-        const child = spawn(this.geminiPath!, args);
-        
-        let output = '';
-        let error = '';
-        
-        child.stdout?.on('data', (data: Buffer) => {
-          output += data.toString();
-        });
-        
-        child.stderr?.on('data', (data: Buffer) => {
-          error += data.toString();
-        });
-        
-        child.on('close', (code: number | null) => {
-          if (code !== 0) {
-            reject(new Error(`Gemini CLI exited with code ${code}: ${error}`));
-          } else {
-            resolve(output);
-          }
-        });
-        
-        child.on('error', (err: Error) => {
-          reject(err);
-        });
-        
-        // Timeout
-        setTimeout(() => {
-          child.kill();
-          reject(new Error('Gemini CLI timeout'));
-        }, 10000);
-      });
+    // Simplified: Use reference implementation pattern for all cases
+    if (!promptContent || !promptContent.trim()) {
+      throw new Error('No prompt content provided for Gemini CLI execution');
     }
-
-    // CRITICAL: Validate command arguments to prevent incorrect usage
-    this.validateGeminiCommand(args);
 
     // Update rate limiting
     this.requestCount++;
     this.dailyRequestCount++;
     this.lastRequestTime = Date.now();
 
-    // For regular commands with prompts, use the reference implementation
-    if (promptContent && promptContent.trim()) {
-      return await this.executeGeminiCLIReference(promptContent);
-    } else {
-      throw new Error('No prompt content provided for Gemini CLI execution');
-    }
+    // Use reference implementation method
+    return await this.executeGeminiCLIReference(promptContent);
   }
 
   /**
@@ -977,27 +937,12 @@ export class GeminiCLILayer implements LayerInterface {
    */
   private async testGeminiConnection(): Promise<void> {
     try {
-      // Test with --version first
-      const testArgs = ['--version'];
-      const testResult = await this.executeGeminiProcess(testArgs, '');
-      
-      if (!testResult) {
-        throw new Error('No response from Gemini CLI');
-      }
-      
-      logger.debug('Gemini CLI connection test successful', {
-        version: testResult.trim(),
-      });
+      // Simplified connection test using reference implementation pattern
+      const testPrompt = 'Test connection';
+      await this.executeGeminiCLIReference(testPrompt);
+      logger.debug('Gemini CLI connection test successful');
     } catch (error) {
-      // Don't fail on version command issues - try a simple query instead
-      // CRITICAL FIX: Use executeGeminiCLIReference directly with test prompt
-      try {
-        const testPrompt = 'Test connection';
-        await this.executeGeminiCLIReference(testPrompt);
-        logger.debug('Gemini CLI connection test successful (via simple query)');
-      } catch (testError) {
-        throw new Error(`Gemini CLI connection test failed: ${(testError as Error).message}`);
-      }
+      throw new Error(`Gemini CLI connection test failed: ${(error as Error).message}`);
     }
   }
 
