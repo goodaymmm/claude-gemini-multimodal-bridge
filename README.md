@@ -35,26 +35,17 @@ CGMB operates as an **MCP (Model Context Protocol) server** with enterprise-grad
 
 ```mermaid
 graph TD
-    A[Claude Code] --> B[CGMB Server v1.1.0]
+    A[Claude Code] --> B[CGMB Server]
     
-    B --> C[AuthCache]
-    C --> D[Task Analysis]
+    B -->|Text/Search| C[Gemini CLI]
+    B -->|Code/Logic| D[Claude Code] 
+    B -->|Files/Media| E[AI Studio]
     
-    D --> E{Smart Routing}
+    C --> F[Response]
+    D --> F
+    E --> F
     
-    E -->|Text/Search| F[Gemini CLI]
-    E -->|Code/Logic| G[Claude Code] 
-    E -->|Files/Media| H[AI Studio]
-    
-    F --> I[Web Search]
-    G --> J[Complex Reasoning]
-    H --> K[Multimodal Processing]
-    
-    I --> L[Response]
-    J --> L
-    K --> L
-    
-    L --> A
+    F --> A
 ```
 
 ### How It Works
