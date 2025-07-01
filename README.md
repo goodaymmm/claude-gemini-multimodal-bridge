@@ -52,8 +52,6 @@ flowchart LR
         D  
         E
     end
-    
-    style layers fill:#f9f9f9,stroke:#ddd,stroke-width:1px
 ```
 
 ### How It Works
