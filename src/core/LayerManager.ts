@@ -28,16 +28,75 @@ export interface ExecutionOptions {
 }
 
 export class LayerManager {
-  private claudeLayer: ClaudeCodeLayer;
-  private geminiLayer: GeminiCLILayer;
-  private aiStudioLayer: AIStudioLayer;
+  private claudeLayer: ClaudeCodeLayer | null = null;
+  private geminiLayer: GeminiCLILayer | null = null;
+  private aiStudioLayer: AIStudioLayer | null = null;
   private config: Config;
+  private layerInitialized: {
+    claude: boolean;
+    gemini: boolean;
+    aistudio: boolean;
+  } = {
+    claude: false,
+    gemini: false,
+    aistudio: false
+  };
 
   constructor(config: Config) {
     this.config = config;
-    this.claudeLayer = new ClaudeCodeLayer();
-    this.geminiLayer = new GeminiCLILayer();
-    this.aiStudioLayer = new AIStudioLayer();
+    // Layers are now created on-demand (lazy loading)
+  }
+
+  /**
+   * Get Claude layer with lazy initialization
+   */
+  public getClaudeLayer(): ClaudeCodeLayer {
+    if (!this.claudeLayer) {
+      logger.info('Lazy initializing Claude Code layer');
+      this.claudeLayer = new ClaudeCodeLayer();
+      if (!this.layerInitialized.claude) {
+        // Initialize only when first accessed
+        this.claudeLayer.initialize().then(() => {
+          this.layerInitialized.claude = true;
+          logger.info('Claude Code layer initialized via lazy loading');
+        }).catch(error => {
+          logger.error('Failed to initialize Claude Code layer', error as Error);
+        });
+      }
+    }
+    return this.claudeLayer;
+  }
+
+  /**
+   * Get Gemini layer with lazy initialization
+   */
+  public getGeminiLayer(): GeminiCLILayer {
+    if (!this.geminiLayer) {
+      logger.info('Lazy initializing Gemini CLI layer');
+      this.geminiLayer = new GeminiCLILayer();
+      // Gemini layer doesn't require initialization for fast path
+    }
+    return this.geminiLayer;
+  }
+
+  /**
+   * Get AI Studio layer with lazy initialization
+   */
+  public getAIStudioLayer(): AIStudioLayer {
+    if (!this.aiStudioLayer) {
+      logger.info('Lazy initializing AI Studio layer');
+      this.aiStudioLayer = new AIStudioLayer();
+      if (!this.layerInitialized.aistudio) {
+        // Initialize only when first accessed
+        this.aiStudioLayer.initialize().then(() => {
+          this.layerInitialized.aistudio = true;
+          logger.info('AI Studio layer initialized via lazy loading');
+        }).catch(error => {
+          logger.error('Failed to initialize AI Studio layer', error as Error);
+        });
+      }
+    }
+    return this.aiStudioLayer;
   }
 
   /**
@@ -53,7 +112,7 @@ export class LayerManager {
 
     try {
       // Use fast execution directly on Gemini layer
-      const result = await this.geminiLayer.executeFast({
+      const result = await this.getGeminiLayer().executeFast({
         type: 'text_processing',
         prompt,
         files: files || [],
@@ -97,48 +156,14 @@ export class LayerManager {
   }
 
   /**
-   * Initialize all layers
+   * Initialize all layers (now optional - layers are initialized on demand)
    */
   public async initializeLayers(): Promise<void> {
-    logger.info('Initializing all layers...');
-
-    const initializationPromises = [
-      safeExecute(
-        () => this.claudeLayer.initialize(),
-        { operationName: 'claude-layer-init', layer: 'claude' }
-      ),
-      safeExecute(
-        () => this.geminiLayer.initialize(),
-        { operationName: 'gemini-layer-init', layer: 'gemini' }
-      ),
-      safeExecute(
-        () => this.aiStudioLayer.initialize(),
-        { operationName: 'aistudio-layer-init', layer: 'aistudio' }
-      ),
-    ];
-
-    const results = await Promise.allSettled(initializationPromises);
+    logger.info('Layer initialization is now on-demand. Skipping bulk initialization.');
     
-    // Log initialization results
-    results.forEach((result, index) => {
-      const layerNames = ['Claude Code', 'Gemini CLI', 'AI Studio'];
-      if (result.status === 'fulfilled') {
-        logger.info(`${layerNames[index]} layer initialized successfully`);
-      } else {
-        logger.error(`${layerNames[index]} layer initialization failed`, result.reason);
-      }
-    });
-
-    // Check if we have at least one working layer
-    const successfulLayers = results.filter(r => r.status === 'fulfilled').length;
-    if (successfulLayers === 0) {
-      throw new CGMBError(
-        'All layers failed to initialize',
-        'INITIALIZATION_FAILED'
-      );
-    }
-
-    logger.info(`Layer initialization completed: ${successfulLayers}/3 layers available`);
+    // This method is kept for backward compatibility but layers are now
+    // initialized on first use for better performance
+    logger.info('Layers will be initialized when first accessed');
   }
 
   /**
@@ -154,19 +179,8 @@ export class LayerManager {
       workflow,
       fileCount: files.length,
       promptLength: prompt.length,
-      options: options ? Object.keys(options) : [],
-      layersInitialized: {
-        claude: !!this.claudeLayer,
-        gemini: !!this.geminiLayer,
-        aistudio: !!this.aiStudioLayer
-      }
+      options: options ? Object.keys(options) : []
     });
-
-    // Check if layers are properly initialized
-    if (!this.claudeLayer || !this.geminiLayer || !this.aiStudioLayer) {
-      logger.error('LayerManager layers not properly initialized');
-      throw new Error('LayerManager layers not initialized');
-    }
 
     // Fast path for simple prompts (reference implementation style)
     if (this.isSimplePrompt(prompt, files) && workflow === 'analysis') {
@@ -866,11 +880,11 @@ export class LayerManager {
   private getLayer(layerType: LayerType) {
     switch (layerType) {
       case 'claude':
-        return this.claudeLayer;
+        return this.getClaudeLayer();
       case 'gemini':
-        return this.geminiLayer;
+        return this.getGeminiLayer();
       case 'aistudio':
-        return this.aiStudioLayer;
+        return this.getAIStudioLayer();
       default:
         throw new CGMBError(`Unknown layer type: ${layerType}`, 'INVALID_LAYER_TYPE');
     }
@@ -1014,18 +1028,6 @@ export class LayerManager {
     }, 0);
   }
 
-  // Public getters for layers (for testing and debugging)
-  public getClaudeLayer(): ClaudeCodeLayer {
-    return this.claudeLayer;
-  }
-
-  public getGeminiLayer(): GeminiCLILayer {
-    return this.geminiLayer;
-  }
-
-  public getAIStudioLayer(): AIStudioLayer {
-    return this.aiStudioLayer;
-  }
 
   /**
    * Detect if request is for content generation

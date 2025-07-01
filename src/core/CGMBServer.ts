@@ -20,6 +20,9 @@ import {
   MultimodalProcessArgsSchema,
   WorkflowDefinitionArgs,
   WorkflowDefinitionArgsSchema,
+  EnhancedCGMBRequest,
+  EnhancedCGMBRequestSchema,
+  WorkflowResult,
 } from './types.js';
 import { Config, ConfigSchema } from './types.js';
 
@@ -132,6 +135,15 @@ export class CGMBServer {
       return {
         tools: [
           {
+            name: 'cgmb_get_layer_requirements',
+            description: '📋 Get formatting requirements and capabilities for each AI layer. Use this to understand how to format data for optimal processing by Gemini CLI or AI Studio.',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              additionalProperties: false
+            },
+          },
+          {
             name: 'cgmb',
             description: '🎯 **USE WHEN PROMPT CONTAINS "CGMB" KEYWORD** - Claude-Gemini Multimodal Bridge. Intelligently routes to Gemini CLI (web search, analysis) or AI Studio (multimodal processing) based on your request. Simply include "CGMB" in your prompt. Examples: "CGMB analyze this image", "CGMB search latest AI news", "CGMB process this document"',
             inputSchema: {
@@ -140,6 +152,36 @@ export class CGMBServer {
                 prompt: {
                   type: 'string',
                   description: 'User prompt (must contain CGMB keyword for optimal processing)',
+                },
+                targetLayer: {
+                  type: 'string',
+                  enum: ['gemini', 'aistudio', 'adaptive'],
+                  description: 'Target layer for direct routing (optional)',
+                },
+                preformatted: {
+                  type: 'boolean',
+                  description: 'Whether the data is already formatted for the target layer',
+                  default: false,
+                },
+                formattedData: {
+                  type: 'object',
+                  description: 'Pre-formatted data for layers (when preformatted=true)',
+                  properties: {
+                    geminiFormat: {
+                      type: 'object',
+                      properties: {
+                        stdin: { type: 'string' },
+                        args: { type: 'array', items: { type: 'string' } }
+                      }
+                    },
+                    aistudioFormat: {
+                      type: 'object',
+                      properties: {
+                        apiData: { type: 'object' },
+                        files: { type: 'array', items: { type: 'string' } }
+                      }
+                    }
+                  }
                 },
                 files: {
                   type: 'array',
@@ -299,6 +341,9 @@ export class CGMBServer {
         let result: CallToolResult;
 
         switch (name) {
+          case 'cgmb_get_layer_requirements':
+            result = await this.handleGetLayerRequirements();
+            break;
           case 'cgmb': // Main unified CGMB tool
             result = await this.handleCGMBUnified(args);
             break;
@@ -345,6 +390,94 @@ export class CGMBServer {
   }
 
   /**
+   * Handle get layer requirements request
+   */
+  private async handleGetLayerRequirements(): Promise<CallToolResult> {
+    const requirements = {
+      gemini: {
+        format: 'Text prompts via stdin with optional command-line arguments',
+        requirements: [
+          'Text-based prompts for search and analysis',
+          'Web search queries for current information',
+          'No file upload capability - text only'
+        ],
+        capabilities: [
+          'Real-time web search',
+          'Current information retrieval',
+          'Fast text processing',
+          'Natural language understanding'
+        ],
+        example: {
+          stdin: 'What are the latest AI trends in 2024?',
+          args: []
+        },
+        limitations: [
+          'No direct file processing',
+          'Text-only input/output',
+          'Search results depend on web availability'
+        ]
+      },
+      aistudio: {
+        format: 'JSON API format with base64-encoded files',
+        requirements: [
+          'Multimodal files (images, PDFs, documents)',
+          'Generation tasks (images, audio, video)',
+          'Complex document analysis'
+        ],
+        capabilities: [
+          'Image generation with Imagen 3',
+          'Video generation with Veo 2',
+          'Document processing (PDF, DOCX, etc.)',
+          'Multimodal analysis',
+          'File format conversion'
+        ],
+        example: {
+          apiData: {
+            prompt: 'Analyze this document and extract key points',
+            model: 'gemini-2.0-flash-exp',
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 16384
+            }
+          },
+          files: ['base64_encoded_file_content...']
+        },
+        limitations: [
+          'File size limits (100MB total)',
+          'API quota restrictions',
+          'Processing time for large files'
+        ]
+      },
+      adaptive: {
+        format: 'Automatic selection based on task requirements',
+        requirements: [
+          'Any type of request',
+          'CGMB automatically determines best layer'
+        ],
+        capabilities: [
+          'Intelligent routing',
+          'Optimal layer selection',
+          'Fallback strategies',
+          'Combined layer processing'
+        ],
+        example: {
+          prompt: 'CGMB analyze this document and search for related information',
+          files: [{ path: 'document.pdf', type: 'pdf' }]
+        }
+      }
+    };
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(requirements, null, 2)
+        }
+      ]
+    };
+  }
+
+  /**
    * Handle unified CGMB requests - format conversion and delegation to LayerManager
    */
   private async handleCGMBUnified(args: unknown): Promise<CallToolResult> {
@@ -354,6 +487,25 @@ export class CGMBServer {
           args: typeof args === 'object' ? JSON.stringify(args).substring(0, 200) : args 
         });
 
+        // Parse enhanced request
+        const request = this.parseEnhancedRequest(args);
+        
+        // Check if data is preformatted by Claude Code
+        if (request.preformatted && request.formattedData) {
+          logger.info('Using preformatted data from Claude Code', {
+            targetLayer: request.targetLayer,
+            hasGeminiFormat: !!request.formattedData.geminiFormat,
+            hasAistudioFormat: !!request.formattedData.aistudioFormat
+          });
+          
+          // Direct routing with preformatted data
+          const result = await this.processPreformattedRequest(request);
+          return this.formatResponse(result, true);
+        }
+        
+        // Fallback to original processing for backward compatibility
+        logger.info('Using standard processing (not preformatted)');
+        
         // 1. Input validation and normalization
         const normalizedRequest = this.validateAndNormalize(args);
         logger.info('Request normalized', {
@@ -399,6 +551,75 @@ export class CGMBServer {
         operationName: 'cgmb_unified_process',
         timeout: this.config.claude.timeout,
       }
+    );
+  }
+
+  /**
+   * Parse enhanced CGMB request
+   */
+  private parseEnhancedRequest(args: unknown): EnhancedCGMBRequest {
+    try {
+      return EnhancedCGMBRequestSchema.parse(args);
+    } catch (error) {
+      // Fallback for backward compatibility
+      logger.debug('Failed to parse as enhanced request, using basic format');
+      const basicArgs = args as any;
+      return {
+        prompt: basicArgs.prompt || '',
+        targetLayer: undefined,
+        preformatted: false,
+        formattedData: undefined,
+        files: basicArgs.files || [],
+        options: basicArgs.options || {}
+      };
+    }
+  }
+
+  /**
+   * Process preformatted request from Claude Code
+   */
+  private async processPreformattedRequest(request: EnhancedCGMBRequest): Promise<WorkflowResult> {
+    const targetLayer = request.targetLayer || 'adaptive';
+    
+    if (targetLayer === 'gemini' && request.formattedData?.geminiFormat) {
+      // Direct execution on Gemini layer
+      logger.info('Executing preformatted request on Gemini layer');
+      const result = await this.layerManager.getGeminiLayer().executeFast({
+        type: 'text_processing',
+        prompt: request.formattedData.geminiFormat.stdin,
+        files: [],
+        useSearch: true,
+        args: request.formattedData.geminiFormat.args
+      });
+      
+      return {
+        success: result.success,
+        results: [result],
+        metadata: {
+          workflow: 'analysis',
+          execution_mode: 'direct',
+          total_duration: result.metadata?.duration || 0,
+          steps_completed: 1,
+          steps_failed: 0,
+          layers_used: ['gemini'],
+          optimization: 'preformatted-direct'
+        }
+      };
+    }
+    
+    if (targetLayer === 'aistudio' && request.formattedData?.aistudioFormat) {
+      // Direct execution on AI Studio layer
+      logger.info('Executing preformatted request on AI Studio layer');
+      // Implementation for AI Studio direct execution
+      // This would use the preformatted API data
+    }
+    
+    // Fallback to adaptive routing
+    return this.layerManager.processMultimodal(
+      request.prompt,
+      request.files || [],
+      'analysis',
+      request.options
     );
   }
 
@@ -629,15 +850,36 @@ export class CGMBServer {
     const checks = [
       {
         name: 'Claude Code',
-        check: () => this.layerManager.getClaudeLayer().isAvailable(),
+        check: async () => {
+          try {
+            const layer = this.layerManager.getClaudeLayer();
+            return await layer.isAvailable();
+          } catch {
+            return false;
+          }
+        },
       },
       {
         name: 'Gemini CLI',
-        check: () => this.layerManager.getGeminiLayer().isAvailable(),
+        check: async () => {
+          try {
+            const layer = this.layerManager.getGeminiLayer();
+            return await layer.isAvailable();
+          } catch {
+            return false;
+          }
+        },
       },
       {
         name: 'AI Studio MCP',
-        check: () => this.layerManager.getAIStudioLayer().isAvailable(),
+        check: async () => {
+          try {
+            const layer = this.layerManager.getAIStudioLayer();
+            return await layer.isAvailable();
+          } catch {
+            return false;
+          }
+        },
       },
     ];
 

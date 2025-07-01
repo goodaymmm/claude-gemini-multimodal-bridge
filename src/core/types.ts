@@ -7,6 +7,10 @@ import { z } from 'zod';
 // Layer Types
 export const LayerTypeSchema = z.enum(['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator']);
 export type LayerType = z.infer<typeof LayerTypeSchema>;
+
+// Target Layer Types for direct routing
+export const TargetLayerSchema = z.enum(['gemini', 'aistudio', 'adaptive']);
+export type TargetLayer = z.infer<typeof TargetLayerSchema>;
 export const ExecutionModeSchema = z.enum(['sequential', 'parallel', 'adaptive']);
 export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
 export const QualityLevelSchema = z.enum(['fast', 'balanced', 'quality']);
@@ -317,6 +321,44 @@ export const ReasoningResultSchema = z.object({
   steps: z.array(z.string()).optional(),
 });
 export type ReasoningResult = z.infer<typeof ReasoningResultSchema>;
+
+// ===================================
+// Layer Requirements and Formatting Types
+// ===================================
+
+// Layer requirement information
+export const LayerRequirementsSchema = z.object({
+  format: z.string(),
+  requirements: z.array(z.string()),
+  capabilities: z.array(z.string()),
+  example: z.record(z.any()),
+  limitations: z.array(z.string()).optional()
+});
+export type LayerRequirements = z.infer<typeof LayerRequirementsSchema>;
+
+// Formatted data for each layer
+export const FormattedLayerDataSchema = z.object({
+  geminiFormat: z.object({
+    stdin: z.string(),
+    args: z.array(z.string())
+  }).optional(),
+  aistudioFormat: z.object({
+    apiData: z.record(z.any()),
+    files: z.array(z.string()) // base64 encoded
+  }).optional()
+});
+export type FormattedLayerData = z.infer<typeof FormattedLayerDataSchema>;
+
+// Enhanced CGMB request with preformatting support
+export const EnhancedCGMBRequestSchema = z.object({
+  prompt: z.string(),
+  targetLayer: TargetLayerSchema.optional(),
+  preformatted: z.boolean().optional(),
+  formattedData: FormattedLayerDataSchema.optional(),
+  files: z.array(FileReferenceSchema).optional(),
+  options: ProcessingOptionsSchema.optional()
+});
+export type EnhancedCGMBRequest = z.infer<typeof EnhancedCGMBRequestSchema>;
 
 // ===================================
 // Media Generation Types and Schemas
