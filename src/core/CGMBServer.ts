@@ -145,13 +145,13 @@ export class CGMBServer {
           },
           {
             name: 'cgmb',
-            description: '🎯 **USE WHEN PROMPT CONTAINS "CGMB" KEYWORD** - claude-gemini-multimodal-bridge. Intelligently routes to Gemini CLI (web search, analysis) or AI Studio (multimodal processing) based on your request. ⚠️ CRITICAL: Include "CGMB" keyword in prompts. Examples: "CGMB analyze this image", "CGMB search latest AI news", "CGMB process this document"',
+            description: '🎯 **Multi-layer AI Bridge** - claude-gemini-multimodal-bridge for intelligent AI processing. Routes requests to Gemini CLI (web search, analysis) or AI Studio (multimodal processing) based on content. Works with natural language requests about AI assistance, web search, document analysis, or multimodal tasks. Examples: "analyze this image", "search latest AI news", "process this document"',
             inputSchema: {
               type: 'object',
               properties: {
                 prompt: {
                   type: 'string',
-                  description: 'User prompt (must contain CGMB keyword for optimal processing)',
+                  description: 'User prompt for AI processing (web search, analysis, multimodal tasks)',
                 },
                 targetLayer: {
                   type: 'string',
@@ -219,7 +219,7 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_multimodal_process',
-            description: '🎨 **For structured CGMB requests** - Multimodal processor for images, documents, and web search. ⚠️ IMPORTANT: Must include "CGMB" keyword in prompt to trigger. Use for specific workflow requirements with CGMB. Examples: "CGMB analyze PDF", "CGMB process images"',
+            description: '🎨 **Multimodal Processing** - Advanced processor for images, documents, audio, and complex workflows. Handles file analysis, content extraction, format conversion, and generation tasks. Use for multimodal content processing, document analysis, or structured workflows. Examples: "analyze this PDF", "process these images", "extract text from document"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -275,7 +275,7 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_document_analysis',
-            description: '📄 **For document CGMB requests** - Document analysis for PDFs, text files, code files. ⚠️ IMPORTANT: Must include "CGMB" keyword in prompt to trigger. Use with CGMB for document-specific tasks. Examples: "CGMB analyze contract", "CGMB compare documents"',
+            description: '📄 **Document Analysis** - Specialized document processor for PDFs, text files, code files, and contracts. Performs summary, comparison, extraction, and translation tasks. Use for document-specific analysis needs. Examples: "analyze this contract", "compare these documents", "extract information from PDF"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -299,7 +299,7 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_workflow_orchestration',
-            description: '🔄 **For complex CGMB workflows** - Multi-step AI workflows combining web search, document analysis, and content generation. Use with CGMB for complex tasks. Examples: "CGMB create comprehensive report", "CGMB analyze multiple sources"',
+            description: '🔄 **Complex Workflows** - Multi-step AI workflows combining web search, document analysis, and content generation. Orchestrates sequential, parallel, or adaptive execution across multiple AI layers. Use for comprehensive analysis tasks. Examples: "create comprehensive report", "analyze multiple sources", "generate detailed comparison"',
             inputSchema: {
               type: 'object',
               properties: {
