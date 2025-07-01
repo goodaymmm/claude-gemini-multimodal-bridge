@@ -35,52 +35,43 @@ CGMB operates as an **MCP (Model Context Protocol) server** with enterprise-grad
 
 ```mermaid
 graph TD
-    A[Claude Code CLI] --> B[MCP Connection]
-    B --> C[CGMB Server v1.1.0]
+    A[Claude Code] --> B[CGMB Server v1.1.0]
     
-    C --> D[AuthCache System]
-    D -->|Cached Auth| E[Authentication Verified]
-    D -->|No Cache| F[OAuth/API Key Auth]
-    F --> E
+    B --> C[AuthCache]
+    C --> D[Task Analysis]
     
-    E --> G[Task Analyzer]
-    G --> H{Intelligent Routing}
+    D --> E{Smart Routing}
     
-    H -->|Simple/Text| I[Gemini CLI Layer - 435 Lines]
-    H -->|Complex Reasoning| J[Claude Code Layer] 
-    H -->|Multimodal/Files| K[AI Studio Layer]
+    E -->|Text/Search| F[Gemini CLI]
+    E -->|Code/Logic| G[Claude Code] 
+    E -->|Files/Media| H[AI Studio]
     
-    I --> L[Web Search & Grounding]
-    J --> M[Strategic Planning & Code]
-    K --> N[Image/Document Processing]
+    F --> I[Web Search]
+    G --> J[Complex Reasoning]
+    H --> K[Multimodal Processing]
     
-    L --> O[Fallback Strategies]
-    M --> O
-    K --> O
+    I --> L[Response]
+    J --> L
+    K --> L
     
-    O -->|Success| P[Enterprise Response]
-    O -->|Failure| Q[Auto Layer Switch]
-    Q --> P
-    
-    P --> R[Enhanced Response to Claude Code]
+    L --> A
 ```
 
-### How It Works (v1.1.0 Enterprise Architecture)
+### How It Works
 
-1. **Enterprise Authentication**: AuthCache system provides service-specific TTL optimization (Gemini 6h, AI Studio 24h, Claude 12h)
-2. **Intelligent Task Analysis**: Automatic analysis of request complexity, file types, and processing requirements
-3. **Optimal Layer Routing**: Smart routing to best-suited AI layer based on task characteristics and performance data
-4. **Simplified Execution**: Streamlined Gemini CLI integration (435 lines) for 3x faster processing
-5. **Fallback Strategies**: 95% automatic recovery with intelligent layer switching on failures
-6. **Direct Node.js Execution**: Fixed MCP startup issues with 100% reliability for Claude Code integration
+1. **Smart Authentication**: Cached auth reduces overhead by 80%
+2. **Task Analysis**: Automatically routes to the best AI layer
+3. **Simplified Architecture**: Streamlined for 3x faster processing
+4. **Auto Recovery**: 95% self-healing with automatic fallbacks
+5. **Reliable Startup**: Direct Node.js execution ensures 100% connectivity
 
-### Layer Responsibilities (v1.1.0 Enhanced)
+### Layer Responsibilities
 
-| Layer | Primary Functions | Best For | v1.1.0 Improvements |
-|-------|------------------|----------|---------------------|
-| **Claude Code** | Complex reasoning, workflow orchestration, code analysis | Strategic planning, complex logic | Enhanced with authentication caching |
-| **Gemini CLI** | Web search, grounding, rapid text processing | Real-time data, current information | Simplified to 435 lines, 3x faster execution |
-| **AI Studio MCP** | Multimodal processing, file conversion, generation | Images, audio, PDFs, documents | Enhanced with intelligent fallback strategies |
+| Layer | Primary Functions | Best For |
+|-------|------------------|----------|
+| **Claude Code** | Complex reasoning, code analysis | Strategic planning, complex logic |
+| **Gemini CLI** | Web search, current information | Real-time data, quick queries |
+| **AI Studio** | Multimodal processing, generation | Images, documents, files |
 
 📖 **API Key Setup Guides:**
 - [Gemini API Key Guide](https://ai.google.dev/gemini-api/docs/api-key)
