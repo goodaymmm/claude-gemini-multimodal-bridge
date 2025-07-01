@@ -170,7 +170,7 @@ export class CGMBServer {
                     geminiFormat: {
                       type: 'object',
                       properties: {
-                        stdin: { type: 'string' },
+                        prompt: { type: 'string' },
                         args: { type: 'array', items: { type: 'string' } }
                       }
                     },
@@ -219,7 +219,7 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_multimodal_process',
-            description: '🎨 **For structured CGMB requests** - Multimodal processor for images, documents, and web search. Use for specific workflow requirements with CGMB. Examples: "CGMB analyze PDF", "CGMB process images"',
+            description: '🎨 **For structured CGMB requests** - Multimodal processor for images, documents, and web search. ⚠️ IMPORTANT: Must include "CGMB" keyword in prompt to trigger. Use for specific workflow requirements with CGMB. Examples: "CGMB analyze PDF", "CGMB process images"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -275,7 +275,7 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_document_analysis',
-            description: '📄 **For document CGMB requests** - Document analysis for PDFs, text files, code files. Use with CGMB for document-specific tasks. Examples: "CGMB analyze contract", "CGMB compare documents"',
+            description: '📄 **For document CGMB requests** - Document analysis for PDFs, text files, code files. ⚠️ IMPORTANT: Must include "CGMB" keyword in prompt to trigger. Use with CGMB for document-specific tasks. Examples: "CGMB analyze contract", "CGMB compare documents"',
             inputSchema: {
               type: 'object',
               properties: {

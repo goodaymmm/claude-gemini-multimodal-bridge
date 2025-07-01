@@ -1092,14 +1092,42 @@ async function executeGeminiCommand(options: any) {
       if (options.model && options.model !== 'gemini-2.5-pro') {
         args.push('-m', options.model);
       }
-      args.push('-p', `"${options.prompt}"`);
+      args.push('-p', options.prompt);
       // Note: Web search is automatic in Gemini CLI, no flags needed
       
       try {
-        const result = execSync(args.join(' '), { 
-          encoding: 'utf8',
-          timeout: 90000,
-          stdio: 'pipe'
+        const { spawn } = await import('child_process');
+        const child = spawn(args[0]!, args.slice(1));
+        
+        let result = '';
+        let error = '';
+        
+        child.stdout?.on('data', (data: Buffer) => {
+          result += data.toString();
+        });
+        
+        child.stderr?.on('data', (data: Buffer) => {
+          error += data.toString();
+        });
+        
+        await new Promise<void>((resolve, reject) => {
+          child.on('close', (code: number | null) => {
+            if (code !== 0) {
+              reject(new Error(`Process exited with code ${code}: ${error}`));
+            } else {
+              resolve();
+            }
+          });
+          
+          child.on('error', (err: Error) => {
+            reject(err);
+          });
+          
+          // Timeout
+          setTimeout(() => {
+            child.kill();
+            reject(new Error('Process timeout'));
+          }, 90000);
         });
         
         logger.info('✅ Fast path Gemini CLI processing completed');

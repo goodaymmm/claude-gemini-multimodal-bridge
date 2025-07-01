@@ -8,7 +8,15 @@
 
 ## ✨ Features
 
-### 🆕 **Latest Version (v1.1.0 - UX Revolution)**
+### 🆕 **Latest Version (v1.1.1 - Critical Fixes)**
+- 🐛 **CRITICAL: Fixed Empty Prompts Bug**: Fixed double-quoting issue in fast path execution causing prompts to become empty on 2nd+ runs
+- 🔧 **Improved Argument Handling**: Replaced `execSync(args.join(' '))` with proper `spawn()` for better shell argument processing
+- 🎯 **Enhanced MCP Triggering**: Updated all tool descriptions to clearly emphasize CGMB keyword requirement for Claude Code integration
+- 📝 **Code Consistency**: Cleaned up conflicting comments about stdin usage, unified on command-argument approach
+- ⚡ **Process Communication**: Unified all execution methods to use `-p` flag approach (no stdin processing)
+- 🔍 **Better Debugging**: Enhanced error messages and logging for prompt handling issues
+
+### 🆕 **Previous Version (v1.1.0 - UX Revolution)**
 - 💬 **NEW: `cgmb chat` Command**: Natural, user-friendly Gemini interaction (`cgmb chat "question"`)
 - 🧠 **Smart Prompt Detection**: Auto-detects prompts without requiring `-p` flag
 - 🔧 **Reference Implementation**: Fixed API "function response parts" errors using mcp-gemini-cli pattern

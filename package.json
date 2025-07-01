@@ -1,7 +1,7 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.1.0",
-  "description": "UX-enhanced multi-layer AI bridge with natural chat commands, smart prompt detection, and reference implementation for seamless integration of Claude Code, Gemini CLI, and Google AI Studio",
+  "version": "1.1.1",
+  "description": "Critical fixes multi-layer AI bridge - fixed empty prompts bug, enhanced MCP triggering, and improved process communication for Claude Code, Gemini CLI, and Google AI Studio integration",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -9,8 +9,8 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "Claude-Gemini Multimodal Bridge - UX-enhanced multi-layer AI integration with natural chat commands",
-    "version": "1.1.0",
+    "description": "Claude-Gemini Multimodal Bridge - Critical fixes: empty prompts bug fixed, enhanced MCP triggering, improved process communication",
+    "version": "1.1.1",
     "command": "cgmb",
     "args": ["serve"],
     "servers": {

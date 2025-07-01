@@ -702,7 +702,7 @@ export class GeminiCLILayer implements LayerInterface {
   }
 
   /**
-   * Build Gemini CLI command arguments (without prompt - will be sent via stdin)
+   * Build Gemini CLI command arguments (for file processing only - prompts use -p flag)
    */
   private buildGeminiCommand(options: {
     files?: string[];
@@ -719,7 +719,7 @@ export class GeminiCLILayer implements LayerInterface {
       });
     }
 
-    // Don't add -p flag - prompt will be sent via stdin for better reliability
+    // Don't add -p flag here - prompts are handled separately with -p flag
     logger.debug('Built Gemini command arguments', {
       argsCount: args.length,
       hasFiles: options.files && options.files.length > 0,
