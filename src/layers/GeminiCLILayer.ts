@@ -735,6 +735,7 @@ export class GeminiCLILayer implements LayerInterface {
    */
   private async executeGeminiCLIReference(prompt: string, options: { model?: string } = {}): Promise<string> {
     const command = this.geminiPath || 'gemini';
+    // Use same argument construction as successful fast path
     const args = ['-p', prompt];
     
     if (options.model && options.model !== 'gemini-2.5-pro') {
@@ -744,17 +745,18 @@ export class GeminiCLILayer implements LayerInterface {
     return new Promise<string>((resolve, reject) => {
       logger.debug('Executing Gemini CLI (reference style)', {
         command,
+        args,
+        fullCommand: `${command} ${args.join(' ')}`,
         argsCount: args.length,
         promptLength: prompt.length
       });
 
-      const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       
       let stdout = '';
       let stderr = '';
       
-      // Reference implementation: immediately close stdin
-      child.stdin?.end();
+      // No stdin processing - pure command argument approach
       
       child.stdout?.on('data', (data) => {
         stdout += data.toString();
@@ -765,9 +767,26 @@ export class GeminiCLILayer implements LayerInterface {
       });
       
       child.on('close', (code) => {
+        logger.debug('Gemini CLI process closed', {
+          code,
+          stdoutLength: stdout.length,
+          stderrLength: stderr.length,
+          hasStdout: stdout.length > 0,
+          hasStderr: stderr.length > 0
+        });
+        
         if (code === 0) {
+          logger.debug('Gemini CLI execution successful', {
+            outputPreview: stdout.substring(0, 200) + (stdout.length > 200 ? '...' : '')
+          });
           resolve(stdout.trim());
         } else {
+          logger.error('Gemini CLI execution failed', {
+            code,
+            stderr: stderr.substring(0, 500),
+            fullCommand: `${command} ${args.join(' ')}`
+          });
+          
           // Enhanced error handling for common issues
           if (stderr.includes('function response parts') || stderr.includes('function call parts')) {
             reject(new Error(`Function call mismatch error. This usually indicates an authentication or API configuration issue. Try:\n1. gemini auth (OAuth - recommended)\n2. Check API key configuration\n3. Verify gemini CLI version\n\nOriginal error: ${stderr}`));
@@ -795,28 +814,32 @@ export class GeminiCLILayer implements LayerInterface {
 
   /**
    * Fast lightweight spawn implementation based on mcp-gemini-cli reference
-   * Optimized for speed with minimal overhead
+   * Uses pure command argument approach without stdin
    */
-  private async executeGeminiProcessFast(args: string[], promptContent: string): Promise<string> {
+  private async executeGeminiProcessFast(prompt: string, options: { model?: string } = {}): Promise<string> {
     const command = this.geminiPath || 'gemini';
+    // Construct args the same way as executeGeminiCLIReference
+    const args = ['-p', prompt];
+    
+    if (options.model && options.model !== 'gemini-2.5-pro') {
+      args.push('-m', options.model);
+    }
     
     return new Promise<string>((resolve, reject) => {
       logger.debug('Fast Gemini CLI execution', {
         command,
+        args,
+        fullCommand: `${command} ${args.join(' ')}`,
         argsCount: args.length,
-        promptLength: promptContent.length
+        promptLength: prompt.length
       });
 
-      const child = spawn(command, args, { stdio: 'pipe' });
+      const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       
       let output = '';
       let errorOutput = '';
       
-      // Reference implementation: immediately close stdin after writing
-      if (child.stdin) {
-        child.stdin.write(promptContent);
-        child.stdin.end(); // Critical: immediate close like reference
-      }
+      // No stdin processing - pure command argument approach
       
       child.stdout?.on('data', (data) => {
         output += data.toString();
@@ -849,7 +872,8 @@ export class GeminiCLILayer implements LayerInterface {
   }
 
   /**
-   * Execute Gemini CLI process with proper stdin handling
+   * Execute Gemini CLI process using reference implementation
+   * Wrapper for backward compatibility
    */
   private async executeGeminiProcess(args: string[], promptContent: string): Promise<string> {
     if (!this.geminiPath) {
@@ -864,103 +888,8 @@ export class GeminiCLILayer implements LayerInterface {
     this.dailyRequestCount++;
     this.lastRequestTime = Date.now();
 
-    return new Promise<string>((resolve, reject) => {
-      logger.debug('Executing Gemini CLI command with stdin', {
-        geminiPath: this.geminiPath,
-        args: args.length,
-        argsPreview: args.join(' '),
-        promptLength: promptContent.length,
-        fullCommand: `${this.geminiPath} ${args.join(' ')}`
-      });
-
-      const child = spawn(this.geminiPath!, args, {
-        stdio: this.DEBUG_MODE ? 'inherit' : 'pipe',
-        cwd: process.cwd(),
-        env: process.env,
-      });
-
-      let output = '';
-      let errorOutput = '';
-
-      const timeoutId = setTimeout(() => {
-        // SIGTERMで正常終了を試みる
-        child.kill('SIGTERM');
-        // 少し待ってから強制終了
-        setTimeout(() => {
-          if (!child.killed) {
-            child.kill('SIGKILL');
-          }
-        }, 1000);
-        
-        reject(new Error(`Gemini CLI execution timeout after ${this.DEFAULT_TIMEOUT}ms. Stderr: ${errorOutput || 'empty'}`));
-      }, this.DEFAULT_TIMEOUT);
-
-      // デバッグモードでは直接ターミナルに出力されるため、プロミス処理をスキップ
-      if (this.DEBUG_MODE) {
-        logger.warn('DEBUG MODE: Using stdio inherit - output will be displayed directly to terminal');
-        child.on('close', (code) => {
-          clearTimeout(timeoutId);
-          resolve(`Debug mode completed with exit code: ${code}`);
-        });
-        if (child.stdin) {
-          child.stdin.write(promptContent);
-          child.stdin.end();
-        }
-        return;
-      }
-
-      // spawn自体が失敗した場合のエラーハンドリング（必須）
-      child.on('error', (err) => {
-        clearTimeout(timeoutId);
-        reject(new Error(`Failed to start Gemini CLI process: ${err.message}`));
-      });
-
-      child.stdout?.on('data', (data) => {
-        output += data.toString();
-      });
-
-      child.stderr?.on('data', (data) => {
-        errorOutput += data.toString();
-      });
-
-      child.on('close', (code) => {
-        clearTimeout(timeoutId);
-        
-        if (code === 0) {
-          // errorOutputに警告などが出力される場合もあるので、必要に応じてログに残す
-          if (errorOutput) {
-            logger.warn(`Gemini CLI produced stderr output even on success:\n${errorOutput}`);
-          }
-          logger.debug('Gemini CLI command completed successfully', {
-            outputLength: output.length,
-            code,
-          });
-          resolve(output);
-        } else {
-          // Handle specific error cases
-          if (errorOutput.includes('authentication') || errorOutput.includes('login')) {
-            reject(new Error('Gemini authentication expired. Please run: gemini auth'));
-          } else if (errorOutput.includes('quota') || errorOutput.includes('rate limit')) {
-            reject(new Error('Gemini API quota exceeded. Please wait or upgrade plan.'));
-          } else {
-            const error = `Gemini CLI exited with code ${code}: ${errorOutput}`;
-            logger.error('Gemini CLI command failed', { 
-              code, 
-              error: errorOutput,
-              command: `${this.geminiPath} ${args.join(' ')}`
-            });
-            reject(new Error(error));
-          }
-        }
-      });
-
-      // 1. stdinにプロンプトを書き込む
-      if (child.stdin) {
-        child.stdin.write(promptContent);
-        // 2.【最重要】これ以上入力がないことをCLIに伝えるためにstdinを閉じる
-        child.stdin.end();
-      }
-    });
+    // Use the reference implementation method instead of complex stdin handling
+    return await this.executeGeminiCLIReference(promptContent);
   }
 
   /**
