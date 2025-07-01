@@ -38,7 +38,7 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.0.8',
+        version: '1.0.9',
         description: 'CGMB - AI multimodal processor with intelligent web search, file analysis, and content generation. Claude-Gemini Multimodal Bridge for seamless AI integration.'
       },
       {
@@ -132,8 +132,52 @@ export class CGMBServer {
       return {
         tools: [
           {
+            name: 'cgmb',
+            description: '🎯 **USE WHEN PROMPT CONTAINS "CGMB" KEYWORD** - Claude-Gemini Multimodal Bridge unified processor. When users mention "CGMB" in their prompt, use this tool for: • Intelligent Web Search (current events, trends) • Advanced Image/Document Analysis • Multimodal Content Processing • Multi-layer AI orchestration. Handles all CGMB requests automatically with optimal routing. Examples: "CGMB analyze this image", "CGMB search latest AI news", "CGMB process this document"',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                prompt: {
+                  type: 'string',
+                  description: 'User prompt (must contain CGMB keyword for optimal processing)',
+                },
+                files: {
+                  type: 'array',
+                  description: 'Optional files to process',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      path: { type: 'string', description: 'File path' },
+                      type: {
+                        type: 'string',
+                        enum: ['image', 'audio', 'pdf', 'document', 'text', 'video'],
+                        description: 'File type',
+                      },
+                    },
+                    required: ['path', 'type'],
+                  },
+                  default: [],
+                },
+                options: {
+                  type: 'object',
+                  description: 'Processing options',
+                  properties: {
+                    priority: {
+                      type: 'string',
+                      enum: ['fast', 'balanced', 'quality'],
+                      description: 'Processing priority',
+                      default: 'balanced',
+                    },
+                  },
+                  default: {},
+                },
+              },
+              required: ['prompt'],
+            },
+          },
+          {
             name: 'cgmb_multimodal_process',
-            description: 'CGMB AI-powered multimodal content processor with intelligent web search, image analysis, and document processing. Claude-Gemini Multimodal Bridge features: • Intelligent Web Search: Ask about current events, trends, or any topic - CGMB automatically determines when web search is needed • Advanced Image Analysis: Process images, diagrams, screenshots with AI vision • Smart Document Processing: Analyze PDFs, text files, code files with context understanding • No special flags needed - just describe what you want to CGMB. Examples: "CGMB analyze the latest AI security trends", "CGMB summarize this PDF document", "CGMB explain this architecture diagram"',
+            description: '🎨 **For structured CGMB multimodal requests** - AI-powered multimodal content processor with intelligent web search, image analysis, and document processing. Use when prompt contains "CGMB" + specific multimodal requirements. Claude-Gemini Multimodal Bridge features: • Intelligent Web Search: Current events, trends • Advanced Image Analysis: Process images, diagrams, screenshots • Smart Document Processing: PDFs, text files, code files. Examples: "CGMB analyze the latest AI security trends", "CGMB summarize this PDF document"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -189,7 +233,7 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_document_analysis',
-            description: 'CGMB Advanced document analysis for PDFs, text files, code files, and more. Claude-Gemini Multimodal Bridge automatically summarizes, compares, extracts key information, or translates content with intelligent processing. Just provide file paths and specify what type of analysis you need to CGMB. Examples: "CGMB analyze this contract", "CGMB compare these documents"',
+            description: '📄 **For document-focused CGMB requests** - Advanced document analysis for PDFs, text files, code files, and more. Use when prompt contains "CGMB" + document analysis requests. Claude-Gemini Multimodal Bridge automatically summarizes, compares, extracts key information, or translates content with intelligent processing. Examples: "CGMB analyze this contract", "CGMB compare these documents"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -213,7 +257,7 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_workflow_orchestration',
-            description: 'CGMB Orchestrate complex multi-step AI workflows combining intelligent web search, document analysis, image processing, and content generation. Claude-Gemini Multimodal Bridge is perfect for comprehensive research, analysis, and content creation tasks. Use CGMB for advanced workflow automation across multiple AI layers.',
+            description: '🔄 **For complex CGMB workflow requests** - Orchestrate multi-step AI workflows combining intelligent web search, document analysis, image processing, and content generation. Use when prompt contains "CGMB" + complex workflow requests. Claude-Gemini Multimodal Bridge is perfect for comprehensive research, analysis, and content creation tasks. Examples: "CGMB create a comprehensive report", "CGMB analyze and compare multiple sources"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -255,6 +299,9 @@ export class CGMBServer {
         let result: CallToolResult;
 
         switch (name) {
+          case 'cgmb': // Main unified CGMB tool
+            result = await this.handleCGMBUnified(args);
+            break;
           case 'cgmb_multimodal_process':
           case 'multimodal_process': // Backward compatibility
             result = await this.handleMultimodalProcess(args);
@@ -295,6 +342,95 @@ export class CGMBServer {
         };
       }
     });
+  }
+
+  /**
+   * Handle unified CGMB requests - the main entry point for CGMB keyword triggers
+   */
+  private async handleCGMBUnified(args: unknown): Promise<CallToolResult> {
+    return safeExecute(
+      async () => {
+        // Import PromptAnalyzer
+        const { PromptAnalyzer } = await import('../utils/PromptAnalyzer.js');
+        
+        // Validate basic structure
+        if (!args || typeof args !== 'object' || !('prompt' in args)) {
+          throw new Error('Invalid arguments: prompt is required');
+        }
+        
+        const { prompt, files = [], options = {} } = args as any;
+        
+        if (typeof prompt !== 'string' || !prompt.trim()) {
+          throw new Error('Invalid prompt: must be a non-empty string');
+        }
+
+        // Analyze the prompt and determine optimal processing
+        const hasCGMBKeyword = PromptAnalyzer.detectCGMBKeyword(prompt);
+        const workflow = PromptAnalyzer.determineOptimalWorkflow(prompt, files);
+        const suggestions = PromptAnalyzer.generateProcessingSuggestions(prompt);
+        
+        logger.info('CGMB unified handler processing request', {
+          hasCGMBKeyword,
+          workflow: workflow.workflow,
+          priority: workflow.priority,
+          useSearch: workflow.useSearch,
+          recommendedTool: suggestions.recommendedTool,
+          confidence: suggestions.confidence
+        });
+
+        // Process the request using LayerManager
+        const result = await this.layerManager.processMultimodal(
+          prompt,
+          files || [],
+          workflow.workflow,
+          {
+            quality_level: workflow.priority,
+            layer_priority: 'adaptive',
+            execution_mode: 'adaptive',
+            ...options
+          }
+        );
+
+        // Enhanced response with CGMB keyword acknowledgment
+        const responsePrefix = hasCGMBKeyword 
+          ? '🎯 **CGMB Activated** - Claude-Gemini Multimodal Bridge processing:\n\n'
+          : '🤖 Multimodal processing completed:\n\n';
+
+        // Lightweight response for fast processing
+        const isLight = result.metadata?.optimization === 'fast-path-bypass';
+        
+        if (isLight) {
+          const mainResult = Array.isArray(result.results) ? result.results[0] : Object.values(result.results || {})[0];
+          return {
+            content: [
+              {
+                type: 'text',
+                text: responsePrefix + (mainResult?.data || 'Processing completed successfully')
+              }
+            ]
+          };
+        }
+
+        // Full response for complex workflows
+        const responseText = responsePrefix + 
+          (result.summary || 'Processing completed') +
+          (suggestions.suggestions.length > 0 ? 
+            '\n\n💡 **Processing Notes:**\n' + suggestions.suggestions.map(s => `• ${s}`).join('\n') : '');
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: responseText
+            }
+          ]
+        };
+      },
+      {
+        operationName: 'cgmb_unified_process',
+        timeout: this.config.claude.timeout,
+      }
+    );
   }
 
   /**
