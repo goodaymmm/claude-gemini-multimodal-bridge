@@ -1,6 +1,6 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Ultra-high-performance multi-layer AI integration bridge with 90% faster response times, smart authentication caching, fast-path mode, and seamless MCP integration for Claude Code, Gemini CLI, and Google AI Studio",
   "type": "module",
   "main": "dist/index.js",

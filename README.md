@@ -8,7 +8,16 @@
 
 ## ✨ Features
 
-### 🆕 **New in Latest Version (v1.0.2 - Performance Edition)**
+### 🆕 **New in Latest Version (v1.0.5 - Stability Edition)**
+- 🛠️ **Critical Gemini CLI Fix**: Resolved timeout issues with proper stdin handling (`stdin.end()`)
+- 🔄 **Enhanced Process Communication**: Switched from command-line arguments to stdin for reliable prompt transmission
+- 🐛 **Robust Error Handling**: Added spawn process failure detection and graceful termination
+- 🔍 **Debug Mode**: New `CGMB_DEBUG=true` environment variable for development diagnostics
+- ⚡ **Promise Wrapper**: Proper async/await handling for Gemini CLI processes
+- 🎯 **Security Hardening**: Fixed potential issues with long prompts and special characters
+- 📊 **Improved Logging**: Better error messages and debugging information
+
+### 🆕 **Previous Updates (v1.0.4 - Performance Edition)**
 - 🚀 **Fast Path Mode**: `--fast` option for direct CLI calls (90% faster response times)
 - ⚡ **Lightweight Initialization**: Smart authentication caching reduces overhead by 95%
 - 🎯 **Optimized Authentication TTL**: 
@@ -1019,6 +1028,23 @@ gemini "test prompt"
 
 # Verify environment variables
 cgmb detect-paths
+```
+
+**Gemini CLI timeout issues:**
+```bash
+# Enable debug mode for detailed diagnostics
+export CGMB_DEBUG=true
+cgmb gemini -p "test prompt"
+
+# Check if stdin communication is working
+echo "test prompt" | gemini
+
+# Verify Gemini CLI installation
+gemini --version
+which gemini
+
+# Test with direct CLI
+gemini -p "simple test question"
 ```
 
 **Quota exceeded errors:**

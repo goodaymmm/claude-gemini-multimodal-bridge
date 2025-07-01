@@ -38,6 +38,7 @@ export class GeminiCLILayer implements LayerInterface {
   private readonly AUTH_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours auth cache (OAuth tokens typically valid for 24h)
   private readonly DEFAULT_TIMEOUT = 120000; // 2 minutes
   private readonly MAX_RETRIES = 2;
+  private readonly DEBUG_MODE = process.env.CGMB_DEBUG === 'true'; // Enable debug mode with stdio: 'inherit'
   private readonly RATE_LIMIT = {
     requests: 60,
     window: 60000, // 60 requests per minute
@@ -331,13 +332,17 @@ export class GeminiCLILayer implements LayerInterface {
           }
         }
 
-        const args = this.buildGeminiCommand(optimizedPrompt, {
-          search: context.useSearch !== false, // Default to true
+        // Build final prompt with context
+        let finalPrompt = optimizedPrompt;
+        if (context.context) {
+          finalPrompt += `\n\nAdditional context: ${context.context}`;
+        }
+
+        const args = this.buildGeminiCommand({
           files: context.files || [],
-          context: context.context || '',
         });
 
-        const output = await this.executeGeminiProcess(args);
+        const output = await this.executeGeminiProcess(args, finalPrompt);
         const processingTime = Date.now() - startTime;
         
         const result: GroundedResult = {
@@ -376,12 +381,12 @@ export class GeminiCLILayer implements LayerInterface {
         // Validate file types and sizes
         this.validateFiles(files);
 
-        const args = this.buildGeminiCommand(prompt, {
+        const args = this.buildGeminiCommand({
           files: files.map(f => f.path),
         });
 
         const startTime = Date.now();
-        const output = await this.executeGeminiProcess(args);
+        const output = await this.executeGeminiProcess(args, prompt);
         const processingTime = Date.now() - startTime;
 
         return {
@@ -422,11 +427,11 @@ export class GeminiCLILayer implements LayerInterface {
           prompt += `\n\nContext: ${task.context}`;
         }
 
-        const args = this.buildGeminiCommand(prompt, {
-          search: task.useSearch || false,
+        const args = this.buildGeminiCommand({
+          files: task.files ? task.files.map((f: any) => f.path || f) : [],
         });
 
-        const output = await this.executeGeminiProcess(args);
+        const output = await this.executeGeminiProcess(args, prompt);
         return output.trim();
       },
       {
@@ -489,21 +494,18 @@ export class GeminiCLILayer implements LayerInterface {
   private async executeGeneral(task: any): Promise<string> {
     const prompt = task.prompt || task.request || task.input || 'Please help with this task.';
     
-    const args = this.buildGeminiCommand(prompt, {
-      search: task.useSearch,
+    const args = this.buildGeminiCommand({
       files: task.files,
     });
 
-    return await this.executeGeminiProcess(args);
+    return await this.executeGeminiProcess(args, prompt);
   }
 
   /**
-   * Build Gemini CLI command arguments
+   * Build Gemini CLI command arguments (without prompt - will be sent via stdin)
    */
-  private buildGeminiCommand(prompt: string, options: {
-    search?: boolean;
+  private buildGeminiCommand(options: {
     files?: string[];
-    context?: string;
   } = {}): string[] {
     const args: string[] = [];
 
@@ -517,31 +519,20 @@ export class GeminiCLILayer implements LayerInterface {
       });
     }
 
-    // Build final prompt
-    let finalPrompt = prompt;
-    if (options.context) {
-      finalPrompt += `\n\nAdditional context: ${options.context}`;
-    }
-
-    // Use -p option for better token efficiency and stability
-    // This prevents issues with long prompts being passed as arguments
-    // Both -p and --prompt should work, but -p is shorter and more reliable
-    args.push('-p', finalPrompt);
-
+    // Don't add -p flag - prompt will be sent via stdin for better reliability
     logger.debug('Built Gemini command arguments', {
       argsCount: args.length,
-      hasPromptFlag: args.includes('-p'),
-      promptLength: finalPrompt.length,
-      command: `gemini ${args.join(' ').substring(0, 100)}...`
+      hasFiles: options.files && options.files.length > 0,
+      command: `gemini ${args.join(' ')}`
     });
 
     return args;
   }
 
   /**
-   * Execute Gemini CLI process
+   * Execute Gemini CLI process with proper stdin handling
    */
-  private async executeGeminiProcess(args: string[]): Promise<string> {
+  private async executeGeminiProcess(args: string[], promptContent: string): Promise<string> {
     if (!this.geminiPath) {
       throw new Error('Gemini CLI not initialized');
     }
@@ -555,15 +546,16 @@ export class GeminiCLILayer implements LayerInterface {
     this.lastRequestTime = Date.now();
 
     return new Promise<string>((resolve, reject) => {
-      logger.debug('Executing Gemini CLI command', {
+      logger.debug('Executing Gemini CLI command with stdin', {
         geminiPath: this.geminiPath,
         args: args.length,
-        argsPreview: args.slice(0, -1).join(' ') + ' [prompt]',
-        fullCommand: `${this.geminiPath} ${args.slice(0, -1).join(' ')} -p "[PROMPT]"`
+        argsPreview: args.join(' '),
+        promptLength: promptContent.length,
+        fullCommand: `${this.geminiPath} ${args.join(' ')}`
       });
 
       const child = spawn(this.geminiPath!, args, {
-        stdio: 'pipe',
+        stdio: this.DEBUG_MODE ? 'inherit' : 'pipe',
         cwd: process.cwd(),
         env: process.env,
       });
@@ -572,15 +564,43 @@ export class GeminiCLILayer implements LayerInterface {
       let errorOutput = '';
 
       const timeoutId = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error(`Gemini CLI execution timeout after ${this.DEFAULT_TIMEOUT}ms`));
+        // SIGTERMで正常終了を試みる
+        child.kill('SIGTERM');
+        // 少し待ってから強制終了
+        setTimeout(() => {
+          if (!child.killed) {
+            child.kill('SIGKILL');
+          }
+        }, 1000);
+        
+        reject(new Error(`Gemini CLI execution timeout after ${this.DEFAULT_TIMEOUT}ms. Stderr: ${errorOutput || 'empty'}`));
       }, this.DEFAULT_TIMEOUT);
 
-      child.stdout.on('data', (data) => {
+      // デバッグモードでは直接ターミナルに出力されるため、プロミス処理をスキップ
+      if (this.DEBUG_MODE) {
+        logger.warn('DEBUG MODE: Using stdio inherit - output will be displayed directly to terminal');
+        child.on('close', (code) => {
+          clearTimeout(timeoutId);
+          resolve(`Debug mode completed with exit code: ${code}`);
+        });
+        if (child.stdin) {
+          child.stdin.write(promptContent);
+          child.stdin.end();
+        }
+        return;
+      }
+
+      // spawn自体が失敗した場合のエラーハンドリング（必須）
+      child.on('error', (err) => {
+        clearTimeout(timeoutId);
+        reject(new Error(`Failed to start Gemini CLI process: ${err.message}`));
+      });
+
+      child.stdout?.on('data', (data) => {
         output += data.toString();
       });
 
-      child.stderr.on('data', (data) => {
+      child.stderr?.on('data', (data) => {
         errorOutput += data.toString();
       });
 
@@ -588,6 +608,10 @@ export class GeminiCLILayer implements LayerInterface {
         clearTimeout(timeoutId);
         
         if (code === 0) {
+          // errorOutputに警告などが出力される場合もあるので、必要に応じてログに残す
+          if (errorOutput) {
+            logger.warn(`Gemini CLI produced stderr output even on success:\n${errorOutput}`);
+          }
           logger.debug('Gemini CLI command completed successfully', {
             outputLength: output.length,
             code,
@@ -599,31 +623,24 @@ export class GeminiCLILayer implements LayerInterface {
             reject(new Error('Gemini authentication expired. Please run: gemini auth'));
           } else if (errorOutput.includes('quota') || errorOutput.includes('rate limit')) {
             reject(new Error('Gemini API quota exceeded. Please wait or upgrade plan.'));
-          } else if (errorOutput.includes('Unknown argument') || errorOutput.includes('Options:')) {
-            // Handle argument parsing errors - likely prompt not passed with -p flag
-            logger.error('Gemini CLI argument error detected', {
-              command: `${this.geminiPath} ${args.join(' ')}`,
-              errorOutput,
-              suggestedFix: 'Ensure prompt is passed with -p flag'
-            });
-            reject(new Error(`Gemini CLI argument error: Prompt must be passed with -p flag. Error: ${errorOutput}`));
           } else {
             const error = `Gemini CLI exited with code ${code}: ${errorOutput}`;
             logger.error('Gemini CLI command failed', { 
               code, 
               error: errorOutput,
-              command: `${this.geminiPath} ${args.slice(0, -1).join(' ')} -p "[PROMPT]"`
+              command: `${this.geminiPath} ${args.join(' ')}`
             });
             reject(new Error(error));
           }
         }
       });
 
-      child.on('error', (error) => {
-        clearTimeout(timeoutId);
-        logger.error('Gemini CLI process error', { error: error.message });
-        reject(error);
-      });
+      // 1. stdinにプロンプトを書き込む
+      if (child.stdin) {
+        child.stdin.write(promptContent);
+        // 2.【最重要】これ以上入力がないことをCLIに伝えるためにstdinを閉じる
+        child.stdin.end();
+      }
     });
   }
 
@@ -672,7 +689,7 @@ export class GeminiCLILayer implements LayerInterface {
   private async testGeminiConnection(): Promise<void> {
     try {
       const testArgs = ['--version'];
-      const testResult = await this.executeGeminiProcess(testArgs);
+      const testResult = await this.executeGeminiProcess(testArgs, '');
       
       if (!testResult) {
         throw new Error('No response from Gemini CLI');
@@ -685,8 +702,8 @@ export class GeminiCLILayer implements LayerInterface {
       // Don't fail on version command issues - try a simple query instead
       // CRITICAL FIX: Use buildGeminiCommand() instead of direct argument passing
       try {
-        const simpleArgs = this.buildGeminiCommand('Test connection');
-        await this.executeGeminiProcess(simpleArgs);
+        const simpleArgs = this.buildGeminiCommand({});
+        await this.executeGeminiProcess(simpleArgs, 'Test connection');
         logger.debug('Gemini CLI connection test successful (via simple query)');
       } catch (testError) {
         throw new Error(`Gemini CLI connection test failed: ${(testError as Error).message}`);
@@ -869,46 +886,43 @@ export class GeminiCLILayer implements LayerInterface {
       return;
     }
 
-    // Check for common incorrect patterns that caused the Error.md issue
+    // NEW: In stdin-based implementation, we should NOT have -p flags
     const hasPromptFlag = args.includes('-p') || args.includes('--prompt');
+    if (hasPromptFlag) {
+      logger.error('Invalid Gemini CLI usage detected', {
+        issue: 'Prompt flag found in args but should be sent via stdin',
+        correctUsage: 'Prompts are now sent via stdin - do not use -p flag',
+      });
+      
+      throw new Error(
+        'Invalid Gemini CLI command: Prompts are sent via stdin, not via -p flag. ' +
+        'This is the new implementation to fix stdin.end() issue.'
+      );
+    }
+
+    // Check for incorrectly passed prompt arguments (should be sent via stdin)
     const hasQuotedLongText = args.some(arg => 
       arg && arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@')
     );
 
-    // CRITICAL: Detect the exact error pattern from Error.md (line 3)
-    // Where long prompts were passed as direct arguments without -p flag
-    if (hasQuotedLongText && !hasPromptFlag) {
+    if (hasQuotedLongText) {
       const longArg = args.find(arg => arg && arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@'));
       logger.error('Invalid Gemini CLI usage detected', {
-        issue: 'Long prompt passed as direct argument instead of using -p flag',
+        issue: 'Long text passed as direct argument instead of via stdin',
         problematicArg: longArg ? longArg.substring(0, 100) + '...' : 'unknown',
-        correctUsage: 'Use buildGeminiCommand() or pass prompt with -p flag',
-        errorPattern: 'This matches the Error.md line 3 issue'
+        correctUsage: 'Prompts should be sent via stdin in executeGeminiProcess'
       });
       
       throw new Error(
-        'Invalid Gemini CLI command: Long prompts must be passed with -p flag. ' +
-        'Use buildGeminiCommand() method instead of direct arguments. ' +
-        'This prevents the waste of API calls seen in Error.md line 3.'
+        'Invalid Gemini CLI command: Long prompts must be sent via stdin. ' +
+        'Use executeGeminiProcess(args, promptContent) method correctly.'
       );
-    }
-
-    // Additional validation: Ensure prompts use proper flags
-    if (!hasPromptFlag && args.length > 0 && args[0] && !args[0].startsWith('-') && !args[0].startsWith('@')) {
-      // This might be a direct prompt argument
-      const potentialPrompt = args[0];
-      if (potentialPrompt && potentialPrompt.length > 20) { // Likely a prompt, not a command
-        logger.warn('Potential incorrect Gemini CLI usage', {
-          firstArg: potentialPrompt.substring(0, 50) + '...',
-          suggestion: 'Use -p flag for prompts'
-        });
-      }
     }
 
     logger.debug('Gemini CLI command validation passed', {
       argsCount: args.length,
-      hasPromptFlag,
-      commandType: hasPromptFlag ? 'prompt-with-flag' : 'system-command'
+      commandType: 'stdin-based',
+      validArgs: args.filter(arg => arg.startsWith('@') || arg.startsWith('-')).length
     });
   }
 
