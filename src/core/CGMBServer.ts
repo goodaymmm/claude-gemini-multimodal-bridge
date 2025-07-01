@@ -16,12 +16,12 @@ import {
   CGMBError,
   DocumentAnalysisArgs,
   DocumentAnalysisArgsSchema,
+  EnhancedCGMBRequest,
+  EnhancedCGMBRequestSchema,
   MultimodalProcessArgs,
   MultimodalProcessArgsSchema,
   WorkflowDefinitionArgs,
   WorkflowDefinitionArgsSchema,
-  EnhancedCGMBRequest,
-  EnhancedCGMBRequestSchema,
   WorkflowResult,
 } from './types.js';
 import { Config, ConfigSchema } from './types.js';

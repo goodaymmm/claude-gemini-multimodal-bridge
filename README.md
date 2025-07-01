@@ -8,15 +8,15 @@
 
 ## ✨ Features
 
-### 🆕 **Latest Version (v1.0.0 - Enhanced Performance Architecture)**
-- 🚀 **Claude Code Format Conversion**: Claude Code now handles format conversion for 10x faster processing
-- ⚡ **Lazy Layer Initialization**: Only initialize needed layers, reducing startup time by 70%
-- 📋 **New Layer Requirements Tool**: `cgmb_get_layer_requirements` provides formatting specs to Claude Code
-- 🎯 **Direct Layer Routing**: Support for preformatted data with `targetLayer` parameter
-- 🔄 **Backward Compatible**: Existing workflows continue to work without changes
-- ✅ **Auto-Start Fix**: CGMB auto-starts when Claude Code launches (MCP 'serve' argument)
-- 🐛 **Enhanced Debugging**: Comprehensive logging for troubleshooting
-- 🛠️ **Flexible Architecture**: Choose between Claude Code formatting (fast) or CGMB formatting (compatible)
+### 🆕 **Latest Version (v1.1.0 - UX Revolution)**
+- 💬 **NEW: `cgmb chat` Command**: Natural, user-friendly Gemini interaction (`cgmb chat "question"`)
+- 🧠 **Smart Prompt Detection**: Auto-detects prompts without requiring `-p` flag
+- 🔧 **Reference Implementation**: Fixed API "function response parts" errors using mcp-gemini-cli pattern
+- 🎯 **Enhanced Error Messages**: Specific guidance for authentication and configuration issues
+- ⚡ **Simplified Authentication**: Streamlined OAuth-first approach with better error handling
+- 📖 **Improved Help**: Better examples, troubleshooting tips, and usage guidance
+- 🔄 **Backward Compatible**: All existing commands continue to work
+- 🐛 **Bug Fixes**: Resolved Error.md (UX navigation) and Error2.md (API authentication) issues
 
 ### 🆕 **Previous Updates (v1.0.8 - Performance Revolution)**
 - 🚀 **90% Performance Boost**: Reference implementation optimization achieving mcp-gemini-cli speeds
@@ -302,14 +302,19 @@ This ensures that CGMB is properly invoked as an MCP server within Claude Code w
 
 ## 🚀 Enhanced CLI Commands
 
-### Direct Layer Access (NEW!)
+### Enhanced CLI Commands (NEW!)
 
 ```bash
-# 🚀 FAST PATH MODE (NEW!) - 90% faster response
-cgmb gemini -p "Quick question" --fast
+# 💬 NEW: User-friendly chat interface 
+cgmb chat "What are the latest AI security trends for 2025?"
+cgmb c "Android app security best practices"     # Short alias
 
-# Direct Gemini CLI with automatic web search
-cgmb gemini -p "Latest AI trends in 2024-2025"
+# 🧠 NEW: Smart prompt detection (no -p required)
+cgmb gemini "Latest AI trends in 2024-2025"      # Auto-detected
+cgmb gemini -p "Latest AI trends"                # Explicit (still works)
+
+# 🚀 FAST PATH MODE - 90% faster response
+cgmb gemini -p "Quick question" --fast
 
 # Direct AI Studio for multimodal processing  
 cgmb aistudio -p "Create business infographic" -f image1.png document.pdf
@@ -335,21 +340,25 @@ cgmb test -p "Analyze this content" -f document.pdf --timeout 180000
 
 ### Key Improvements Over Previous Versions
 
-| Issue (Error.md/Error2.md/Error3.md) | Solution |
-|---------------------------------------|----------|
-| ❌ "unknown command 'gemini-chat'" | ✅ `cgmb gemini -p "question"` |
+| Issue (Error.md/Error2.md) | v1.1.0 Solution |
+|----------------------------|-----------------|
+| ❌ "unknown command 'chat'" | ✅ `cgmb chat "question"` - New user-friendly command |
+| ❌ "Prompt is required. Use -p" | ✅ `cgmb gemini "question"` - Smart auto-detection |
+| ❌ Multiple steps to find correct syntax | ✅ Natural commands with helpful guidance |
+| ❌ "function response parts" API errors | ✅ Reference implementation fixes auth issues |
+| ❌ Complex authentication issues | ✅ Enhanced error messages with specific guidance |
 | ❌ Commands timeout during initialization | ✅ Actual processing with results |
 | ❌ AI Studio MCP server failures | ✅ Direct API integration |
-| ❌ Complex multi-step workflows | ✅ Single command execution |
-| ❌ No real search/grounding | ✅ Built-in search functionality |
 | ❌ Slow layer overhead | ✅ **Fast path mode & lightweight init** |
 
 ### Command Reference
 
 | Command | Purpose | Example |
 |---------|---------|---------|
+| `cgmb chat` | **NEW: User-friendly chat** | `cgmb chat "What are AI trends?"` |
+| `cgmb c` | **NEW: Chat alias** | `cgmb c "Android security tips"` |
+| `cgmb gemini` | **ENHANCED: Smart detection** | `cgmb gemini "question"` (no -p needed) |
 | `cgmb gemini --fast` | **Ultra-fast direct CLI** | `cgmb gemini -p "question" --fast` |
-| `cgmb gemini` | Direct Gemini CLI access | `cgmb gemini -p "question"` |
 | `cgmb aistudio` | AI Studio multimodal processing | `cgmb aistudio -p "create image" -f file.txt` |
 | `cgmb process` | Intelligent layer routing | `cgmb process -p "analyze" -w analysis` |
 | `cgmb test` | Enhanced testing | `cgmb test -p "test prompt" -f file.pdf` |

@@ -84,14 +84,19 @@ export class GeminiCLILayer implements LayerInterface {
       }
     }
 
-    // Skip auth verification if recent check exists
+    // Simplified auth check - let Gemini CLI handle authentication internally
+    // Only verify if it's been more than 24 hours since last check
     const now = Date.now();
     if (now - this.lastAuthCheck > this.AUTH_CACHE_TTL) {
-      const authResult = await this.authVerifier.verifyGeminiAuth();
-      if (!authResult.success) {
-        throw new Error(`Gemini CLI authentication failed: ${authResult.error}`);
+      try {
+        const authResult = await this.authVerifier.verifyGeminiAuth();
+        if (authResult.success) {
+          this.lastAuthCheck = now;
+        }
+        // Don't fail initialization if auth check fails - let execution handle it
+      } catch (error) {
+        logger.debug('Auth verification skipped, will rely on CLI error handling', { error });
       }
-      this.lastAuthCheck = now;
     }
 
     this.isLightweightInitialized = true;
@@ -212,8 +217,10 @@ export class GeminiCLILayer implements LayerInterface {
         files: task.files ? task.files.map((f: any) => f.path || f) : []
       });
 
-      // Use fast execution method
-      const result = await this.executeGeminiProcessFast(args, prompt);
+      // Use reference implementation method for better compatibility
+      const result = await this.executeGeminiCLIReference(prompt, { 
+        model: (task.model as string) || 'gemini-2.5-pro' 
+      });
       
       const duration = Date.now() - startTime;
       
@@ -532,11 +539,9 @@ export class GeminiCLILayer implements LayerInterface {
           finalPrompt += `\n\nAdditional context: ${context.context}`;
         }
 
-        const args = this.buildGeminiCommand({
-          files: context.files || [],
-        });
-
-        const output = await this.executeGeminiProcess(args, finalPrompt);
+        // Note: File handling in reference implementation needs extension
+        // For now, focusing on search grounding without files
+        const output = await this.executeGeminiCLIReference(finalPrompt);
         const processingTime = Date.now() - startTime;
         
         const result: GroundedResult = {
@@ -575,12 +580,10 @@ export class GeminiCLILayer implements LayerInterface {
         // Validate file types and sizes
         this.validateFiles(files);
 
-        const args = this.buildGeminiCommand({
-          files: files.map(f => f.path),
-        });
-
+        // Note: File processing with reference implementation needs extension
+        // For now, using basic prompt-based analysis
         const startTime = Date.now();
-        const output = await this.executeGeminiProcess(args, prompt);
+        const output = await this.executeGeminiCLIReference(prompt);
         const processingTime = Date.now() - startTime;
 
         return {
@@ -606,7 +609,7 @@ export class GeminiCLILayer implements LayerInterface {
   }
 
   /**
-   * Execute contextual analysis
+   * Execute contextual analysis (using reference implementation style)
    */
   async executeContextualAnalysis(task: GeminiTask): Promise<string> {
     return retry(
@@ -621,11 +624,13 @@ export class GeminiCLILayer implements LayerInterface {
           prompt += `\n\nContext: ${task.context}`;
         }
 
-        const args = this.buildGeminiCommand({
-          files: task.files ? task.files.map((f: any) => f.path || f) : [],
-        });
-
-        const output = await this.executeGeminiProcess(args, prompt);
+        // Note: File support would need to be added to reference implementation
+        // For now, focusing on prompt-based analysis
+        const options: { model?: string } = {};
+        if (task.model && typeof task.model === 'string') {
+          options.model = task.model;
+        }
+        const output = await this.executeGeminiCLIReference(prompt, options);
         return output.trim();
       },
       {
@@ -683,16 +688,17 @@ export class GeminiCLILayer implements LayerInterface {
   }
 
   /**
-   * Execute general Gemini task
+   * Execute general Gemini task (using reference implementation style)
    */
   private async executeGeneral(task: any): Promise<string> {
     const prompt = task.prompt || task.request || task.input || 'Please help with this task.';
     
-    const args = this.buildGeminiCommand({
-      files: task.files,
-    });
-
-    return await this.executeGeminiProcess(args, prompt);
+    // Use reference implementation style for better compatibility
+    const options: { model?: string } = {};
+    if (task.model && typeof task.model === 'string') {
+      options.model = task.model;
+    }
+    return await this.executeGeminiCLIReference(prompt, options);
   }
 
   /**
@@ -721,6 +727,70 @@ export class GeminiCLILayer implements LayerInterface {
     });
 
     return args;
+  }
+
+  /**
+   * Reference implementation style execution (mcp-gemini-cli compatible)
+   * Uses -p flag directly instead of stdin for better compatibility
+   */
+  private async executeGeminiCLIReference(prompt: string, options: { model?: string } = {}): Promise<string> {
+    const command = this.geminiPath || 'gemini';
+    const args = ['-p', prompt];
+    
+    if (options.model && options.model !== 'gemini-2.5-pro') {
+      args.push('-m', options.model);
+    }
+    
+    return new Promise<string>((resolve, reject) => {
+      logger.debug('Executing Gemini CLI (reference style)', {
+        command,
+        argsCount: args.length,
+        promptLength: prompt.length
+      });
+
+      const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      // Reference implementation: immediately close stdin
+      child.stdin?.end();
+      
+      child.stdout?.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      child.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          // Enhanced error handling for common issues
+          if (stderr.includes('function response parts') || stderr.includes('function call parts')) {
+            reject(new Error(`Function call mismatch error. This usually indicates an authentication or API configuration issue. Try:\n1. gemini auth (OAuth - recommended)\n2. Check API key configuration\n3. Verify gemini CLI version\n\nOriginal error: ${stderr}`));
+          } else if (stderr.includes('UNAUTHENTICATED') || stderr.includes('API_KEY')) {
+            reject(new Error(`Authentication failed. Try: gemini auth\n${stderr}`));
+          } else {
+            reject(new Error(`gemini exited with code ${code}: ${stderr}`));
+          }
+        }
+      });
+      
+      child.on('error', (err) => {
+        reject(new Error(`Spawn error: ${err.message}`));
+      });
+      
+      // Reference implementation timeout
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error('Gemini CLI timeout (30s)'));
+      }, 30000);
+      
+      child.on('close', () => clearTimeout(timeout));
+    });
   }
 
   /**

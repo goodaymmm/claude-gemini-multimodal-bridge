@@ -13,6 +13,51 @@ import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
 
 // ===================================
+// Helper Functions for CLI Commands
+// ===================================
+
+function showChatHelp() {
+  console.log('💬 CGMB Chat - Natural Gemini interaction');
+  console.log('');
+  console.log('✨ Simple usage:');
+  console.log('  cgmb chat "your question"');
+  console.log('  cgmb c "your question"');
+  console.log('');
+  console.log('🔧 Advanced usage:');
+  console.log('  cgmb chat "question" --model gemini-2.5-flash');
+  console.log('  cgmb chat "question" --fast');
+  console.log('');
+  console.log('💡 Alternative: cgmb gemini -p "question"');
+  console.log('');
+  console.log('🌐 Web search is automatic - just ask about current events!');
+  console.log('');
+  console.log('Examples:');
+  console.log('  cgmb chat "What are the latest AI trends in 2025?"');
+  console.log('  cgmb c "Android security best practices"');
+  console.log('  cgmb chat "Current cryptocurrency market status"');
+  console.log('');
+  console.log('❓ Having issues? Try: cgmb auth-status');
+}
+
+function showGeminiHelp() {
+  console.log('🤖 CGMB Gemini - Direct Gemini CLI access');
+  console.log('');
+  console.log('Usage examples:');
+  console.log('  cgmb gemini -p "your question"        # Explicit mode');
+  console.log('  cgmb gemini "your question"           # Auto-detected');
+  console.log('  cgmb chat "your question"             # User-friendly');
+  console.log('');
+  console.log('🚀 Performance options:');
+  console.log('  cgmb gemini -p "question" --fast      # Direct CLI (fastest)');
+  console.log('  cgmb gemini -p "question" --model gemini-2.5-flash');
+  console.log('');
+  console.log('💡 Tip: Use "cgmb chat" for the easiest experience!');
+  console.log('');
+  console.log('🌐 Web search is automatically enabled for current information.');
+  console.log('🔐 Authentication issues? Try: gemini auth (OAuth recommended)');
+}
+
+// ===================================
 // CLI Interface for CGMB
 // ===================================
 
@@ -913,115 +958,214 @@ program
     }
   });
 
+// User-friendly chat command
+program
+  .command('chat')
+  .alias('c')
+  .description('Chat with Gemini (user-friendly interface)')
+  .argument('[prompt...]', 'Your question or prompt')
+  .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
+  .option('--fast', 'Use fast path for better performance')
+  .action(async (promptArgs, options) => {
+    try {
+      const prompt = promptArgs.join(' ');
+      
+      if (!prompt) {
+        showChatHelp();
+        process.exit(1);
+      }
+
+      console.log('💡 Auto-detected prompt (using chat mode)');
+      
+      // 内部的にgeminiコマンドと同じ処理を実行
+      // ただし-pフラグは自動で設定
+      options.prompt = prompt;
+      await executeGeminiCommand(options);
+      
+    } catch (error) {
+      const errorMessage = (error as Error).message;
+      
+      if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
+        logger.error('❌ Chat API Error', error as Error);
+        logger.info('🔧 This looks like an authentication issue:');
+        logger.info('   • Try OAuth: gemini auth');
+        logger.info('   • Check status: cgmb auth-status --verbose');
+      } else {
+        logger.error('❌ Chat command failed', error as Error);
+        logger.info('💡 Troubleshooting:');
+        logger.info('   • Check auth: cgmb auth-status');
+        logger.info('   • Try manual: cgmb gemini -p "your question"');
+      }
+      process.exit(1);
+    }
+  });
+
 // Direct Gemini CLI command
 program
   .command('gemini')
   .description('Direct Gemini CLI processing (web search enabled by default)')
-  .option('-p, --prompt <text>', 'Prompt for Gemini CLI')
+  .argument('[prompt...]', 'Direct prompt (auto-detects if -p missing)')
+  .option('-p, --prompt <text>', 'Explicit prompt for Gemini CLI')
   .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
   .option('-f, --file <path>', 'File to analyze with prompt')
   .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
-  .action(async (options) => {
+  .action(async (promptArgs, options) => {
     try {
-      if (!options.prompt) {
-        logger.error('Prompt is required. Use: cgmb gemini -p "your question"');
+      let prompt = options.prompt;
+      
+      // スマート検出: 引数があるけど-pがない場合
+      if (!prompt && promptArgs.length > 0) {
+        prompt = promptArgs.join(' ');
+        console.log('💡 Auto-detected prompt (tip: use -p for explicit mode)');
+      }
+      
+      if (!prompt) {
+        showGeminiHelp();
         process.exit(1);
       }
 
-      // Handle common incorrect option usage
-      if (process.argv.includes('--search')) {
-        console.log('\n💡 Note: Web search is automatically enabled in Gemini CLI.');
-        console.log('   No --search flag needed. Just ask about current events or trends!');
-        console.log('   Example: cgmb gemini -p "latest AI security trends 2025"\n');
-        // Continue processing without the flag
-      }
-
-      await loadEnvironmentSmart({ verbose: false });
-      
-      logger.info('🔍 Processing with Gemini CLI...');
-      
-      // Fast path: Direct Gemini CLI call (bypass CGMB layers)
-      if (options.fast && !options.file) {
-        logger.info('Using fast path (direct Gemini CLI call)...');
-        
-        const args = ['gemini'];
-        if (options.model && options.model !== 'gemini-2.5-pro') {
-          args.push('-m', options.model);
-        }
-        args.push('-p', `"${options.prompt}"`);
-        // Note: Web search is automatic in Gemini CLI, no flags needed
-        
-        try {
-          const result = execSync(args.join(' '), { 
-            encoding: 'utf8',
-            timeout: 90000,
-            stdio: 'pipe'
-          });
-          
-          logger.info('✅ Fast path Gemini CLI processing completed');
-          console.log('\n📋 Result:');
-          console.log('═'.repeat(50));
-          console.log(result);
-          console.log('\n📊 Metadata:');
-          console.log('Method: Direct Gemini CLI (fast path)');
-          console.log('Bypass: CGMB layer overhead eliminated');
-          return;
-        } catch (error) {
-          logger.warn('Fast path failed, falling back to CGMB layers', { 
-            error: (error as Error).message 
-          });
-          // Continue to normal processing
-        }
-      }
-      
-      // Import and use Gemini CLI layer directly
-      const { GeminiCLILayer } = await import('./layers/GeminiCLILayer.js');
-      const geminiLayer = new GeminiCLILayer();
-      
-      await geminiLayer.initialize();
-      
-      let result;
-      if (options.file) {
-        // Process with file
-        result = await geminiLayer.processFiles([{ path: options.file, type: 'document' }], options.prompt);
-      } else {
-        // Text-only processing
-        result = await geminiLayer.execute({
-          type: 'text_processing',
-          prompt: options.prompt,
-          useSearch: true  // Default to true - Gemini CLI has intelligent search decision-making
-        });
-      }
-      
-      logger.info('✅ Gemini CLI processing completed');
-      console.log('\n📋 Result:');
-      console.log('═'.repeat(50));
-      
-      if ('data' in result) {
-        console.log(result.data);
-      } else if ('content' in result) {
-        console.log(result.content);
-      } else {
-        console.log('Processing completed');
-      }
-      
-      if (result.metadata) {
-        console.log('\n📊 Metadata:');
-        const metadata = result.metadata as any;
-        console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
-        console.log(`Model: ${metadata.model || 'N/A'}`);
-        console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
-      }
-      
-      // Exit immediately after displaying results
-      process.exit(0);
+      options.prompt = prompt;
+      await executeGeminiCommand(options);
       
     } catch (error) {
-      logger.error('❌ Gemini CLI processing failed', error as Error);
-      logger.info('💡 Check authentication: cgmb auth-status');
+      const errorMessage = (error as Error).message;
+      
+      // Enhanced error handling with specific guidance
+      if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
+        logger.error('❌ API Function Call Error', error as Error);
+        logger.info('🔧 This error usually indicates an authentication issue:');
+        logger.info('   1. Try OAuth authentication: gemini auth');
+        logger.info('   2. Check API key configuration');
+        logger.info('   3. Verify Gemini CLI version: gemini --version');
+        logger.info('   4. Check status: cgmb auth-status --verbose');
+      } else if (errorMessage.includes('UNAUTHENTICATED') || errorMessage.includes('API_KEY')) {
+        logger.error('❌ Authentication Error', error as Error);
+        logger.info('🔧 Fix authentication:');
+        logger.info('   • OAuth (recommended): gemini auth');
+        logger.info('   • Check status: cgmb auth-status');
+      } else if (errorMessage.includes('not found') || errorMessage.includes('command not found')) {
+        logger.error('❌ Gemini CLI Not Found', error as Error);
+        logger.info('🔧 Install Gemini CLI:');
+        logger.info('   • Run setup: cgmb setup');
+        logger.info('   • Manual install: npm install -g @google/gemini-cli');
+      } else if (errorMessage.includes('timeout')) {
+        logger.error('❌ Request Timeout', error as Error);
+        logger.info('💡 Try:');
+        logger.info('   • Shorter prompt');
+        logger.info('   • Check network connection');
+        logger.info('   • Use --fast flag for direct calls');
+      } else {
+        logger.error('❌ Gemini CLI processing failed', error as Error);
+        logger.info('💡 General troubleshooting:');
+        logger.info('   • Check authentication: cgmb auth-status');
+        logger.info('   • Verify setup: cgmb verify');
+        logger.info('   • View help: cgmb gemini --help');
+      }
       process.exit(1);
     }
   });
+
+// 共通のGemini実行関数
+async function executeGeminiCommand(options: any) {
+  try {
+    if (!options.prompt) {
+      throw new Error('Prompt is required');
+    }
+
+    // Handle common incorrect option usage
+    if (process.argv.includes('--search')) {
+      console.log('\n💡 Note: Web search is automatically enabled in Gemini CLI.');
+      console.log('   No --search flag needed. Just ask about current events or trends!');
+      console.log('   Example: cgmb gemini -p "latest AI security trends 2025"\n');
+      // Continue processing without the flag
+    }
+
+    await loadEnvironmentSmart({ verbose: false });
+    
+    logger.info('🔍 Processing with Gemini CLI...');
+    
+    // Fast path: Direct Gemini CLI call (bypass CGMB layers)
+    if (options.fast && !options.file) {
+      logger.info('Using fast path (direct Gemini CLI call)...');
+      
+      const args = ['gemini'];
+      if (options.model && options.model !== 'gemini-2.5-pro') {
+        args.push('-m', options.model);
+      }
+      args.push('-p', `"${options.prompt}"`);
+      // Note: Web search is automatic in Gemini CLI, no flags needed
+      
+      try {
+        const result = execSync(args.join(' '), { 
+          encoding: 'utf8',
+          timeout: 90000,
+          stdio: 'pipe'
+        });
+        
+        logger.info('✅ Fast path Gemini CLI processing completed');
+        console.log('\n📋 Result:');
+        console.log('═'.repeat(50));
+        console.log(result);
+        console.log('\n📊 Metadata:');
+        console.log('Method: Direct Gemini CLI (fast path)');
+        console.log('Bypass: CGMB layer overhead eliminated');
+        return;
+      } catch (error) {
+        logger.warn('Fast path failed, falling back to CGMB layers', { 
+          error: (error as Error).message 
+        });
+        // Continue to normal processing
+      }
+    }
+    
+    // Import and use Gemini CLI layer directly
+    const { GeminiCLILayer } = await import('./layers/GeminiCLILayer.js');
+    const geminiLayer = new GeminiCLILayer();
+    
+    await geminiLayer.initialize();
+    
+    let result;
+    if (options.file) {
+      // Process with file
+      result = await geminiLayer.processFiles([{ path: options.file, type: 'document' }], options.prompt);
+    } else {
+      // Text-only processing
+      result = await geminiLayer.execute({
+        type: 'text_processing',
+        prompt: options.prompt,
+        useSearch: true  // Default to true - Gemini CLI has intelligent search decision-making
+      });
+    }
+    
+    logger.info('✅ Gemini CLI processing completed');
+    console.log('\n📋 Result:');
+    console.log('═'.repeat(50));
+    
+    if ('data' in result) {
+      console.log(result.data);
+    } else if ('content' in result) {
+      console.log(result.content);
+    } else {
+      console.log('Processing completed');
+    }
+    
+    if (result.metadata) {
+      console.log('\n📊 Metadata:');
+      const metadata = result.metadata as any;
+      console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
+      console.log(`Model: ${metadata.model || 'N/A'}`);
+      console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
+    }
+    
+    // Exit immediately after displaying results
+    process.exit(0);
+    
+  } catch (error) {
+    logger.error('❌ Gemini CLI processing failed', error as Error);
+    logger.info('💡 Check authentication: cgmb auth-status');
+    process.exit(1);
+  }
+}
 
 // Direct AI Studio command
 program

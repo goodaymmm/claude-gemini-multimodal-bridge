@@ -1,7 +1,7 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.0.0",
-  "description": "Enhanced performance multi-layer AI bridge with Claude Code format conversion, lazy layer initialization, direct routing, and 95% faster processing for seamless integration of Claude Code, Gemini CLI, and Google AI Studio",
+  "version": "1.1.0",
+  "description": "UX-enhanced multi-layer AI bridge with natural chat commands, smart prompt detection, and reference implementation for seamless integration of Claude Code, Gemini CLI, and Google AI Studio",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -9,8 +9,8 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "Claude-Gemini Multimodal Bridge - Multi-layer AI integration with custom AI Studio MCP server",
-    "version": "1.0.0",
+    "description": "Claude-Gemini Multimodal Bridge - UX-enhanced multi-layer AI integration with natural chat commands",
+    "version": "1.1.0",
     "command": "cgmb",
     "args": ["serve"],
     "servers": {
@@ -90,7 +90,18 @@
     "direct-layer-routing",
     "layer-requirements",
     "enhanced-performance",
-    "95-percent-faster"
+    "95-percent-faster",
+    "chat-command",
+    "natural-interface",
+    "smart-detection",
+    "ux-enhanced",
+    "user-friendly",
+    "reference-implementation",
+    "auth-fixes",
+    "error-guidance",
+    "prompt-detection",
+    "oauth-first",
+    "enhanced-help"
   ],
   "author": "goodaymmm",
   "license": "MIT",
