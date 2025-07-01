@@ -32,6 +32,10 @@ program
   .option('--debug', 'Enable debug logging')
   .action(async (options) => {
     try {
+      // Set environment variables to prevent Claude Code duplication
+      process.env.CGMB_SERVE_MODE = 'true';
+      process.env.CGMB_NO_CLAUDE_EXEC = 'true';
+      
       // Set log level first if specified
       if (options.verbose) {
         process.env.LOG_LEVEL = 'debug';
@@ -442,6 +446,14 @@ program
       
       // Check Claude Code CLI version and use appropriate method
       let claudeVersion = '';
+      
+      // Skip claude command execution if in serve mode to prevent duplication
+      if (process.env.CGMB_NO_CLAUDE_EXEC === 'true') {
+        console.log('🔄 Claude command execution skipped (serve mode protection)');
+        console.log('💡 Manual setup required. See: cgmb setup-mcp --manual');
+        return;
+      }
+      
       try {
         claudeVersion = execSync('claude --version', { encoding: 'utf8' }).trim();
         console.log(`Claude Code CLI version: ${claudeVersion}`);
@@ -451,16 +463,19 @@ program
       
       // Check if claude mcp command is available (v1.0.35+)
       let hasNewMCPCommand = false;
-      try {
-        execSync('claude mcp --help', { stdio: 'ignore' });
-        hasNewMCPCommand = true;
-        console.log('✅ Detected new Claude Code CLI with mcp command support\n');
-      } catch {
-        console.log('ℹ️  Using legacy MCP configuration method\n');
+      
+      if (process.env.CGMB_NO_CLAUDE_EXEC !== 'true') {
+        try {
+          execSync('claude mcp --help', { stdio: 'ignore' });
+          hasNewMCPCommand = true;
+          console.log('✅ Detected new Claude Code CLI with mcp command support\n');
+        } catch {
+          console.log('ℹ️  Using legacy MCP configuration method\n');
+        }
       }
       
       // If new MCP command is available, use it instead
-      if (hasNewMCPCommand && !options.force) {
+      if (hasNewMCPCommand && !options.force && process.env.CGMB_NO_CLAUDE_EXEC !== 'true') {
         try {
           // Check if already configured with new method
           const mcpListOutput = execSync('claude mcp list', { encoding: 'utf8' });

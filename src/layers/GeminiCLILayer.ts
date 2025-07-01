@@ -187,6 +187,59 @@ export class GeminiCLILayer implements LayerInterface {
   }
 
   /**
+   * Fast execution mode for simple prompts (reference implementation style)
+   * Skips initialization overhead and complex validation
+   */
+  async executeFast(task: GeminiTask): Promise<LayerResult> {
+    const startTime = Date.now();
+    
+    logger.info('Fast Gemini CLI execution', {
+      taskType: task.type || 'general',
+      promptLength: task.prompt?.length || 0,
+      mode: 'fast'
+    });
+
+    try {
+      // Minimal setup: just ensure geminiPath exists
+      if (!this.geminiPath) {
+        this.geminiPath = await this.findGeminiPath() || 'gemini';
+      }
+
+      const prompt = task.prompt || task.request || task.input || '';
+      
+      // Build minimal args (no complex validation)
+      const args = this.buildGeminiCommand({
+        files: task.files ? task.files.map((f: any) => f.path || f) : []
+      });
+
+      // Use fast execution method
+      const result = await this.executeGeminiProcessFast(args, prompt);
+      
+      const duration = Date.now() - startTime;
+      
+      return {
+        success: true,
+        data: result,
+        metadata: {
+          layer: 'gemini' as const,
+          duration,
+          fast_mode: true,
+          model: 'gemini-2.5-pro',
+          optimization: 'reference-implementation-style'
+        }
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      logger.error('Fast Gemini CLI execution failed', {
+        error: (error as Error).message,
+        duration
+      });
+      
+      throw new Error(`Fast execution failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
    * Execute a task through Gemini CLI with enhanced retry logic
    * Implements Gemini's architectural recommendations for production reliability
    */
@@ -668,6 +721,61 @@ export class GeminiCLILayer implements LayerInterface {
     });
 
     return args;
+  }
+
+  /**
+   * Fast lightweight spawn implementation based on mcp-gemini-cli reference
+   * Optimized for speed with minimal overhead
+   */
+  private async executeGeminiProcessFast(args: string[], promptContent: string): Promise<string> {
+    const command = this.geminiPath || 'gemini';
+    
+    return new Promise<string>((resolve, reject) => {
+      logger.debug('Fast Gemini CLI execution', {
+        command,
+        argsCount: args.length,
+        promptLength: promptContent.length
+      });
+
+      const child = spawn(command, args, { stdio: 'pipe' });
+      
+      let output = '';
+      let errorOutput = '';
+      
+      // Reference implementation: immediately close stdin after writing
+      if (child.stdin) {
+        child.stdin.write(promptContent);
+        child.stdin.end(); // Critical: immediate close like reference
+      }
+      
+      child.stdout?.on('data', (data) => {
+        output += data.toString();
+      });
+      
+      child.stderr?.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+      
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve(output.trim());
+        } else {
+          reject(new Error(`Gemini CLI failed: ${errorOutput || 'Unknown error'}`));
+        }
+      });
+      
+      child.on('error', (error) => {
+        reject(new Error(`Process spawn failed: ${error.message}`));
+      });
+      
+      // Shorter timeout for fast execution (30 seconds like reference)
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(`Fast execution timeout after 30s`));
+      }, 30000);
+      
+      child.on('close', () => clearTimeout(timeout));
+    });
   }
 
   /**

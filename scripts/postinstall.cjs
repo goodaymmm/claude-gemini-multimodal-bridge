@@ -213,12 +213,26 @@ GEMINI_MODEL=gemini-2.0-flash-exp
 async function setupMCPIntegration() {
   log('🔧 Setting up Claude Code MCP integration...');
   
+  // Skip MCP setup if CGMB is being started in serve mode to prevent Claude Code duplication
+  if (process.env.CGMB_SERVE_MODE === 'true' || 
+      process.env.CGMB_NO_CLAUDE_EXEC === 'true' ||
+      process.argv.includes('serve')) {
+    log('🔄 Serve mode detected, skipping MCP setup to prevent Claude Code duplication', 'info');
+    log('💡 Run "cgmb setup-mcp" manually after server setup if needed', 'info');
+    return true;
+  }
+  
   try {
     // Try to run cgmb setup-mcp
     const cgmbPath = path.join(process.cwd(), 'dist', 'cli.js');
     
     if (fs.existsSync(cgmbPath)) {
-      execSync(`node ${cgmbPath} setup-mcp`, { stdio: 'inherit' });
+      // Set environment variable to prevent nested Claude Code execution
+      process.env.CGMB_NO_CLAUDE_EXEC = 'true';
+      execSync(`node ${cgmbPath} setup-mcp`, { 
+        stdio: 'inherit',
+        env: { ...process.env, CGMB_NO_CLAUDE_EXEC: 'true' }
+      });
       log('✅ MCP integration configured', 'success');
       return true;
     } else {

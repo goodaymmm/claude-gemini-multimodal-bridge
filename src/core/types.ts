@@ -141,19 +141,26 @@ export const LayerResultSchema = z.object({
     tokens_used: z.number().optional(),
     cost: z.number().optional(),
     model: z.string().optional(),
+    fast_mode: z.boolean().optional(),
+    optimization: z.string().optional(),
+    retry_attempt: z.number().optional(),
   }),
 });
 export type LayerResult = z.infer<typeof LayerResultSchema>;
 
 export const WorkflowResultSchema = z.object({
   success: z.boolean(),
-  results: z.record(LayerResultSchema),
+  results: z.union([z.record(LayerResultSchema), z.array(LayerResultSchema)]),
   summary: z.string().optional(),
   metadata: z.object({
     total_duration: z.number(),
     steps_completed: z.number(),
     steps_failed: z.number(),
     total_cost: z.number().optional(),
+    workflow: z.string().optional(),
+    execution_mode: z.string().optional(),
+    layers_used: z.array(z.string()).optional(),
+    optimization: z.string().optional(),
   }),
 });
 export type WorkflowResult = z.infer<typeof WorkflowResultSchema>;

@@ -41,6 +41,62 @@ export class LayerManager {
   }
 
   /**
+   * Fast processing for simple prompts (reference implementation style)
+   * Bypasses heavy layer initialization and routing overhead
+   */
+  public async processSimpleFast(prompt: string, files?: FileReference[]): Promise<LayerResult> {
+    logger.info('Fast simple processing', {
+      promptLength: prompt.length,
+      hasFiles: !!files?.length,
+      mode: 'fast'
+    });
+
+    try {
+      // Use fast execution directly on Gemini layer
+      const result = await this.geminiLayer.executeFast({
+        type: 'text_processing',
+        prompt,
+        files: files || [],
+        useSearch: true // Enable search by default for current information
+      });
+
+      logger.info('Fast processing completed', {
+        duration: result.metadata?.duration,
+        success: result.success
+      });
+
+      return result;
+    } catch (error) {
+      logger.error('Fast processing failed', error as Error);
+      throw error;
+    }
+  }
+
+  /**
+   * Determine if a prompt is simple enough for fast processing
+   * Based on reference implementation principles
+   */
+  private isSimplePrompt(prompt: string, files?: FileReference[]): boolean {
+    // Fast processing criteria
+    const isSimple = 
+      prompt.length < 1000 &&              // Short prompt
+      (!files || files.length === 0) &&    // No files
+      !prompt.includes('workflow') &&      // No workflow keywords
+      !prompt.includes('orchestrate') &&   // No orchestration
+      !prompt.includes('generate image') && // No AI Studio tasks
+      !prompt.includes('convert') &&       // No complex conversion
+      !prompt.includes('analyze multiple'); // No multi-step analysis
+
+    logger.debug('Simple prompt check', {
+      promptLength: prompt.length,
+      hasFiles: !!files?.length,
+      isSimple
+    });
+
+    return isSimple;
+  }
+
+  /**
    * Initialize all layers
    */
   public async initializeLayers(): Promise<void> {
@@ -99,6 +155,35 @@ export class LayerManager {
       fileCount: files.length,
       options,
     });
+
+    // Fast path for simple prompts (reference implementation style)
+    if (this.isSimplePrompt(prompt, files) && workflow === 'analysis') {
+      logger.info('Using fast path for simple multimodal request');
+      
+      try {
+        const result = await this.processSimpleFast(prompt, files);
+        
+        // Convert to WorkflowResult format
+        return {
+          success: result.success,
+          results: [result],
+          metadata: {
+            workflow: 'analysis',
+            execution_mode: 'fast',
+            total_duration: result.metadata?.duration || 0,
+            steps_completed: 1,
+            steps_failed: 0,
+            layers_used: ['gemini'],
+            optimization: 'fast-path-bypass'
+          }
+        };
+      } catch (error) {
+        logger.warn('Fast path failed, falling back to full workflow', {
+          error: (error as Error).message
+        });
+        // Continue to full workflow below
+      }
+    }
 
     // Create execution plan based on workflow type
     const executionPlan = await this.createWorkflowPlan(workflow, {

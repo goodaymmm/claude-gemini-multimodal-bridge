@@ -38,7 +38,7 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.0.7',
+        version: '1.0.8',
         description: 'CGMB - AI multimodal processor with intelligent web search, file analysis, and content generation. Claude-Gemini Multimodal Bridge for seamless AI integration.'
       },
       {
@@ -312,6 +312,23 @@ export class CGMBServer {
           validatedArgs.options
         );
 
+        // Lightweight response for fast processing (reference implementation style)
+        const isLight = result.metadata?.optimization === 'fast-path-bypass';
+        
+        if (isLight) {
+          // Minimal response like reference implementation
+          const mainResult = Array.isArray(result.results) ? result.results[0] : Object.values(result.results || {})[0];
+          return {
+            content: [
+              {
+                type: 'text',
+                text: mainResult?.data || 'Processing completed'
+              }
+            ]
+          };
+        }
+
+        // Full response for complex workflows
         return {
           content: [
             {
