@@ -152,13 +152,11 @@ export class OAuthManager {
    * Detect current authentication method (OAuth vs API key)
    */
   private async detectAuthMethod(): Promise<'oauth' | 'api_key' | 'none'> {
-    // Check for API key first - prioritize new naming
-    const apiKey = process.env.AI_STUDIO_API_KEY || 
-                   process.env.GOOGLE_AI_STUDIO_API_KEY ||
-                   process.env.GEMINI_API_KEY ||  // Backward compatibility
-                   process.env.GOOGLE_API_KEY;   // Legacy support
+    // Check for Gemini-specific API keys only (exclude AI_STUDIO_API_KEY)
+    const geminiApiKey = process.env.GEMINI_API_KEY ||  // Gemini CLI specific
+                         process.env.GOOGLE_API_KEY;   // Legacy support
                    
-    if (apiKey && apiKey.length > 10) {
+    if (geminiApiKey && geminiApiKey.length > 10) {
       return 'api_key';
     }
 
