@@ -34,18 +34,12 @@
 CGMB operates as an **MCP (Model Context Protocol) server** with enterprise-grade architecture. v1.1.0 introduces intelligent layer routing, authentication caching, and simplified integrations.
 
 ```mermaid
-flowchart LR
+flowchart TD
     A[Claude Code] --> B[CGMB Server]
     
     B --> C[Gemini CLI]
     B --> D[Claude Code Layer]
     B --> E[AI Studio]
-    
-    subgraph layers [" AI Layers "]
-        C
-        D  
-        E
-    end
 ```
 
 ### How It Works
