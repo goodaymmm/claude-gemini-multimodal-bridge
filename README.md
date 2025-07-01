@@ -4,14 +4,16 @@
 
 [![npm version](https://badge.fury.io/js/claude-gemini-multimodal-bridge.svg)](https://badge.fury.io/js/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org/)
 
 ## ✨ Features
 
-### 🆕 **Latest Version (v1.0.0 - Simple & Effective)**
+### 🆕 **Latest Version (v1.0.0 - Production Ready & Ultra-Reliable)**
 - 🎯 **Perfect CGMB Keyword Triggering**: 100% reliable when "CGMB" appears in prompts
 - 🚀 **Ultra-Simple Architecture**: Removed complex analysis, focused on format conversion for each AI layer
 - 🔄 **Smart Layer Routing**: Intelligently routes to Gemini CLI (web search) or AI Studio (multimodal) via LayerManager
+- ✅ **Auto-Start Fix**: CGMB now auto-starts when Claude Code launches (fixed MCP 'serve' argument issue)
+- 🐛 **Enhanced Debugging**: Comprehensive logging for MCP connection diagnosis and troubleshooting
 - ✨ **Clean Integration**: Streamlined MCP tools with clear CGMB keyword instructions
 - ⚡ **High Performance**: Minimal processing overhead, maximum responsiveness
 - 🛠️ **Format Conversion**: Optimized input conversion for Claude Code, Gemini CLI, and AI Studio compatibility

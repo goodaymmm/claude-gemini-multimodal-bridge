@@ -350,8 +350,17 @@ export class CGMBServer {
   private async handleCGMBUnified(args: unknown): Promise<CallToolResult> {
     return safeExecute(
       async () => {
+        logger.info('CGMB unified handler starting', { 
+          args: typeof args === 'object' ? JSON.stringify(args).substring(0, 200) : args 
+        });
+
         // 1. Input validation and normalization
         const normalizedRequest = this.validateAndNormalize(args);
+        logger.info('Request normalized', {
+          hasCGMB: normalizedRequest.hasCGMB,
+          promptLength: normalizedRequest.prompt.length,
+          filesCount: normalizedRequest.files.length
+        });
         
         // 2. Convert to format that each layer can understand
         const convertedRequest = this.convertForLayers(
@@ -359,17 +368,32 @@ export class CGMBServer {
           normalizedRequest.files,
           normalizedRequest.options
         );
+        logger.info('Request converted for layers', {
+          workflow: convertedRequest.workflow,
+          optionsKeys: Object.keys(convertedRequest.options)
+        });
         
         // 3. Delegate to LayerManager for intelligent routing
+        logger.info('Calling LayerManager.processMultimodal...');
         const result = await this.layerManager.processMultimodal(
           convertedRequest.prompt,
           convertedRequest.files,
           convertedRequest.workflow,
           convertedRequest.options
         );
+        logger.info('LayerManager.processMultimodal completed', {
+          success: result.success,
+          hasResults: !!result.results,
+          hasSummary: !!result.summary
+        });
 
         // 4. Format unified response
-        return this.formatResponse(result, normalizedRequest.hasCGMB);
+        const response = this.formatResponse(result, normalizedRequest.hasCGMB);
+        logger.info('Response formatted', {
+          contentLength: (response.content?.[0] as any)?.text?.length || 0
+        });
+        
+        return response;
       },
       {
         operationName: 'cgmb_unified_process',

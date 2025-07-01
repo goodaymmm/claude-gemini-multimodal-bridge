@@ -143,10 +143,10 @@ export class MCPConfigManager {
     }
 
     if (!cgmbPath) {
-      // Fallback to npx
+      // Fallback to npx with serve command
       return {
         command: 'npx',
-        args: ['claude-gemini-multimodal-bridge'],
+        args: ['claude-gemini-multimodal-bridge', 'serve'],
         env: {
           NODE_ENV: 'production'
         }
@@ -155,7 +155,7 @@ export class MCPConfigManager {
 
     return {
       command: 'node',
-      args: [cgmbPath],
+      args: [cgmbPath, 'serve'],
       env: {
         NODE_ENV: 'production'
       }

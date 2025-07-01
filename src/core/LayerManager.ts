@@ -150,11 +150,23 @@ export class LayerManager {
     workflow: WorkflowType,
     options?: ProcessingOptions
   ): Promise<WorkflowResult> {
-    logger.info('Starting multimodal processing', {
+    logger.info('LayerManager.processMultimodal called', {
       workflow,
       fileCount: files.length,
-      options,
+      promptLength: prompt.length,
+      options: options ? Object.keys(options) : [],
+      layersInitialized: {
+        claude: !!this.claudeLayer,
+        gemini: !!this.geminiLayer,
+        aistudio: !!this.aiStudioLayer
+      }
     });
+
+    // Check if layers are properly initialized
+    if (!this.claudeLayer || !this.geminiLayer || !this.aiStudioLayer) {
+      logger.error('LayerManager layers not properly initialized');
+      throw new Error('LayerManager layers not initialized');
+    }
 
     // Fast path for simple prompts (reference implementation style)
     if (this.isSimplePrompt(prompt, files) && workflow === 'analysis') {
