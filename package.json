@@ -1,7 +1,7 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.0.9",
-  "description": "Keyword-trigger revolutionized multi-layer AI integration bridge with 100% reliable CGMB keyword detection, intelligent prompt analysis, unified tool architecture, and seamless MCP integration for Claude Code, Gemini CLI, and Google AI Studio",
+  "version": "1.0.0",
+  "description": "Simple & effective multi-layer AI integration bridge with reliable CGMB keyword triggering, smart format conversion, and seamless MCP integration for Claude Code, Gemini CLI, and Google AI Studio",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -10,7 +10,7 @@
   "mcp": {
     "name": "cgmb",
     "description": "Claude-Gemini Multimodal Bridge - Multi-layer AI integration with custom AI Studio MCP server",
-    "version": "1.0.9",
+    "version": "1.0.0",
     "command": "cgmb",
     "args": ["serve"],
     "servers": {
@@ -76,14 +76,14 @@
     "mcp-gemini-cli-speed",
     "duplicate-launch-fix",
     "lightweight-responses",
-    "keyword-trigger",
-    "prompt-analyzer",
-    "unified-tool",
-    "intelligent-detection",
-    "100-percent-reliable",
-    "visual-feedback",
-    "automatic-routing",
-    "cgmb-keyword"
+    "simple-architecture",
+    "format-conversion",
+    "ultra-lightweight",
+    "keyword-detection",
+    "layer-routing",
+    "claude-gemini-bridge",
+    "mcp-integration",
+    "reliable-triggering"
   ],
   "author": "goodaymmm",
   "license": "MIT",
