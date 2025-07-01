@@ -46,6 +46,13 @@ graph TD
     E --> F
     
     F --> A
+    
+    %% Center alignment
+    A ~~~ G[ ]
+    F ~~~ H[ ]
+    
+    style G fill:transparent,stroke:transparent
+    style H fill:transparent,stroke:transparent
 ```
 
 ### How It Works
