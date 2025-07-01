@@ -15,7 +15,7 @@ async function main() {
 
     // Log startup information for MCP server
     logger.info('Starting CGMB MCP Server for Claude Code integration...', {
-      version: '1.0.0',
+      version: '1.0.5',
       nodeVersion: process.version,
       platform: process.platform,
       mcpMode: true,

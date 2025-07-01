@@ -887,6 +887,9 @@ program
       logger.info('🎉 CGMB test completed successfully!');
       logger.info('All systems are working correctly');
       
+      // Exit immediately after test completion
+      process.exit(0);
+      
     } catch (error) {
       logger.error('❌ Test failed', error as Error);
       logger.error('This might indicate authentication or configuration issues');
@@ -908,6 +911,14 @@ program
       if (!options.prompt) {
         logger.error('Prompt is required. Use: cgmb gemini -p "your question"');
         process.exit(1);
+      }
+
+      // Handle common incorrect option usage
+      if (process.argv.includes('--search')) {
+        console.log('\n💡 Note: Web search is automatically enabled in Gemini CLI.');
+        console.log('   No --search flag needed. Just ask about current events or trends!');
+        console.log('   Example: cgmb gemini -p "latest AI security trends 2025"\n');
+        // Continue processing without the flag
       }
 
       await loadEnvironmentSmart({ verbose: false });
@@ -987,6 +998,9 @@ program
         console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
       }
       
+      // Exit immediately after displaying results
+      process.exit(0);
+      
     } catch (error) {
       logger.error('❌ Gemini CLI processing failed', error as Error);
       logger.info('💡 Check authentication: cgmb auth-status');
@@ -1049,6 +1063,9 @@ program
         console.log(`Files processed: ${files.length}`);
       }
       
+      // Exit immediately after displaying results
+      process.exit(0);
+      
     } catch (error) {
       logger.error('❌ AI Studio processing failed', error as Error);
       logger.info('💡 Check authentication: cgmb auth-status');
@@ -1107,6 +1124,9 @@ program
         console.log(`Total tokens: ${result.metadata.tokens_used || 'N/A'}`);
         console.log(`Estimated cost: ${result.metadata.cost || 'N/A'}`);
       }
+      
+      // Exit immediately after displaying results
+      process.exit(0);
       
     } catch (error) {
       logger.error('❌ Multimodal processing failed', error as Error);

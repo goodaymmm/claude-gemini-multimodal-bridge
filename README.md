@@ -8,7 +8,14 @@
 
 ## ✨ Features
 
-### 🆕 **New in Latest Version (v1.0.5 - Stability Edition)**
+### 🆕 **New in Latest Version (v1.0.6 - Response Edition)**
+- ⚡ **Instant Response**: Fixed CLI commands hanging after result display - now exits immediately after showing results
+- 🤖 **Enhanced Claude Code Recognition**: Improved MCP tool descriptions for better natural language detection
+- 📝 **Better Tool Discovery**: Added comprehensive descriptions to help Claude Code automatically recognize capabilities
+- 🔍 **Smart Option Handling**: Friendly guidance when using unsupported options like `--search`
+- 🎯 **Natural Integration**: Claude Code now recognizes CGMB for "multimodal", "web search", and "file analysis" requests
+
+### 🆕 **Previous Updates (v1.0.5 - Stability Edition)**
 - 🛠️ **Critical Gemini CLI Fix**: Resolved timeout issues with proper stdin handling (`stdin.end()`)
 - 🔄 **Enhanced Process Communication**: Switched from command-line arguments to stdin for reliable prompt transmission
 - 🐛 **Robust Error Handling**: Added spawn process failure detection and graceful termination

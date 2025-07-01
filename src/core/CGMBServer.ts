@@ -38,7 +38,8 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.0.0',
+        version: '1.0.5',
+        description: 'AI multimodal processor with web search - analyze files, search web, generate content naturally'
       },
       {
         capabilities: {
@@ -132,7 +133,7 @@ export class CGMBServer {
         tools: [
           {
             name: 'multimodal_process',
-            description: 'Process multimodal content through Claude Code → Gemini CLI → AI Studio pipeline',
+            description: 'AI-powered multimodal content processor with web search, image analysis, and document processing. Key features: • Web Search: Ask about current events, trends, or any topic - Gemini automatically searches the web • Image Analysis: Process images, diagrams, screenshots with AI vision • Document Processing: Analyze PDFs, text files, code files • No special flags needed - just describe what you want. Examples: "analyze the latest AI security trends", "summarize this PDF document", "explain this architecture diagram"',
             inputSchema: {
               type: 'object',
               properties: {
@@ -188,7 +189,7 @@ export class CGMBServer {
           },
           {
             name: 'document_analysis',
-            description: 'Advanced document analysis combining all three layers',
+            description: 'Advanced document analysis for PDFs, text files, code files, and more. Automatically summarizes, compares, extracts key information, or translates content. Just provide file paths and specify what type of analysis you need.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -212,7 +213,7 @@ export class CGMBServer {
           },
           {
             name: 'workflow_orchestration',
-            description: 'Orchestrate complex multi-step workflows across all layers',
+            description: 'Orchestrate complex multi-step AI workflows combining web search, document analysis, image processing, and content generation. Perfect for comprehensive research, analysis, and content creation tasks.',
             inputSchema: {
               type: 'object',
               properties: {
