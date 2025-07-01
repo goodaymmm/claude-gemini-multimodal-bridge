@@ -33,7 +33,7 @@ export class GeminiCLILayer implements LayerInterface {
   private isInitialized = false;
 
   // Optimized settings for enterprise reliability
-  private readonly DEFAULT_TIMEOUT = 30000; // 30 seconds (mcp-gemini-cli standard)
+  private readonly DEFAULT_TIMEOUT = 60000; // 60 seconds (extended for quota/network issues)
   private readonly DEFAULT_MODEL = 'gemini-2.5-pro';
 
   constructor() {
@@ -327,7 +327,18 @@ export class GeminiCLILayer implements LayerInterface {
       });
       
       child.stderr?.on('data', (data) => {
-        stderr += data.toString();
+        const chunk = data.toString();
+        stderr += chunk;
+        
+        // Early quota error detection
+        if (chunk.includes('429') || chunk.includes('quota') || chunk.includes('Quota exceeded')) {
+          logger.warn('Quota limit detected in Gemini CLI', { 
+            error: chunk.substring(0, 200) 
+          });
+          child.kill();
+          reject(new Error(`Gemini API quota exceeded. Please wait or try a different model. Details: ${chunk.substring(0, 300)}`));
+          return;
+        }
       });
       
       child.on('close', (code) => {
@@ -357,10 +368,24 @@ export class GeminiCLILayer implements LayerInterface {
         reject(new Error(`Gemini CLI spawn error: ${err.message}`));
       });
       
-      // Set timeout
+      // Set timeout with graceful termination
       const timeout = setTimeout(() => {
-        child.kill();
-        reject(new Error(`Gemini CLI timeout after ${this.DEFAULT_TIMEOUT / 1000}s`));
+        logger.warn('Gemini CLI timeout reached, terminating process', {
+          timeoutMs: this.DEFAULT_TIMEOUT,
+          promptLength: prompt.length
+        });
+        
+        // Try graceful termination first
+        child.kill('SIGTERM');
+        
+        // Force kill after 2 seconds if still running
+        setTimeout(() => {
+          if (!child.killed) {
+            child.kill('SIGKILL');
+          }
+        }, 2000);
+        
+        reject(new Error(`Gemini CLI timeout after ${this.DEFAULT_TIMEOUT / 1000}s. This may be due to quota limits or network issues.`));
       }, this.DEFAULT_TIMEOUT);
       
       child.on('close', () => clearTimeout(timeout));

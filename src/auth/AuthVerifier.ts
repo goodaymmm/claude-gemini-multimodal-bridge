@@ -454,7 +454,7 @@ export class AuthVerifier {
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
       
-      // Simple test prompt to validate API key
+      // Simple test prompt to validate API key and check quota
       const result = await model.generateContent('Test');
       
       if (!result.response) {
@@ -463,8 +463,16 @@ export class AuthVerifier {
       
       logger.debug('Gemini API key validation successful');
     } catch (error) {
-      logger.warn('Gemini API key validation failed', { error: (error as Error).message });
-      throw new Error(`Gemini API key invalid: ${(error as Error).message}`);
+      const errorMessage = (error as Error).message;
+      
+      // Enhanced quota error detection during authentication
+      if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('Quota exceeded')) {
+        logger.warn('Gemini quota exceeded during authentication check', { error: errorMessage });
+        throw new Error(`Gemini API quota exceeded. Please wait before retrying or use a different model. Details: ${errorMessage}`);
+      }
+      
+      logger.warn('Gemini API key validation failed', { error: errorMessage });
+      throw new Error(`Gemini API key invalid: ${errorMessage}`);
     }
   }
 
