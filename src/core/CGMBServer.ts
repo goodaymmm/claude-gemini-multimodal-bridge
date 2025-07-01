@@ -27,7 +27,7 @@ import {
 import { Config, ConfigSchema } from './types.js';
 
 // ===================================
-// Claude-Gemini Multimodal Bridge Server
+// claude-gemini-multimodal-bridge Server
 // ===================================
 
 export class CGMBServer {
@@ -41,8 +41,8 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.0.0',
-        description: 'CGMB - AI multimodal processor with intelligent web search, file analysis, and content generation. Claude-Gemini Multimodal Bridge for seamless AI integration.'
+        version: '1.1.1',
+        description: 'claude-gemini-multimodal-bridge - AI multimodal processor with intelligent web search, file analysis, and content generation. Critical fixes for prompt handling and MCP integration.'
       },
       {
         capabilities: {
@@ -145,7 +145,7 @@ export class CGMBServer {
           },
           {
             name: 'cgmb',
-            description: '🎯 **USE WHEN PROMPT CONTAINS "CGMB" KEYWORD** - Claude-Gemini Multimodal Bridge. Intelligently routes to Gemini CLI (web search, analysis) or AI Studio (multimodal processing) based on your request. Simply include "CGMB" in your prompt. Examples: "CGMB analyze this image", "CGMB search latest AI news", "CGMB process this document"',
+            description: '🎯 **USE WHEN PROMPT CONTAINS "CGMB" KEYWORD** - claude-gemini-multimodal-bridge. Intelligently routes to Gemini CLI (web search, analysis) or AI Studio (multimodal processing) based on your request. ⚠️ CRITICAL: Include "CGMB" keyword in prompts. Examples: "CGMB analyze this image", "CGMB search latest AI news", "CGMB process this document"',
             inputSchema: {
               type: 'object',
               properties: {

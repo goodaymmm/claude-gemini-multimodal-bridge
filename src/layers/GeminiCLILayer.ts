@@ -880,6 +880,43 @@ export class GeminiCLILayer implements LayerInterface {
       throw new Error('Gemini CLI not initialized');
     }
 
+    // Special handling for --version command (no prompt needed)
+    if (args.includes('--version')) {
+      return new Promise<string>((resolve, reject) => {
+        const { spawn } = require('child_process');
+        const child = spawn(this.geminiPath!, args);
+        
+        let output = '';
+        let error = '';
+        
+        child.stdout?.on('data', (data: Buffer) => {
+          output += data.toString();
+        });
+        
+        child.stderr?.on('data', (data: Buffer) => {
+          error += data.toString();
+        });
+        
+        child.on('close', (code: number | null) => {
+          if (code !== 0) {
+            reject(new Error(`Gemini CLI exited with code ${code}: ${error}`));
+          } else {
+            resolve(output);
+          }
+        });
+        
+        child.on('error', (err: Error) => {
+          reject(err);
+        });
+        
+        // Timeout
+        setTimeout(() => {
+          child.kill();
+          reject(new Error('Gemini CLI timeout'));
+        }, 10000);
+      });
+    }
+
     // CRITICAL: Validate command arguments to prevent incorrect usage
     this.validateGeminiCommand(args);
 
@@ -888,8 +925,12 @@ export class GeminiCLILayer implements LayerInterface {
     this.dailyRequestCount++;
     this.lastRequestTime = Date.now();
 
-    // Use the reference implementation method instead of complex stdin handling
-    return await this.executeGeminiCLIReference(promptContent);
+    // For regular commands with prompts, use the reference implementation
+    if (promptContent && promptContent.trim()) {
+      return await this.executeGeminiCLIReference(promptContent);
+    } else {
+      throw new Error('No prompt content provided for Gemini CLI execution');
+    }
   }
 
   /**
@@ -936,6 +977,7 @@ export class GeminiCLILayer implements LayerInterface {
    */
   private async testGeminiConnection(): Promise<void> {
     try {
+      // Test with --version first
       const testArgs = ['--version'];
       const testResult = await this.executeGeminiProcess(testArgs, '');
       
@@ -948,10 +990,10 @@ export class GeminiCLILayer implements LayerInterface {
       });
     } catch (error) {
       // Don't fail on version command issues - try a simple query instead
-      // CRITICAL FIX: Use buildGeminiCommand() instead of direct argument passing
+      // CRITICAL FIX: Use executeGeminiCLIReference directly with test prompt
       try {
-        const simpleArgs = this.buildGeminiCommand({});
-        await this.executeGeminiProcess(simpleArgs, 'Test connection');
+        const testPrompt = 'Test connection';
+        await this.executeGeminiCLIReference(testPrompt);
         logger.debug('Gemini CLI connection test successful (via simple query)');
       } catch (testError) {
         throw new Error(`Gemini CLI connection test failed: ${(testError as Error).message}`);
@@ -1165,42 +1207,14 @@ export class GeminiCLILayer implements LayerInterface {
       return;
     }
 
-    // NEW: In stdin-based implementation, we should NOT have -p flags
-    const hasPromptFlag = args.includes('-p') || args.includes('--prompt');
-    if (hasPromptFlag) {
-      logger.error('Invalid Gemini CLI usage detected', {
-        issue: 'Prompt flag found in args but should be sent via stdin',
-        correctUsage: 'Prompts are now sent via stdin - do not use -p flag',
-      });
-      
-      throw new Error(
-        'Invalid Gemini CLI command: Prompts are sent via stdin, not via -p flag. ' +
-        'This is the new implementation to fix stdin.end() issue.'
-      );
-    }
+    // FIXED v1.1.1: Allow -p flags as we use command-argument approach now
+    // This validation is only for file-based arguments passed to executeGeminiProcess
+    // The actual prompt handling is done in executeGeminiCLIReference with -p flag
 
-    // Check for incorrectly passed prompt arguments (should be sent via stdin)
-    const hasQuotedLongText = args.some(arg => 
-      arg && arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@')
-    );
-
-    if (hasQuotedLongText) {
-      const longArg = args.find(arg => arg && arg.length > 50 && !arg.startsWith('-') && !arg.startsWith('@'));
-      logger.error('Invalid Gemini CLI usage detected', {
-        issue: 'Long text passed as direct argument instead of via stdin',
-        problematicArg: longArg ? longArg.substring(0, 100) + '...' : 'unknown',
-        correctUsage: 'Prompts should be sent via stdin in executeGeminiProcess'
-      });
-      
-      throw new Error(
-        'Invalid Gemini CLI command: Long prompts must be sent via stdin. ' +
-        'Use executeGeminiProcess(args, promptContent) method correctly.'
-      );
-    }
-
+    // SIMPLIFIED: Just validate that args are properly formatted
     logger.debug('Gemini CLI command validation passed', {
       argsCount: args.length,
-      commandType: 'stdin-based',
+      commandType: 'command-argument-based',
       validArgs: args.filter(arg => arg.startsWith('@') || arg.startsWith('-')).length
     });
   }
