@@ -27,6 +27,21 @@ export interface ExecutionOptions {
   maxRetries?: number;
 }
 
+/**
+ * Task complexity and routing analysis
+ */
+interface TaskAnalysis {
+  complexity: 'low' | 'medium' | 'high';
+  hasFiles: boolean;
+  fileTypes: string[];
+  needsCurrentInfo: boolean;
+  isGenerationTask: boolean;
+  isCodeRelated: boolean;
+  estimatedTokens: number;
+  preferredLayer: LayerType;
+  reasoning: string;
+}
+
 export class LayerManager {
   private claudeLayer: ClaudeCodeLayer | null = null;
   private geminiLayer: GeminiCLILayer | null = null;
@@ -111,8 +126,8 @@ export class LayerManager {
     });
 
     try {
-      // Use fast execution directly on Gemini layer
-      const result = await this.getGeminiLayer().executeFast({
+      // Use simplified execution directly on Gemini layer
+      const result = await this.getGeminiLayer().execute({
         type: 'text_processing',
         prompt,
         files: files || [],
@@ -129,6 +144,290 @@ export class LayerManager {
       logger.error('Fast processing failed', error as Error);
       throw error;
     }
+  }
+
+  /**
+   * Intelligent task analysis for optimal layer selection
+   * Implements enterprise-level routing logic for CGMB
+   */
+  public analyzeTask(task: any): TaskAnalysis {
+    const prompt = task.prompt || task.request || task.input || '';
+    const files = task.files || [];
+    
+    // Analyze file types and complexity
+    const fileTypes = files.map((f: FileReference) => f.type || this.detectFileType(f.path));
+    const hasFiles = files.length > 0;
+    const hasImages = fileTypes.some((type: string) => ['image', 'png', 'jpg', 'jpeg', 'gif', 'webp'].includes(type));
+    const hasDocuments = fileTypes.some((type: string) => ['pdf', 'doc', 'docx', 'txt', 'md'].includes(type));
+    const hasAudio = fileTypes.some((type: string) => ['audio', 'mp3', 'wav', 'm4a'].includes(type));
+    const hasVideo = fileTypes.some((type: string) => ['video', 'mp4', 'mov', 'avi'].includes(type));
+    
+    // Analyze prompt characteristics
+    const promptLength = prompt.length;
+    const isCodeRelated = this.detectCodeContent(prompt);
+    const needsCurrentInfo = this.detectCurrentInfoNeed(prompt);
+    const isGenerationTask = this.detectGenerationTask(prompt, task);
+    const complexity = this.assessComplexity(prompt, files, task);
+    
+    // Determine optimal layer based on task characteristics
+    let preferredLayer: LayerType;
+    let reasoning: string;
+    
+    if (isGenerationTask && (hasImages || hasAudio || hasVideo || prompt.includes('generate') || prompt.includes('create'))) {
+      preferredLayer = 'aistudio';
+      reasoning = 'Generation task requiring AI Studio capabilities (Imagen 3, Veo 2)';
+    } else if (hasFiles && (hasImages || hasDocuments || hasAudio || hasVideo)) {
+      preferredLayer = 'aistudio';
+      reasoning = 'Multimodal files requiring AI Studio processing';
+    } else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
+      preferredLayer = 'gemini';
+      reasoning = 'Current information or search required - Gemini CLI optimal';
+    } else if (complexity === 'high' || isCodeRelated || promptLength > 2000) {
+      preferredLayer = 'claude';
+      reasoning = 'Complex reasoning or code analysis - Claude Code optimal';
+    } else if (complexity === 'low' && promptLength < 500) {
+      preferredLayer = 'gemini';
+      reasoning = 'Simple task - Gemini CLI for speed';
+    } else {
+      preferredLayer = 'claude';
+      reasoning = 'Default to Claude Code for balanced capabilities';
+    }
+    
+    const estimatedTokens = Math.ceil(promptLength / 4) + files.length * 100;
+    
+    return {
+      complexity,
+      hasFiles,
+      fileTypes,
+      needsCurrentInfo,
+      isGenerationTask,
+      isCodeRelated,
+      estimatedTokens,
+      preferredLayer,
+      reasoning,
+    };
+  }
+
+  /**
+   * Execute task with optimal layer selection
+   * Implements intelligent routing with fallback strategies
+   */
+  public async executeWithOptimalLayer(task: any): Promise<LayerResult> {
+    const analysis = this.analyzeTask(task);
+    
+    logger.info('Optimal layer analysis completed', {
+      preferredLayer: analysis.preferredLayer,
+      complexity: analysis.complexity,
+      reasoning: analysis.reasoning,
+      hasFiles: analysis.hasFiles,
+      fileTypes: analysis.fileTypes,
+    });
+
+    try {
+      return await this.executeWithLayer(analysis.preferredLayer, task);
+    } catch (error) {
+      logger.warn('Primary layer execution failed, attempting fallback', {
+        primaryLayer: analysis.preferredLayer,
+        error: (error as Error).message,
+      });
+      
+      return await this.executeWithFallback(task, analysis.preferredLayer);
+    }
+  }
+
+  /**
+   * Execute task with specific layer
+   */
+  public async executeWithLayer(layerType: LayerType, task: any): Promise<LayerResult> {
+    switch (layerType) {
+      case 'claude':
+        const claudeLayer = this.getClaudeLayer();
+        await this.ensureLayerInitialized('claude');
+        return await claudeLayer.execute(task);
+        
+      case 'gemini':
+        const geminiLayer = this.getGeminiLayer();
+        return await geminiLayer.execute(task);
+        
+      case 'aistudio':
+        const aiStudioLayer = this.getAIStudioLayer();
+        await this.ensureLayerInitialized('aistudio');
+        return await aiStudioLayer.execute(task);
+        
+      default:
+        throw new Error(`Unknown layer type: ${layerType}`);
+    }
+  }
+
+  /**
+   * Execute with fallback strategy
+   */
+  private async executeWithFallback(task: any, failedLayer: LayerType): Promise<LayerResult> {
+    const fallbackOrder = this.getFallbackOrder(failedLayer, task);
+    
+    for (const layerType of fallbackOrder) {
+      try {
+        logger.info('Attempting fallback execution', {
+          layer: layerType,
+          originalLayer: failedLayer,
+        });
+        
+        return await this.executeWithLayer(layerType, task);
+      } catch (error) {
+        logger.warn('Fallback layer also failed', {
+          layer: layerType,
+          error: (error as Error).message,
+        });
+        continue;
+      }
+    }
+    
+    throw new Error(`All layers failed for task. Primary: ${failedLayer}, Fallbacks: ${fallbackOrder.join(', ')}`);
+  }
+
+  /**
+   * Get fallback order based on failed layer and task characteristics
+   */
+  private getFallbackOrder(failedLayer: LayerType, task: any): LayerType[] {
+    const analysis = this.analyzeTask(task);
+    
+    switch (failedLayer) {
+      case 'claude':
+        // If Claude fails, try Gemini for search or AI Studio for files
+        return analysis.hasFiles ? ['aistudio', 'gemini'] : ['gemini', 'aistudio'];
+        
+      case 'gemini':
+        // If Gemini fails, prefer Claude for complex tasks or AI Studio for files
+        return analysis.complexity === 'high' ? ['claude', 'aistudio'] : ['aistudio', 'claude'];
+        
+      case 'aistudio':
+        // If AI Studio fails, prefer Claude for complex tasks or Gemini for simple ones
+        return analysis.complexity === 'high' ? ['claude', 'gemini'] : ['gemini', 'claude'];
+        
+      default:
+        return ['claude', 'gemini', 'aistudio'];
+    }
+  }
+
+  /**
+   * Ensure layer is properly initialized
+   */
+  private async ensureLayerInitialized(layerType: LayerType): Promise<void> {
+    if (layerType in this.layerInitialized && !this.layerInitialized[layerType as keyof typeof this.layerInitialized]) {
+      switch (layerType) {
+        case 'claude':
+          await this.getClaudeLayer().initialize();
+          this.layerInitialized.claude = true;
+          break;
+        case 'aistudio':
+          await this.getAIStudioLayer().initialize();
+          this.layerInitialized.aistudio = true;
+          break;
+        case 'gemini':
+          await this.getGeminiLayer().initialize();
+          this.layerInitialized.gemini = true;
+          break;
+      }
+    }
+  }
+
+  /**
+   * Detect file type from path
+   */
+  private detectFileType(path: string): string {
+    const ext = path.toLowerCase().split('.').pop() || '';
+    
+    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].includes(ext)) {return 'image';}
+    if (['mp3', 'wav', 'm4a', 'flac'].includes(ext)) {return 'audio';}
+    if (['mp4', 'mov', 'avi', 'webm'].includes(ext)) {return 'video';}
+    if (['pdf'].includes(ext)) {return 'pdf';}
+    if (['txt', 'md'].includes(ext)) {return 'text';}
+    if (['doc', 'docx'].includes(ext)) {return 'document';}
+    
+    return 'unknown';
+  }
+
+  /**
+   * Detect if prompt contains code-related content
+   */
+  private detectCodeContent(prompt: string): boolean {
+    const codeKeywords = [
+      'function', 'class', 'import', 'export', 'const', 'let', 'var',
+      'def', 'if __name__', 'import ', 'from ', 'return',
+      'public', 'private', 'protected', 'static',
+      'code', 'programming', 'script', 'algorithm', 'debug', 'refactor'
+    ];
+    
+    const lowerPrompt = prompt.toLowerCase();
+    return codeKeywords.some(keyword => lowerPrompt.includes(keyword)) ||
+           /```/.test(prompt) || // Code blocks
+           /\.(js|ts|py|java|cpp|c|go|rs|php)/.test(prompt); // File extensions
+  }
+
+  /**
+   * Detect if prompt needs current/real-time information
+   */
+  private detectCurrentInfoNeed(prompt: string): boolean {
+    const currentInfoKeywords = [
+      'latest', 'recent', 'current', 'today', 'now', 'news', 'trends',
+      '2024', '2025', 'this year', 'this month', 'this week',
+      'search', 'find', 'what is happening', 'breaking', 'update'
+    ];
+    
+    const lowerPrompt = prompt.toLowerCase();
+    return currentInfoKeywords.some(keyword => lowerPrompt.includes(keyword));
+  }
+
+  /**
+   * Detect if task is for content generation
+   */
+  private detectGenerationTask(prompt: string, task: any): boolean {
+    const generationKeywords = [
+      'generate', 'create', 'make', 'produce', 'build', 'design',
+      'draw', 'paint', 'compose', 'write', 'author', 'craft'
+    ];
+    
+    const lowerPrompt = prompt.toLowerCase();
+    return generationKeywords.some(keyword => lowerPrompt.includes(keyword)) ||
+           task.type === 'generation' ||
+           task.action === 'generate' ||
+           lowerPrompt.includes('image of') ||
+           lowerPrompt.includes('picture of');
+  }
+
+  /**
+   * Assess task complexity
+   */
+  private assessComplexity(prompt: string, files: FileReference[], task: any): 'low' | 'medium' | 'high' {
+    let score = 0;
+    
+    // Prompt length factor
+    if (prompt.length > 2000) {score += 3;}
+    else if (prompt.length > 500) {score += 2;}
+    else if (prompt.length > 100) {score += 1;}
+    
+    // File count factor
+    if (files.length > 5) {score += 3;}
+    else if (files.length > 2) {score += 2;}
+    else if (files.length > 0) {score += 1;}
+    
+    // Task type factor
+    if (task.type === 'workflow' || task.action === 'orchestrate') {score += 3;}
+    if (task.type === 'analysis' && files.length > 0) {score += 2;}
+    
+    // Complexity keywords
+    const complexKeywords = [
+      'analyze', 'compare', 'evaluate', 'synthesize', 'optimize',
+      'complex', 'detailed', 'comprehensive', 'thorough', 'in-depth'
+    ];
+    
+    const lowerPrompt = prompt.toLowerCase();
+    const complexityMatches = complexKeywords.filter(keyword => lowerPrompt.includes(keyword)).length;
+    score += complexityMatches;
+    
+    if (score >= 6) {return 'high';}
+    if (score >= 3) {return 'medium';}
+    return 'low';
   }
 
   /**

@@ -3,16 +3,25 @@ import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';
+import { AuthCache } from './AuthCache.js';
 
 /**
  * AuthVerifier handles authentication verification for all services
  * Provides clear error messages and guidance for authentication failures
+ * Enhanced with intelligent caching for optimal performance
  */
 export class AuthVerifier {
   private oauthManager: OAuthManager;
+  private authCache: AuthCache;
 
   constructor() {
     this.oauthManager = new OAuthManager();
+    this.authCache = new AuthCache();
+    
+    // Setup periodic cache cleanup (every 30 minutes)
+    setInterval(() => {
+      this.authCache.cleanup();
+    }, 30 * 60 * 1000);
   }
 
   /**
@@ -53,38 +62,84 @@ export class AuthVerifier {
   }
 
   /**
-   * Verify Gemini authentication
+   * Verify Gemini authentication with intelligent caching
+   * Prioritizes OAuth authentication over API key with 6-hour cache
    */
   async verifyGeminiAuth(): Promise<AuthResult> {
+    // Check cache first
+    const cachedResult = this.authCache.get('gemini');
+    if (cachedResult) {
+      return cachedResult;
+    }
+
     return safeExecute(
       async () => {
-        logger.info('Verifying Gemini authentication...');
+        logger.info('Verifying Gemini authentication (no cache)...');
 
         try {
-          const status = await this.oauthManager.checkGeminiAuthentication();
+          // Priority 1: OAuth authentication (recommended)
+          const oauthStatus = await this.oauthManager.checkGeminiAuthentication();
           
-          if (status.isAuthenticated) {
-            return {
+          if (oauthStatus.isAuthenticated) {
+            const result: AuthResult = {
               success: true,
-              status,
+              status: oauthStatus,
               requiresAction: false,
             };
-          } else {
-            const method = await this.oauthManager.getAuthMethod('gemini');
-            return {
-              success: false,
-              status,
-              error: 'Gemini not authenticated',
-              requiresAction: true,
-              actionInstructions: method === 'api_key' 
-                ? 'Set GEMINI_API_KEY environment variable'
-                : 'Run "gemini auth" to authenticate via OAuth',
-            };
+            
+            // Cache successful OAuth authentication
+            this.authCache.set('gemini', result);
+            return result;
           }
+
+          // Priority 2: API Key fallback
+          const apiKey = process.env.GEMINI_API_KEY;
+          if (apiKey) {
+            logger.debug('OAuth failed, trying API Key fallback for Gemini');
+            
+            // Test API key validity with a simple request
+            try {
+              await this.testGeminiApiKey(apiKey);
+              
+              const result: AuthResult = {
+                success: true,
+                status: {
+                  isAuthenticated: true,
+                  method: 'api_key',
+                  userInfo: undefined,
+                },
+                requiresAction: false,
+              };
+              
+              // Cache successful API key authentication
+              this.authCache.set('gemini', result);
+              return result;
+            } catch (apiError) {
+              logger.warn('Gemini API key validation failed', { error: (apiError as Error).message });
+            }
+          }
+
+          // No valid authentication found
+          const result: AuthResult = {
+            success: false,
+            status: {
+              isAuthenticated: false,
+              method: 'oauth',
+              userInfo: undefined,
+            },
+            error: 'Gemini not authenticated',
+            requiresAction: true,
+            actionInstructions: 'Run "gemini auth" for OAuth (recommended) or set GEMINI_API_KEY environment variable',
+          };
+          
+          // Cache failed authentication briefly to avoid spam
+          this.authCache.set('gemini', result);
+          return result;
+          
         } catch (error) {
           logger.error('Gemini authentication verification failed', { error: (error as Error).message });
           
-          return {
+          const result: AuthResult = {
             success: false,
             status: {
               isAuthenticated: false,
@@ -95,6 +150,8 @@ export class AuthVerifier {
             requiresAction: true,
             actionInstructions: 'Install Gemini CLI: npm install -g @google/gemini-cli && gemini auth',
           };
+          
+          return result;
         }
       },
       {
@@ -106,13 +163,19 @@ export class AuthVerifier {
   }
 
   /**
-   * Verify AI Studio authentication
-   * Enhanced to address authentication issues from Error.md
+   * Verify AI Studio authentication with intelligent caching
+   * Enhanced to address authentication issues from Error.md with 24-hour cache
    */
   async verifyAIStudioAuth(): Promise<AuthResult> {
+    // Check cache first (24-hour TTL for API keys)
+    const cachedResult = this.authCache.get('aistudio');
+    if (cachedResult) {
+      return cachedResult;
+    }
+
     return safeExecute(
       async () => {
-        logger.info('Verifying AI Studio authentication...');
+        logger.info('Verifying AI Studio authentication (no cache)...');
 
         // Enhanced environment variable resolution with priority order
         const preferredKey = process.env.AI_STUDIO_API_KEY;
@@ -157,7 +220,7 @@ export class AuthVerifier {
             setupUrl: 'https://aistudio.google.com/app/apikey'
           });
           
-          return {
+          const result: AuthResult = {
             success: false,
             status: {
               isAuthenticated: false,
@@ -168,6 +231,10 @@ export class AuthVerifier {
             requiresAction: true,
             actionInstructions: 'Set AI_STUDIO_API_KEY environment variable with your AI Studio API key. Get it from: https://aistudio.google.com/app/apikey',
           };
+          
+          // Cache failed authentication to avoid repeated checks
+          this.authCache.set('aistudio', result);
+          return result;
         }
 
         // Enhanced API key format validation
@@ -226,7 +293,7 @@ export class AuthVerifier {
           status: 'ready'
         });
 
-        return {
+        const result: AuthResult = {
           success: true,
           status: {
             isAuthenticated: true,
@@ -237,6 +304,10 @@ export class AuthVerifier {
           },
           requiresAction: false,
         };
+        
+        // Cache successful authentication (24-hour TTL)
+        this.authCache.set('aistudio', result);
+        return result;
       },
       {
         operationName: 'verify-aistudio-auth',
@@ -259,9 +330,16 @@ export class AuthVerifier {
   }
 
   /**
-   * Verify Claude Code authentication
+   * Verify Claude Code authentication with intelligent caching
+   * Uses 12-hour cache for session-based authentication
    */
   async verifyClaudeCodeAuth(): Promise<AuthResult> {
+    // Check cache first (12-hour TTL for session auth)
+    const cachedResult = this.authCache.get('claude');
+    if (cachedResult) {
+      return cachedResult;
+    }
+
     return safeExecute(
       async () => {
         logger.info('Verifying Claude Code authentication...');
@@ -271,7 +349,7 @@ export class AuthVerifier {
           const isInstalled = await this.checkClaudeCodeInstalled();
           
           if (!isInstalled) {
-            return {
+            const result: AuthResult = {
               success: false,
               status: {
                 isAuthenticated: false,
@@ -282,13 +360,17 @@ export class AuthVerifier {
               requiresAction: true,
               actionInstructions: 'Install Claude Code: npm install -g @anthropic-ai/claude-code',
             };
+            
+            // Cache failed authentication
+            this.authCache.set('claude', result);
+            return result;
           }
 
           // Test Claude Code functionality
           const isWorking = await this.testClaudeCodeFunctionality();
           
           if (!isWorking) {
-            return {
+            const result: AuthResult = {
               success: false,
               status: {
                 isAuthenticated: false,
@@ -299,9 +381,13 @@ export class AuthVerifier {
               requiresAction: true,
               actionInstructions: 'Run "claude auth" to authenticate Claude Code',
             };
+            
+            // Cache failed authentication
+            this.authCache.set('claude', result);
+            return result;
           }
 
-          return {
+          const result: AuthResult = {
             success: true,
             status: {
               isAuthenticated: true,
@@ -312,6 +398,10 @@ export class AuthVerifier {
             },
             requiresAction: false,
           };
+          
+          // Cache successful authentication (12-hour TTL)
+          this.authCache.set('claude', result);
+          return result;
 
         } catch (error) {
           logger.error('Claude Code verification failed', { error: (error as Error).message });
@@ -351,6 +441,59 @@ export class AuthVerifier {
       default:
         throw new Error(`Unknown service: ${service}`);
     }
+  }
+
+  /**
+   * Test Gemini API key validity with a lightweight request
+   */
+  private async testGeminiApiKey(apiKey: string): Promise<void> {
+    // Import Google AI library dynamically to avoid loading if not needed
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+      
+      // Simple test prompt to validate API key
+      const result = await model.generateContent('Test');
+      
+      if (!result.response) {
+        throw new Error('API key test failed - no response');
+      }
+      
+      logger.debug('Gemini API key validation successful');
+    } catch (error) {
+      logger.warn('Gemini API key validation failed', { error: (error as Error).message });
+      throw new Error(`Gemini API key invalid: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Get authentication cache statistics
+   */
+  getAuthCacheStats() {
+    return this.authCache.getStats();
+  }
+
+  /**
+   * Clear authentication cache for a specific service
+   */
+  clearAuthCache(service?: 'gemini' | 'aistudio' | 'claude'): void {
+    if (service) {
+      this.authCache.invalidate(service);
+      logger.info('Authentication cache cleared for service', { service });
+    } else {
+      this.authCache.clear();
+      logger.info('All authentication cache cleared');
+    }
+  }
+
+  /**
+   * Force refresh authentication for a service
+   */
+  async forceRefreshAuth(service: 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
+    this.authCache.forceRefresh(service);
+    return await this.verifyServiceAuth(service);
   }
 
   /**

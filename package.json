@@ -1,7 +1,7 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.0.0",
-  "description": "Multi-layer AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio for advanced multimodal processing with intelligent caching and performance optimization",
+  "version": "1.1.0",
+  "description": "Enterprise-grade multi-layer AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent caching, OAuth authentication, and optimal layer routing for superior performance",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -9,15 +9,19 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "Claude-Gemini Multimodal Bridge - Multi-layer AI integration with intelligent caching and performance optimization",
-    "version": "1.0.0",
-    "command": "cgmb",
-    "args": ["serve"],
+    "description": "Claude-Gemini Multimodal Bridge - Enterprise-grade multi-layer AI integration with intelligent caching, OAuth authentication, and optimal layer routing",
+    "version": "1.1.0",
+    "command": "node",
+    "args": ["./dist/index.js"],
+    "env": {
+      "NODE_ENV": "development",
+      "LOG_LEVEL": "info"
+    },
     "servers": {
       "ai-studio": {
         "description": "Custom AI Studio MCP server for image generation and multimodal processing",
         "command": "node",
-        "args": ["dist/mcp-servers/ai-studio-mcp-server.js"]
+        "args": ["./dist/mcp-servers/ai-studio-mcp-server.js"]
       }
     }
   },
@@ -64,7 +68,13 @@
     "layer-routing",
     "claude-gemini-bridge",
     "natural-interface",
-    "user-friendly"
+    "user-friendly",
+    "oauth-authentication",
+    "enterprise-grade",
+    "intelligent-routing",
+    "mcp-gemini-cli",
+    "authentication-cache",
+    "fallback-strategies"
   ],
   "author": "goodaymmm",
   "license": "MIT",

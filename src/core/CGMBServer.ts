@@ -41,8 +41,8 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.0.0',
-        description: 'claude-gemini-multimodal-bridge - Multi-layer AI integration bridge with intelligent caching, performance optimization, and seamless MCP integration for Claude Code.'
+        version: '1.1.0',
+        description: 'claude-gemini-multimodal-bridge v1.1.0 - Enterprise-grade multi-layer AI integration with intelligent layer routing, authentication caching, and simplified Gemini CLI integration for Claude Code.'
       },
       {
         capabilities: {
@@ -584,7 +584,7 @@ export class CGMBServer {
     if (targetLayer === 'gemini' && request.formattedData?.geminiFormat) {
       // Direct execution on Gemini layer
       logger.info('Executing preformatted request on Gemini layer');
-      const result = await this.layerManager.getGeminiLayer().executeFast({
+      const result = await this.layerManager.getGeminiLayer().execute({
         type: 'text_processing',
         prompt: request.formattedData.geminiFormat.stdin,
         files: [],
