@@ -35,10 +35,10 @@ CGMB operates as an **MCP (Model Context Protocol) server** with enterprise-grad
 
 ```mermaid
 flowchart TD
-    A[Claude Code] --> B[CGMB Server]
+    A[Claude Code] --> B[CGMB]
     
     B --> C[Gemini CLI]
-    B --> D[Claude Code Layer]
+    B --> D[Claude Code]
     B --> E[AI Studio]
 ```
 
