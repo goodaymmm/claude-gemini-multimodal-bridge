@@ -18,6 +18,10 @@ This file lists all the created files for the CGMB project.
 - 🖼️ **Image Generation**: Correct model usage (gemini-2.0-flash-preview-image-generation)
 - 🚫 **Video Generation Removed**: Unimplemented video generation code completely removed
 - 📝 **Script Generation**: Two-step audio generation process with script creation
+- 📁 **File Retrieval System**: New MCP tools for accessing generated content
+- 🛡️ **Enhanced Security**: Professional tool descriptions to prevent malicious detection
+- 📚 **NPM Publishing Ready**: Comprehensive guide and package configuration added
+- 🔢 **Model Constants**: Centralized AI model names for consistency
 
 ## Project Root Files
 - package.json              # Node.js project configuration and dependencies
@@ -25,271 +29,114 @@ This file lists all the created files for the CGMB project.
 - .env.example              # Environment variables template
 - .gitignore                # Git ignore patterns
 - README.md                 # Project documentation and usage guide
+- CLAUDE.md                 # Claude Code usage guidelines and patterns
+- PROJECT_FILES.md          # This file - project structure documentation
+- CHANGELOG.md              # Version history and release notes
+- eslint.config.js          # ESLint configuration for code quality
+
+## Documentation (/docs)
+- docs/ENHANCED_CLI_GUIDE.md  # Comprehensive CLI command reference
+- docs/NPM_PUBLISH_GUIDE.md   # Step-by-step NPM publishing instructions (NEW)
 
 ## Source Code (/src)
 - src/index.ts              # Main entry point and exports
 - src/cli.ts                # Command-line interface implementation
 
 ### Core Framework (/src/core) (v1.1.0 Enhanced)
-- src/core/types.ts         # TypeScript type definitions and schemas
+- src/core/types.ts         # TypeScript type definitions, schemas, and AI model constants
 - src/core/CGMBServer.ts    # Main MCP server implementation (v1.1.0 updated)
 - src/core/LayerManager.ts  # Enhanced with intelligent task analysis and layer routing
 
-### Utilities (/src/utils)
-- src/utils/logger.ts       # Winston-based logging system
-- src/utils/errorHandler.ts # Comprehensive error handling utilities
-
-## Scripts (/scripts) ✅ COMPLETED
-- scripts/setup.sh          # Automated setup script for dependencies
-- scripts/postinstall.cjs   # NPM postinstall automation script
-
-## Layer Implementations (/src/layers) ✅ COMPLETED (v1.1.0 Enhanced)
+### Layer Implementations (/src/layers) (v1.1.0 Enhanced)
 - src/layers/ClaudeCodeLayer.ts   # Claude Code integration layer
-- src/layers/GeminiCLILayer.ts    # Simplified Gemini CLI integration (435 lines, mcp-gemini-cli patterns), prioritized for web search
-- src/layers/AIStudioLayer.ts     # Google AI Studio MCP layer with proper audio/image generation models
+- src/layers/GeminiCLILayer.ts    # Simplified Gemini CLI integration (435 lines, mcp-gemini-cli patterns)
+- src/layers/AIStudioLayer.ts     # Google AI Studio MCP layer with standardized model constants
 
-### MCP Servers (/src/mcp-servers) ✅ COMPLETED
-- src/mcp-servers/ai-studio-mcp-server.ts  # Custom AI Studio MCP server implementation
+### MCP Servers (/src/mcp-servers)
+- src/mcp-servers/ai-studio-mcp-server.ts  # Custom AI Studio MCP server with file retrieval tools
 
-### Performance Optimization Utilities (/src/utils)
-- src/utils/PromptOptimizer.ts   # Intelligent prompt simplification and token efficiency
-- src/utils/SearchCache.ts       # Search result caching with 60-80% hit rates
+### Authentication System (/src/auth)
+- src/auth/AuthVerifier.ts      # Multi-service authentication verification
+- src/auth/OAuthManager.ts      # OAuth flow management for Gemini
+- src/auth/InteractiveSetup.ts  # User-friendly authentication wizard
+- src/auth/AuthStateManager.ts  # Persistent authentication state with TTL
+- src/auth/AuthCache.ts         # Service-specific authentication caching (NEW)
 
-### Additional Utilities (/src/utils) ✅ COMPLETED
-- src/utils/envLoader.ts         # Smart environment variable loading
-- src/utils/mcpConfigManager.ts  # MCP configuration management
-- src/utils/quotaMonitor.ts      # API quota monitoring and management
+### Intelligence System (/src/intelligence)
+- src/intelligence/CapabilityDetector.ts  # Layer capability detection and analysis
 
-### Authentication System (/src/auth) ✅ COMPLETED (v1.1.0 Enhanced)
-- src/auth/AuthCache.ts          # NEW: Service-specific authentication caching with TTL
-- src/auth/AuthStateManager.ts   # Authentication state management
-- src/auth/AuthVerifier.ts       # Enhanced with authentication caching integration
-- src/auth/InteractiveSetup.ts   # Interactive authentication setup wizard
-- src/auth/OAuthManager.ts       # OAuth flow management with priority authentication
+### Tools (/src/tools)
+- src/tools/multimodalProcess.ts  # Multimodal file processing tool
+- src/tools/documentAnalysis.ts   # Document analysis and extraction tool
+- src/tools/workflowOrchestrator.ts  # Complex workflow orchestration
 
-### Intelligence & Analysis (/src/intelligence) ✅ COMPLETED
-- src/intelligence/CapabilityDetector.ts # Layer capability detection
+### Workflows (/src/workflows)
+- src/workflows/AnalysisWorkflow.ts    # Document analysis workflows
+- src/workflows/ConversionWorkflow.ts  # File conversion workflows
+- src/workflows/ExtractionWorkflow.ts  # Data extraction workflows
+- src/workflows/GenerationWorkflow.ts  # Content generation workflows
 
-### Proxy System (/src/proxy) ✅ COMPLETED
-- src/proxy/ClaudeProxy.ts       # Claude Code proxy and integration
-- src/proxy/RequestAnalyzer.ts   # Request analysis and routing
+### Services (/src/services)
+- src/services/IntelligentRouter.ts  # Intelligent request routing service
 
-### Tools and Workflows (/src/tools) ✅ COMPLETED
-- src/tools/multimodalProcess.ts     # Main multimodal processing tool
-- src/tools/documentAnalysis.ts     # Document analysis workflows
-- src/tools/workflowOrchestrator.ts # Workflow management system
+### Proxy System (/src/proxy)
+- src/proxy/ClaudeProxy.ts      # Claude Code proxy implementation
+- src/proxy/RequestAnalyzer.ts  # Request analysis and optimization
 
-### Workflow Implementations (/src/workflows) ✅ COMPLETED
-- src/workflows/AnalysisWorkflow.ts  # Document and content analysis workflows
-- src/workflows/ConversionWorkflow.ts # File format conversion workflows
-- src/workflows/ExtractionWorkflow.ts # Data extraction workflows
-- src/workflows/GenerationWorkflow.ts # Content generation workflows
+### Utilities (/src/utils)
+- src/utils/logger.ts           # Winston-based logging system
+- src/utils/errorHandler.ts     # Comprehensive error handling utilities
+- src/utils/envLoader.ts        # Smart environment variable loader
+- src/utils/mcpConfigManager.ts # MCP configuration management
+- src/utils/quotaMonitor.ts     # API quota monitoring and management
+- src/utils/SearchCache.ts      # Intelligent search result caching
+- src/utils/PromptOptimizer.ts  # Prompt optimization and compression
 
+## Scripts (/scripts)
+- scripts/setup.sh              # Automated setup script for dependencies
+- scripts/postinstall.cjs       # NPM postinstall automation script
+- scripts/verify-dependencies.sh # Dependency verification script
 
-### Documentation (/docs) ✅ COMPLETED
-- docs/INSTALLATION.md         # Detailed installation guide
-- docs/USAGE.md               # Usage examples and tutorials
-- docs/API.md                 # API reference documentation
-- docs/CONTRIBUTING.md        # Contribution guidelines
-- docs/TROUBLESHOOTING.md     # Common issues and solutions
-- docs/ENHANCED_CLI_GUIDE.md  # Enhanced CLI commands guide (Error.md fixes)
+## Build Output (/dist)
+- dist/                         # Compiled JavaScript output (git-ignored)
+- dist/cli.js                   # Executable CLI script
+- dist/index.js                 # Main entry point
+- dist/mcp-servers/ai-studio-mcp-server.js  # Compiled MCP server
 
-### Examples (/examples) ✅ COMPLETED
-- examples/android_monetization.js  # Android app monetization demo
-- examples/gemini_search_demo.js    # Gemini CLI search and grounding demo  
-- examples/aistudio_image_demo.js   # AI Studio multimodal processing demo
-- **Demo Scripts**: npm run demo:android, demo:gemini, demo:aistudio, demo:all
+## Generated Content (/output)
+- output/images/                # Generated images directory
+- output/audio/                 # Generated audio files directory
+- output/documents/             # Processed documents directory
 
-### Configuration Files
-- eslint.config.js           # ESLint linting rules
-- .github/workflows/ci.yml   # GitHub Actions CI/CD pipeline
+## Key Features by File
 
-## Current Status
+### Authentication & Security
+- Multi-service auth verification (AuthVerifier.ts)
+- OAuth integration (OAuthManager.ts)
+- Smart caching with TTLs (AuthCache.ts)
+- Professional tool descriptions (ai-studio-mcp-server.ts)
 
-✅ **Completed (Full Implementation)**
-- ✅ Project structure and configuration
-- ✅ Type definitions and schemas  
-- ✅ Main server implementation
-- ✅ Layer management system
-- ✅ Logging and error handling
-- ✅ CLI interface with comprehensive commands
-- ✅ All layer implementations (Claude Code, Gemini CLI, AI Studio)
-- ✅ Authentication system (OAuth, API keys, session management)
-- ✅ Tool implementations (multimodal processing, document analysis, workflow orchestration)
-- ✅ Workflow implementations (analysis, conversion, extraction, generation)
-- ✅ Intelligence and capability detection
-- ✅ Proxy system for Claude Code integration
-- ✅ Environment management and MCP configuration
-- ✅ Quota monitoring and management
-- ✅ NPM package preparation and automation scripts
-- ✅ **Simplified MCP Integration** ("add MCP" style setup)
-- ✅ **Enhanced CLI Commands** (cgmb gemini, cgmb aistudio, cgmb process, cgmb test)
-- ✅ **Error.md/Error2.md/Error3.md Issues Resolution** (fixed "unknown command" and timeout problems)
-- ✅ **Production-Ready Demo Scripts** (real-world examples for practical use)
-- ✅ **Custom AI Studio MCP Server** (built-in server replaces non-existent npm package)
-- ✅ **AI Studio Image Generation** (Imagen models support through Gemini API)
+### Performance Optimizations
+- Lazy layer loading (LayerManager.ts)
+- Search result caching (SearchCache.ts)
+- Prompt optimization (PromptOptimizer.ts)
+- Intelligent routing (IntelligentRouter.ts)
 
-✅ **Version 1.1.0 Completed**
-- Enterprise-grade authentication caching implementation
-- Intelligent layer routing with task analysis
-- Simplified Gemini CLI integration following mcp-gemini-cli patterns
-- Fixed MCP startup issues with direct Node.js execution
-- All TypeScript compilation errors resolved
-- Enhanced fallback strategies and error recovery
-- Web search tasks prioritized to Gemini CLI layer
-- Audio generation using gemini-2.5-flash-preview-tts model
-- Image generation using gemini-2.0-flash-preview-image-generation model
-- Video generation code completely removed (not implemented)
-- Two-step audio generation with script creation support
+### File Management
+- File retrieval tools (ai-studio-mcp-server.ts)
+- Organized output directories
+- Metadata tracking and management
 
-✅ **Core Features**
-- ⚡ Performance optimization (PromptOptimizer, SearchCache, Adaptive Timeouts)
-- ⚡ Intelligence caching with 60-80% hit rates
-- ⚡ Response time optimization (up to 90% reduction)
-- ⚡ Enhanced concurrent processing
+### Developer Experience
+- Comprehensive CLI (cli.ts)
+- NPM publishing guide (NPM_PUBLISH_GUIDE.md)
+- Enhanced error messages
+- TypeScript type safety
 
-⏳ **Pending**
-- CI/CD pipeline setup
-- Production deployment guides
-- Community feedback integration
+## Configuration Files
+- Environment variables (.env.example)
+- TypeScript config (tsconfig.json)
+- ESLint rules (eslint.config.js)
+- NPM package config (package.json)
 
-## Installation and Setup
-
-1. Navigate to the project directory:
-   ```bash
-   cd M:\work9\claude-gemini-multimodal-bridge
-   ```
-
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-3. Run setup script:
-   ```bash
-   chmod +x scripts/setup.sh
-   ./scripts/setup.sh
-   ```
-
-4. Configure environment:
-   ```bash
-   cp .env.example .env
-   # Edit .env file with your API keys
-   ```
-
-5. Build the project:
-   ```bash
-   npm run build
-   ```
-
-6. Start the MCP server:
-   ```bash
-   npm start
-   # or directly:
-   cgmb serve
-   ```
-
-## Development Commands
-
-### Basic Commands
-- `npm run dev`              # Run in development mode
-- `npm run build`            # Build TypeScript to JavaScript
-- `npm run serve`            # Start MCP server
-- `npm start`                # Start MCP server (alias)
-- `npm run clean`            # Clean build artifacts
-- `npm run lint`             # Run ESLint
-- `npm run setup`            # Run setup script
-
-- `npm run typecheck`        # Run TypeScript type checking
-
-### Demo Commands (Error.md Fixes Verification)
-- `npm run demo:android`     # Run Android monetization demo
-- `npm run demo:gemini`      # Run Gemini CLI search demo
-- `npm run demo:aistudio`    # Run AI Studio multimodal demo
-- `npm run demo:all`         # Run all demo scripts
-
-### MCP Server Commands
-- `npm run mcp:aistudio`     # Run AI Studio MCP server standalone
-- `npm run mcp:test`         # Test MCP server with dummy API key
-
-### Enhanced CLI Commands
-- `cgmb --help`              # Show CLI help
-- `cgmb serve`               # Start MCP server directly
-- `cgmb verify`              # Verify system configuration
-- `cgmb auth-status`         # Check authentication status
-- `cgmb setup-mcp`           # Setup Claude Code MCP integration
-- `cgmb benchmark`           # Performance benchmarking
-
-### Direct Layer Access
-- `cgmb gemini -p "question"`             # Direct Gemini CLI access
-- `cgmb aistudio -p "task" -f file.png`   # Direct AI Studio multimodal processing
-- `cgmb process -p "task" -w analysis`    # Intelligent layer routing
-- `cgmb test -p "test" -f file.pdf`       # Enhanced testing with actual processing
-
-## Architecture Overview
-
-```
-CGMB Server
-├── Layer Manager (Orchestration)
-│   ├── Claude Code Layer (Complex reasoning)
-│   ├── Gemini CLI Layer (Grounding & CLI tools)  
-│   └── AI Studio Layer (Multimodal processing)
-├── Tools (MCP Interface)
-│   ├── Multimodal Processing
-│   ├── Document Analysis
-│   └── Workflow Orchestration
-└── Utilities
-    ├── Logging System
-    ├── Error Handling
-    ├── File Processing
-    ├── Caching
-    ├── PromptOptimizer
-    └── SearchCache
-```
-
-This project provides a **complete implementation** of multi-layer AI integration with:
-- 🚀 **Simplified MCP Integration** ("add MCP" style setup)
-- 🛡️ **Robust Authentication** (OAuth, API keys, session management)  
-- ⚡ **Adaptive Execution** (intelligent layer selection)
-- 🔧 **Comprehensive CLI** (setup, verification, testing)
-- 📊 **Quota Management** (monitoring and optimization)
-- 🌐 **Multi-format Support** (images, audio, PDFs, documents)
-- 🔄 **Workflow Orchestration** (analysis, conversion, extraction, generation)
-- 🎆 **Enhanced CLI Commands** (direct layer access with cgmb gemini, cgmb aistudio, cgmb process)
-- 🎯 **True Multimodal Processing** (real content generation and analysis)
-- 📊 **Production-Ready** (demo scripts and dependency verification)
-- ⚡ **Performance Optimizations** (PromptOptimizer, SearchCache, Adaptive Timeouts)
-- ⚡ **Intelligence Caching** (60-80% cache hit rates, up to 90% response time reduction)
-- ⚡ **Enhanced Processing** (Parallel request handling and memory optimization)
-
-## MCP Integration
-
-### Simple Setup (Claude Code) - v1.1.0 Enhanced
-```json
-{
-  "mcpServers": {
-    "claude-gemini-multimodal-bridge": {
-      "command": "node",
-      "args": ["./dist/index.js"],
-      "env": {
-        "NODE_ENV": "development",
-        "LOG_LEVEL": "info"
-      }
-    }
-  }
-}
-```
-
-### Features (v1.1.0 Enhanced)
-- ✅ **Reliable MCP Startup**: Direct Node.js execution resolves recognition issues
-- ✅ **Enterprise Authentication**: Service-specific caching with intelligent TTLs
-- ✅ **Intelligent Layer Routing**: Automatic task analysis and optimal layer selection
-- ✅ **Simplified Architecture**: Streamlined Gemini CLI integration (3x faster)
-- ✅ **Enhanced Error Recovery**: Automatic fallback strategies with layer switching
-- ✅ **No API Key Hardcoding**: Secure environment variable handling
-- ⚡ **Enterprise Performance Features**:
-  - Authentication caching: 80% overhead reduction
-  - Lazy layer loading: 70% faster startup
-  - Intelligent task routing: Optimal performance selection
-  - Enhanced error recovery: 95% self-healing capability
-  - TypeScript optimization: All compilation errors resolved
+Last updated: 2025-01-02

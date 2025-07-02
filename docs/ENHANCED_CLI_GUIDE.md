@@ -2,7 +2,7 @@
 
 ## 🚀 Overview
 
-This guide covers the enhanced CLI commands that resolve the issues identified in Error.md, Error2.md, and Error3.md. CGMB now provides seamless, direct access to all AI layers without unnecessary intermediate steps.
+This guide covers all CLI commands available in Claude-Gemini Multimodal Bridge v1.1.0, including the latest enhancements for file generation and retrieval.
 
 ## 📋 Quick Reference
 
@@ -10,326 +10,394 @@ This guide covers the enhanced CLI commands that resolve the issues identified i
 
 | Command | Purpose | Example |
 |---------|---------|---------|
-| `cgmb test` | Enhanced multimodal testing | `cgmb test -p "analyze this" -f document.pdf` |
-| `cgmb gemini` | Direct Gemini CLI access | `cgmb gemini -p "latest AI trends" --search` |
-| `cgmb aistudio` | Direct AI Studio processing | `cgmb aistudio -p "create infographic" -f image1.png` |
-| `cgmb process` | Intelligent layer routing | `cgmb process -p "comprehensive analysis" -w analysis` |
-| `cgmb verify` | System verification | `cgmb verify --fix` |
+| `cgmb chat` | Natural Gemini interaction | `cgmb chat "latest AI trends"` |
+| `cgmb c` | Short alias for chat | `cgmb c "explain quantum computing"` |
+| `cgmb gemini` | Direct Gemini CLI access | `cgmb gemini "complex query"` |
+| `cgmb generate-image` | Generate images with AI Studio | `cgmb generate-image "cute robot" -o robot.png` |
+| `cgmb generate-audio` | Generate audio/speech | `cgmb generate-audio "Hello world" -v Puck` |
+| `cgmb analyze` | Analyze documents | `cgmb analyze document.pdf --prompt "summarize"` |
+| `cgmb multimodal` | Process multiple files | `cgmb multimodal *.png *.pdf --workflow analysis` |
+
+### Authentication & Setup Commands
+
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `cgmb auth` | Manage authentication | `cgmb auth --interactive` |
+| `cgmb auth-status` | Check auth status | `cgmb auth-status --verbose` |
+| `cgmb verify` | Verify installation | `cgmb verify --fix` |
+| `cgmb setup-mcp` | Setup Claude Code MCP | `cgmb setup-mcp --check` |
 
 ---
 
-## 🔍 Enhanced Commands
+## 🎯 Natural Chat Interface (NEW)
 
-### 1. Enhanced Test Command
+### Basic Chat Usage
 
-**Fixed Issue**: Previously only performed initialization without actual processing (Error.md lines 114-122)
-
-```bash
-# Text-only processing
-cgmb test -p "Analyze Android app monetization strategies for 2024-2025"
-
-# File processing  
-cgmb test -f project_document.pdf -p "Extract key insights and recommendations"
-
-# Custom timeout
-cgmb test -p "Complex analysis task" --timeout 180000
-```
-
-**Key Improvements**:
-- ✅ Actual multimodal processing (not just initialization)
-- ✅ Real results returned with processing details
-- ✅ No more timeout issues
-- ✅ Support for both text and file inputs
-
-### 2. Direct Gemini CLI Command
-
-**Fixed Issue**: Eliminated "unknown command 'gemini-chat'" errors (Error.md lines 1-2)
+The most user-friendly way to interact with Gemini:
 
 ```bash
-# Basic search query
-cgmb gemini -p "What are the latest trends in mobile development?"
+# Simple questions
+cgmb chat "What is quantum computing?"
+cgmb c "What is quantum computing?"  # Short alias
 
-# With search/grounding enabled
-cgmb gemini -p "2024年のAI技術動向について教えてください" --search
+# Current information (automatic web search)
+cgmb chat "What are the latest AI developments in 2025?"
+cgmb c "Current stock market trends"
 
-# File analysis
-cgmb gemini -p "Analyze this project plan" -f project.txt
-
-# Custom model
-cgmb gemini -p "Technical analysis" -m gemini-2.5-pro
+# Complex queries
+cgmb chat "Compare React Native vs Flutter for enterprise apps"
 ```
 
-**Key Improvements**:
-- ✅ No more "unknown command" errors
-- ✅ Direct Gemini CLI integration
-- ✅ Search and grounding functionality
-- ✅ File processing support
-- ✅ Proper command syntax
-
-### 3. Direct AI Studio Command  
-
-**Fixed Issue**: Resolved aistudio-mcp-server dependency failures (Error3.md lines 73-76)
-
-```bash
-# Image/content generation
-cgmb aistudio -p "Create a business infographic showing revenue trends"
-
-# Multi-file processing
-cgmb aistudio -p "Analyze these documents" -f doc1.pdf doc2.txt image1.png
-
-# Custom model selection
-cgmb aistudio -p "Generate technical diagram" -m gemini-2.0-flash-exp
-```
-
-**Key Improvements**:
-- ✅ No more aistudio-mcp-server dependency issues
-- ✅ Direct AI Studio API integration
-- ✅ Multi-file processing
-- ✅ Faster response times
-- ✅ Fallback mode for reliability
-
-### 4. Intelligent Processing Command
-
-**New Feature**: Automated layer routing for optimal results
-
-```bash
-# Adaptive processing (recommended)
-cgmb process -p "Create comprehensive market analysis" -f data.csv --strategy adaptive
-
-# Workflow-specific processing
-cgmb process -p "Extract insights" -w extraction -f document.pdf
-
-# Layer-priority processing
-cgmb process -p "Generate summary" --strategy claude-first -f report.txt
-
-# Multiple files with analysis workflow
-cgmb process -p "Compare these documents" -f doc1.pdf doc2.txt -w analysis
-```
-
-**Workflow Types**:
-- `analysis` - Document and content analysis
-- `generation` - Content creation and synthesis  
-- `conversion` - Format conversion and transformation
-- `extraction` - Data extraction and structuring
-
-**Processing Strategies**:
-- `adaptive` - Intelligent layer selection (recommended)
-- `claude-first` - Prioritize Claude Code for reasoning
-- `gemini-first` - Prioritize Gemini CLI for search/grounding
-- `aistudio-first` - Prioritize AI Studio for multimodal
+**Features**:
+- ✅ No need for `-p` flag
+- ✅ Automatic web search when needed
+- ✅ Natural language interface
+- ✅ Smart error handling
 
 ---
 
-## 🔧 System Commands
+## 🖼️ Image Generation
 
-### Enhanced Verification
+### Generate Images with AI Studio
 
 ```bash
-# Basic system check
+# Basic image generation
+cgmb generate-image "futuristic city skyline at sunset"
+
+# Specify output file
+cgmb generate-image "cute robot assistant" --output robot.png
+cgmb generate-image "cute robot assistant" -o robot.png  # Short form
+
+# Different art styles
+cgmb generate-image "mountain landscape" --style photorealistic
+cgmb generate-image "abstract art" --style artistic
+
+# Disable safety prefix (use with caution)
+cgmb generate-image "professional headshot" --no-safe-mode
+```
+
+**Options**:
+- `-s, --style <style>`: Art style (photorealistic, cartoon, digital-art)
+- `-o, --output <path>`: Save to specific file
+- `--safe-mode`: Use safety prefixes (default: true)
+
+**Important Notes**:
+- English prompts required (translate if needed)
+- Files saved to `output/images/` by default
+- Automatic safety prefixes prevent content policy issues
+
+---
+
+## 🎵 Audio Generation
+
+### Generate Speech from Text
+
+```bash
+# Basic text-to-speech
+cgmb generate-audio "Welcome to our presentation"
+
+# Choose voice
+cgmb generate-audio "Hello, this is Puck speaking" --voice Puck
+cgmb generate-audio "Hello, this is Puck speaking" -v Puck  # Short form
+
+# Save to specific file
+cgmb generate-audio "Important announcement" --output announcement.wav
+cgmb generate-audio "Important announcement" -o announcement.wav  # Short form
+
+# Two-step generation with script
+cgmb generate-audio "Create a 30-second podcast intro about AI" --script
+```
+
+**Options**:
+- `-v, --voice <voice>`: Voice selection (Kore, Puck, etc.)
+- `-o, --output <path>`: Output file path
+- `--script`: Generate script first, then audio
+
+**Available Voices**:
+- Kore (default)
+- Puck
+- Additional voices supported by gemini-2.5-flash-preview-tts
+
+---
+
+## 📄 Document Analysis
+
+### Analyze Documents with AI
+
+```bash
+# Basic document analysis
+cgmb analyze report.pdf
+
+# Custom analysis prompt
+cgmb analyze research.pdf --prompt "Extract all statistical findings"
+
+# Compare multiple documents
+cgmb analyze doc1.pdf doc2.pdf --type compare
+
+# Extract specific information
+cgmb analyze contract.pdf --type extract --prompt "Find all payment terms"
+
+# Custom analysis with specific questions
+cgmb analyze whitepaper.pdf --prompt "Summarize the methodology section"
+```
+
+**Options**:
+- `--type <type>`: Analysis type (summary, extract, compare, custom)
+- `--prompt <prompt>`: Custom analysis instructions
+- `--output <format>`: Output format (text, json, markdown)
+
+---
+
+## 🔄 Multimodal Processing
+
+### Process Multiple Files Together
+
+```bash
+# Process mixed file types
+cgmb multimodal image1.png document.pdf audio.mp3
+
+# Specify workflow type
+cgmb multimodal *.jpg --workflow conversion --output markdown
+
+# Custom processing instructions
+cgmb multimodal file1.png file2.pdf --prompt "Create a comprehensive report"
+
+# Batch processing with options
+cgmb multimodal images/*.png --workflow analysis --output-dir results/
+```
+
+**Options**:
+- `--workflow <type>`: Processing workflow (analysis, conversion, extraction, generation)
+- `--prompt <prompt>`: Custom instructions
+- `--output <format>`: Output format
+- `--output-dir <path>`: Output directory
+
+**Supported File Types**:
+- Images: PNG, JPG, JPEG, GIF, WEBP
+- Documents: PDF, TXT, MD, DOC, DOCX
+- Audio: MP3, WAV, M4A, OGG
+- Data: JSON, CSV, XML
+
+---
+
+## 🔐 Authentication Management
+
+### Interactive Setup
+
+```bash
+# Run interactive authentication wizard
+cgmb auth --interactive
+
+# Authenticate specific service
+cgmb auth --service gemini --method oauth
+cgmb auth --service aistudio --method apikey
+
+# Check authentication status
+cgmb auth-status
+cgmb auth-status --verbose  # Detailed information
+```
+
+### Verify System
+
+```bash
+# Basic verification
 cgmb verify
 
 # Auto-fix authentication issues
 cgmb verify --fix
 
-# Check authentication status
-cgmb auth-status --verbose
-
-# Detect CLI tool paths
-cgmb detect-paths --fix
+# Check specific components
+cgmb verify --check auth
+cgmb verify --check layers
+cgmb verify --check dependencies
 ```
 
-### Setup and Configuration
+---
+
+## 🛠️ MCP Configuration
+
+### Setup Claude Code Integration
 
 ```bash
-# Initial setup
-cgmb setup
-
-# MCP integration setup
-cgmb setup-mcp
-
-# Check MCP status
+# Check MCP configuration status
 cgmb mcp-status
 
-# Interactive authentication
-cgmb auth --interactive
-```
+# Setup MCP integration
+cgmb setup-mcp
 
-### Monitoring and Diagnostics
+# Dry run (preview changes)
+cgmb setup-mcp --dry-run
 
-```bash
-# System information
-cgmb info --env
+# Check without making changes
+cgmb setup-mcp --check
 
-# API quota status
-cgmb quota-status --detailed
-
-# Setup guide
-cgmb setup-guide
+# Manual setup instructions
+cgmb setup-mcp --manual
 ```
 
 ---
 
-## 📊 Real-World Examples
+## 📁 File Management (NEW)
 
-### 1. Business Analysis (Error.md Example - Fixed)
+### Working with Generated Files
 
-**Problem**: Original command failed with "unknown command 'gemini-chat'"
+After generating content, you can manage files using:
 
-**Solution**:
 ```bash
-# Now works perfectly
-cgmb gemini -p "Androidアプリのマネタイズ戦略について最新のトレンドを含めて教えてください。特に2024-2025年の動向について詳しく説明してください。" --search
+# List all generated files
+cgmb list-files
+
+# List specific file types
+cgmb list-files --type image
+cgmb list-files --type audio
+cgmb list-files --type document
+
+# Get file information
+cgmb file-info output/images/generated-image-2025-01-02.png
+
+# Copy generated file
+cgmb get-file output/images/generated-image-2025-01-02.png --output my-image.png
 ```
 
-### 2. Image Generation (Error3.md Example - Fixed)
-
-**Problem**: aistudio-mcp-server verification failed, command timed out
-
-**Solution**:
-```bash
-# Now works with direct API integration
-cgmb aistudio -p "Create a professional infographic showing the 'Adaptive Value Monetization (AVM)' strategy for Android apps. Include subscription tiers, AI-driven personalization, reward advertising, micro-transactions, and revenue structure pie chart."
-```
-
-### 3. Multi-Step Workflow
-
-**Problem**: Manual coordination between different tools
-
-**Solution**:
-```bash
-# Automated multi-layer processing
-cgmb process -p "Analyze market trends, create visualization, and generate business recommendations" -w generation --strategy adaptive
-```
+**Note**: Generated files are automatically saved to:
+- Images: `output/images/`
+- Audio: `output/audio/`
+- Documents: `output/documents/`
 
 ---
 
-## 🚨 Error Resolution Guide
+## ⚡ Performance Options
 
-### Common Issues and Solutions
+### Global Options
 
-#### 1. "Unknown command" errors
-**Before**: `cgmb gemini-chat "question"` ❌  
-**After**: `cgmb gemini -p "question"` ✅
-
-#### 2. Timeout issues
-**Before**: Commands hung during initialization  
-**After**: Actual processing with configurable timeouts using `--timeout`
-
-#### 3. MCP dependency failures
-**Before**: aistudio-mcp-server required and often failed  
-**After**: Direct API integration with fallback modes
-
-#### 4. Authentication problems
-**Before**: Manual troubleshooting required  
-**After**: Use `cgmb verify --fix` for automated resolution
-
----
-
-## 📈 Performance Comparisons
-
-| Operation | Before (Error.md) | After (Enhanced) |
-|-----------|-------------------|-------------------|
-| Gemini CLI access | ❌ Failed | ✅ Direct integration |
-| AI Studio processing | ❌ Timeout | ✅ Fast processing |
-| Multi-file analysis | ❌ Not supported | ✅ Fully supported |
-| Error recovery | ❌ Manual intervention | ✅ Automated fallbacks |
-| User experience | ❌ Frustrating | ✅ Seamless |
-
----
-
-## 🎯 Best Practices
-
-### 1. Command Selection
-
-- **Simple text questions**: Use `cgmb gemini`
-- **Image/document analysis**: Use `cgmb aistudio`  
-- **Complex multi-step tasks**: Use `cgmb process`
-- **Testing and validation**: Use `cgmb test`
-
-### 2. Error Handling
-
-- Always run `cgmb verify` before important operations
-- Use `--timeout` for long-running tasks
-- Check `cgmb auth-status` if authentication errors occur
-- Use `cgmb info` to debug environment issues
-
-### 3. Performance Optimization
-
-- Use `--strategy adaptive` for best results
-- Specify appropriate workflow types (`-w analysis|generation|conversion|extraction`)
-- Monitor quota usage with `cgmb quota-status`
-- Use file processing for better context
-
----
-
-## 🔗 Integration Examples
-
-### Example Scripts
-
-See the `examples/` directory for complete demonstrations:
-
-- `examples/android_monetization.js` - Business analysis workflow
-- `examples/gemini_search_demo.js` - Gemini CLI integration
-- `examples/aistudio_image_demo.js` - AI Studio processing
-
-### Running Examples
+Available for all commands:
 
 ```bash
-# Make examples executable
-chmod +x examples/*.js
+# Verbose output
+cgmb chat "query" --verbose
+cgmb chat "query" -v  # Short form
 
-# Run Android monetization analysis
-node examples/android_monetization.js
+# Debug mode
+cgmb gemini "test" --debug
+export CGMB_DEBUG=true  # Enable globally
 
-# Test Gemini CLI integration
-node examples/gemini_search_demo.js
+# Custom timeout
+cgmb analyze large-file.pdf --timeout 300000  # 5 minutes
 
-# Demonstrate AI Studio capabilities
-node examples/aistudio_image_demo.js
+# Disable caching
+cgmb chat "query" --no-cache
+
+# Specific model
+cgmb gemini "query" --model gemini-2.5-pro
 ```
 
 ---
 
-## 📞 Support and Troubleshooting
+## 🌐 Web Search
 
-### Quick Diagnostics
-
-```bash
-# Full system check
-cgmb verify
-
-# Check all dependencies
-./scripts/verify-dependencies.sh
-
-# Test basic functionality
-cgmb test -p "Hello, CGMB!"
-```
-
-### Common Solutions
-
-1. **Authentication issues**: `cgmb auth --interactive`
-2. **Path problems**: `cgmb detect-paths --fix`
-3. **MCP not working**: `cgmb setup-mcp`
-4. **Performance issues**: `cgmb quota-status --detailed`
-
-### Getting Help
+Web search is automatic with Gemini - no special flags needed:
 
 ```bash
-# Command help
-cgmb --help
-cgmb <command> --help
+# These automatically trigger web search when beneficial
+cgmb chat "latest news about AI"
+cgmb gemini "current weather in Tokyo"
+cgmb c "stock price of GOOGL today"
 
-# System information
-cgmb info
-
-# Setup guidance
-cgmb setup-guide
+# Keywords that trigger web search:
+# - latest, current, today, now, recent
+# - news, weather, stock, price
+# - trending, updated, breaking
 ```
 
 ---
 
-**Document Version**: 1.0.0  
-**Last Updated**: 2025-06-30  
-**Compatibility**: CGMB v1.0.0+
+## 🚨 Troubleshooting
 
-This guide demonstrates how CGMB has evolved from the problematic state shown in Error.md/Error2.md/Error3.md to a production-ready, user-friendly multimodal AI integration platform.
+### Common Issues
+
+1. **"Command not found"**
+   ```bash
+   # Ensure global installation
+   npm install -g claude-gemini-multimodal-bridge
+   ```
+
+2. **Authentication errors**
+   ```bash
+   # Run interactive setup
+   cgmb auth --interactive
+   
+   # Check status
+   cgmb auth-status --verbose
+   ```
+
+3. **Content policy errors**
+   ```bash
+   # Use safe mode (default)
+   cgmb generate-image "portrait" --safe-mode
+   ```
+
+4. **Timeout errors**
+   ```bash
+   # Increase timeout
+   cgmb analyze large-file.pdf --timeout 300000
+   ```
+
+### Debug Mode
+
+Enable detailed logging:
+
+```bash
+# For single command
+cgmb chat "test" --debug
+
+# Globally
+export CGMB_DEBUG=true
+export LOG_LEVEL=debug
+```
+
+---
+
+## 📚 Examples
+
+### Complete Workflow Example
+
+```bash
+# 1. Generate an image
+cgmb generate-image "modern office workspace" -o office.png
+
+# 2. Analyze the generated image
+cgmb analyze office.png --prompt "Describe the design elements"
+
+# 3. Generate audio description
+cgmb generate-audio "A modern office workspace with minimalist design" -o description.wav
+
+# 4. Create comprehensive report
+cgmb multimodal office.png description.wav --workflow analysis --output report.md
+```
+
+### Batch Processing Example
+
+```bash
+# Process all images in a directory
+cgmb multimodal images/*.jpg --workflow conversion --output markdown
+
+# Analyze multiple documents
+cgmb analyze docs/*.pdf --type compare --output comparison.json
+
+# Generate images from a list
+for prompt in "cat" "dog" "bird"; do
+  cgmb generate-image "$prompt" -o "animal-$prompt.png"
+done
+```
+
+---
+
+## 🔗 Quick Links
+
+- **NPM Package**: [npmjs.com/package/claude-gemini-multimodal-bridge](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+- **GitHub**: [github.com/goodaymmm/claude-gemini-multimodal-bridge](https://github.com/goodaymmm/claude-gemini-multimodal-bridge)
+- **Issues**: [GitHub Issues](https://github.com/goodaymmm/claude-gemini-multimodal-bridge/issues)
+
+---
+
+Last updated: 2025-01-02 | Version: 1.1.0
