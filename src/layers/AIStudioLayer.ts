@@ -3,6 +3,7 @@ import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
 import * as path from 'path';
+import { GoogleGenAI, Modality } from '@google/genai';
 import { 
   AudioAnalysisResult, 
   AudioGenOptions, 
@@ -54,6 +55,7 @@ function sanitizePrompt(prompt: string): string {
  */
 export class AIStudioLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
+  private genAI: GoogleGenAI | null = null;
   private mcpServerProcess?: any;
   private persistentMCPProcess?: any; // Persistent MCP process for better performance
   private mcpProcessStartTime = 0; // Track when MCP process was started
@@ -62,7 +64,7 @@ export class AIStudioLayer implements LayerInterface {
   private isLightweightInitialized = false; // Fast initialization for simple tasks
   private lastAuthCheck = 0; // Timestamp of last auth verification
   private readonly AUTH_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days auth cache (API keys are typically long-lived)
-  private readonly DEFAULT_TIMEOUT = 180000; // 3 minutes for file processing (increased from 2 minutes to fix timeout issues)
+  private readonly DEFAULT_TIMEOUT = 300000; // 5 minutes for file processing (increased to fix timeout issues)
   private readonly MAX_RETRIES = 2;
   private readonly MAX_FILES = 10;
   private readonly MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB per file (Google official limit)
@@ -78,6 +80,12 @@ export class AIStudioLayer implements LayerInterface {
 
   constructor() {
     this.authVerifier = new AuthVerifier();
+    
+    // Initialize Google AI Studio API client
+    const apiKey = process.env.AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
+    if (apiKey) {
+      this.genAI = new GoogleGenAI({ apiKey });
+    }
   }
 
   /**
@@ -224,7 +232,7 @@ export class AIStudioLayer implements LayerInterface {
         // Use lightweight initialization for simple tasks
         if (!this.isInitialized && !this.isLightweightInitialized) {
           // For simple text processing without files, use lightweight init
-          if (task.action === 'general_process' && (!task.files || task.files.length === 0)) {
+          if (task.action === 'multimodal_process' && (!task.files || task.files.length === 0)) {
             await this.initializeLightweight();
           } else {
             await this.initialize();
@@ -565,58 +573,88 @@ export class AIStudioLayer implements LayerInterface {
   async generateAudio(text: string, options: Partial<AudioGenOptions> = {}): Promise<MediaGenResult> {
     return retry(
       async () => {
-        logger.info('Generating audio with Gemini TTS', {
+        logger.info('Generating audio with Gemini TTS (direct API)', {
           textLength: text.length,
           voice: options.voice || 'Kore',
-          format: 'wav',
+          format: options.format || 'mp3',
           model: AI_MODELS.AUDIO_GENERATION
         });
 
         const startTime = Date.now();
         
-        // Use the official TTS model and configuration
-        const audioParams = {
-          text,
-          model: AI_MODELS.AUDIO_GENERATION,
-          voiceName: options.voice || 'Kore',
-          // Simple single speaker configuration
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: options.voice || 'Kore' }
-          }
-        };
-
-        logger.debug('Calling MCP server for audio generation', audioParams);
-        
-        const result = await this.executeMCPCommandOptimized('generate_audio', audioParams);
-
-        const duration = Date.now() - startTime;
-        
-        // Process the MCP server response
-        let outputPath = '';
-        
-        if (result.audioData) {
-          // Save WAV audio data to file
-          outputPath = await this.saveGeneratedAudio(result.audioData, 'wav');
-        } else {
-          throw new Error('Audio generation completed but no audio data received');
+        // Ensure genAI client is available
+        if (!this.genAI) {
+          throw new Error('Google AI Studio API client not initialized. Please set AI_STUDIO_API_KEY environment variable.');
         }
+        
+        // Direct Google AI Studio TTS API call (same pattern as image generation)
+        try {
+          const response = await this.genAI.models.generateContent({
+            model: AI_MODELS.AUDIO_GENERATION,
+            contents: text,
+            config: {
+              responseModalities: [Modality.TEXT, Modality.AUDIO],
+            },
+          });
 
-        return {
-          success: true,
-          generationType: 'audio' as GenerationType,
-          outputPath,
-          originalPrompt: text,
-          metadata: {
-            duration,
-            fileSize: result.metadata?.fileSize || 0,
-            format: 'wav',
-            model: 'gemini-2.5-flash-preview-tts',
-            settings: options,
-            cost: this.calculateGenerationCost('audio', options),
-            voice: options.voice || 'Kore'
-          },
-          downloadUrl: result.downloadUrl,
-        };
+          let audioData = null;
+          let textContent = '';
+          
+          // Extract audio data from response
+          if (response.candidates?.[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+              if (part.text) {
+                textContent = part.text;
+              } else if (part.inlineData) {
+                audioData = part.inlineData.data;
+              }
+            }
+          }
+
+          // Save the generated audio if we have data
+          let outputPath = '';
+          let fileSize = 0;
+          if (audioData) {
+            const outputDir = path.join(process.cwd(), 'output', 'audio');
+            await fsPromises.mkdir(outputDir, { recursive: true });
+            
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const format = options.format || 'mp3';
+            const filename = `generated-audio-${timestamp}.${format}`;
+            const relativePath = path.join('output', 'audio', filename);
+            const absolutePath = path.join(outputDir, filename);
+            
+            const buffer = Buffer.from(audioData, 'base64');
+            await fsPromises.writeFile(absolutePath, buffer);
+            fileSize = buffer.length;
+            outputPath = relativePath;
+          } else {
+            throw new Error('Audio generation completed but no audio data received');
+          }
+
+          const duration = Date.now() - startTime;
+
+          return {
+            success: true,
+            generationType: 'audio' as GenerationType,
+            outputPath,
+            originalPrompt: text,
+            metadata: {
+              duration,
+              fileSize,
+              format: options.format || 'mp3',
+              model: AI_MODELS.AUDIO_GENERATION,
+              settings: options,
+              cost: this.calculateGenerationCost('audio', options),
+              voice: options.voice || 'Kore',
+              responseText: textContent
+            },
+            downloadUrl: undefined,
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          throw new Error(`Audio generation failed: ${errorMessage}`);
+        }
       },
       {
         maxAttempts: this.MAX_RETRIES,
@@ -983,12 +1021,12 @@ export class AIStudioLayer implements LayerInterface {
    * Execute direct API call for simple operations
    */
   private async executeDirectAPI(command: string, params: any): Promise<any> {
-    if (command === 'general_process') {
+    if (command === 'multimodal_process') {
       logger.debug('Using direct API for simple text processing');
       
       // Simple text processing without MCP overhead
       return {
-        content: `Processed: ${params.prompt}`,
+        content: `Processed: ${params.instructions || params.prompt}`,
         processing_time: Date.now(),
         method: 'direct_api',
       };
@@ -1004,11 +1042,15 @@ export class AIStudioLayer implements LayerInterface {
     let timeout = 60000; // Base: 1 minute for optimized operations
     
     if (command === 'generate_image') {
-      timeout = 120000; // 2 minutes for image generation
+      timeout = 180000; // 3 minutes for image generation (increased from 2 minutes)
+    } else if (command === 'generate_audio') {
+      timeout = 120000; // 2 minutes for audio generation
     } else if (command === 'generate_video') {
-      timeout = 180000; // 3 minutes for video generation
+      timeout = 300000; // 5 minutes for video generation
+    } else if (command === 'multimodal_process' || command === 'analyze_documents') {
+      timeout = 300000; // 5 minutes for document processing
     } else if (params?.files && params.files.length > 0) {
-      timeout = 90000 + (params.files.length * 15000); // 90s + 15s per file
+      timeout = 120000 + (params.files.length * 20000); // 2 minutes + 20s per file
     }
     
     return timeout;
@@ -1042,10 +1084,10 @@ export class AIStudioLayer implements LayerInterface {
       return await this.generateAudio(prompt, task.options || {});
     }
     
-    return await this.executeMCPCommandOptimized('general_process', {
-      prompt,
-      files: task.files,
-      options: task.options || {},
+    return await this.executeMCPCommandOptimized('multimodal_process', {
+      files: task.files || [],
+      instructions: prompt,
+      model: 'gemini-2.5-flash',
     });
   }
 
@@ -1105,7 +1147,7 @@ export class AIStudioLayer implements LayerInterface {
    */
   private async executeMCPCommandOptimized(command: string, params: any): Promise<any> {
     // For simple commands, try direct API call first
-    if (command === 'general_process' && this.canUseDirectAPI(params)) {
+    if (command === 'multimodal_process' && this.canUseDirectAPI(params)) {
       return await this.executeDirectAPI(command, params);
     }
     

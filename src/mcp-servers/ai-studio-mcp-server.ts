@@ -577,7 +577,7 @@ To retrieve this file, use:
       ];
 
       const response = await this.genAI.models.generateContent({
-        model: 'gemini-2.0-flash-preview-image-generation',
+        model: 'gemini-2.5-flash',
         contents: parts,
         config: {
           responseModalities: [Modality.TEXT],
