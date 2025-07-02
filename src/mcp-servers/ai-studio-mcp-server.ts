@@ -406,11 +406,10 @@ class AIStudioMCPServer {
     try {
       // First sanitize the prompt to replace problematic words
       let sanitizedPrompt = sanitizePrompt(params.prompt);
-      logger.debug('Prompt sanitization', { 
-        original: params.prompt, 
-        sanitized: sanitizedPrompt,
-        changed: params.prompt !== sanitizedPrompt
-      });
+      // Log sanitization for debugging if needed
+      if (params.prompt !== sanitizedPrompt) {
+        console.error(`[AI Studio MCP] Prompt sanitized: "${params.prompt}" → "${sanitizedPrompt}"`);
+      }
       
       // Add safety prefixes to avoid content policy issues
       let safePrompt = sanitizedPrompt;

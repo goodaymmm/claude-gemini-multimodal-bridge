@@ -976,6 +976,32 @@ program
         process.exit(1);
       }
 
+      // Check if user is trying to generate images with chat command
+      const imageGenerationPatterns = [
+        /generate.*image/i,
+        /create.*image/i,
+        /make.*image/i,
+        /draw.*image/i,
+        /generate.*picture/i,
+        /create.*picture/i,
+        /image.*of/i,
+        /picture.*of/i
+      ];
+      
+      if (imageGenerationPatterns.some(pattern => pattern.test(prompt))) {
+        console.log('\n💡 It looks like you want to generate an image!');
+        console.log('');
+        console.log('The chat command doesn\'t generate images. Use the dedicated command:');
+        console.log(`   cgmb generate-image "${prompt}"`);
+        console.log('');
+        console.log('This will automatically:');
+        console.log('   • Sanitize your prompt (cute → friendly-looking)');
+        console.log('   • Add safety prefixes');
+        console.log('   • Generate the image properly');
+        console.log('');
+        process.exit(0);
+      }
+
       console.log('💡 Auto-detected prompt (using chat mode)');
       
       // 内部的にgeminiコマンドと同じ処理を実行
@@ -1023,6 +1049,32 @@ program
       if (!prompt) {
         showGeminiHelp();
         process.exit(1);
+      }
+
+      // Check if user is trying to generate images with gemini command
+      const imageGenerationPatterns = [
+        /generate.*image/i,
+        /create.*image/i,
+        /make.*image/i,
+        /draw.*image/i,
+        /generate.*picture/i,
+        /create.*picture/i,
+        /image.*of/i,
+        /picture.*of/i
+      ];
+      
+      if (imageGenerationPatterns.some(pattern => pattern.test(prompt))) {
+        console.log('\n💡 It looks like you want to generate an image!');
+        console.log('');
+        console.log('The gemini command doesn\'t generate images. Use the dedicated command:');
+        console.log(`   cgmb generate-image "${prompt}"`);
+        console.log('');
+        console.log('This will automatically:');
+        console.log('   • Sanitize your prompt (cute → friendly-looking)');
+        console.log('   • Add safety prefixes');
+        console.log('   • Generate the image properly');
+        console.log('');
+        process.exit(0);
       }
 
       options.prompt = prompt;
@@ -1208,6 +1260,56 @@ program
       if (!options.prompt) {
         logger.error('Prompt is required. Use: cgmb aistudio -p "your question" -f file1 file2');
         process.exit(1);
+      }
+
+      // Check if user is trying to generate images with aistudio command
+      const imageGenerationPatterns = [
+        /generate.*image/i,
+        /create.*image/i,
+        /make.*image/i,
+        /draw.*image/i,
+        /generate.*picture/i,
+        /create.*picture/i,
+        /image.*of/i,
+        /picture.*of/i
+      ];
+      
+      if (imageGenerationPatterns.some(pattern => pattern.test(options.prompt))) {
+        console.log('\n⚠️  WARNING: You seem to be trying to generate an image.');
+        console.log('');
+        console.log('The "cgmb aistudio" command does NOT generate images - it only analyzes text!');
+        console.log('');
+        console.log('✅ To generate images, use the correct command:');
+        console.log(`   cgmb generate-image "${options.prompt}"`);
+        console.log('');
+        console.log('Example:');
+        console.log('   cgmb generate-image "cute cat"  # This will generate an image');
+        console.log('');
+        console.log('The generate-image command includes:');
+        console.log('   • Automatic prompt sanitization (cute → friendly-looking)');
+        console.log('   • Safety prefixes to avoid content policy issues');
+        console.log('   • Proper image generation with Gemini 2.0 Flash');
+        console.log('');
+        console.log('Would you like to continue with text analysis anyway? (y/N)');
+        
+        const readline = await import('readline');
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        
+        const answer = await new Promise<string>((resolve) => {
+          rl.question('', (answer) => {
+            rl.close();
+            resolve(answer.toLowerCase());
+          });
+        });
+        
+        if (answer !== 'y' && answer !== 'yes') {
+          console.log('\n💡 Redirecting to image generation command...');
+          console.log(`   Run: cgmb generate-image "${options.prompt}"`);
+          process.exit(0);
+        }
       }
 
       await loadEnvironmentSmart({ verbose: false });

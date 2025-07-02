@@ -1166,6 +1166,24 @@ npm run mcp:test
 
 The AI Studio MCP server is automatically integrated when you run `cgmb serve`. It handles all AI Studio-related requests transparently, providing enhanced multimodal capabilities to Claude Code.
 
+## ⚠️ Important: Use the Correct Command for Image Generation
+
+### ✅ CORRECT - Use this for image generation:
+```bash
+cgmb generate-image "your prompt"  # This generates images with prompt sanitization
+```
+
+### ❌ WRONG - This does NOT generate images:
+```bash
+cgmb aistudio -p "Generate an image..."  # This only analyzes text, doesn't generate!
+```
+
+The `aistudio` command is for general multimodal processing and text analysis. For actual image generation, you MUST use the `generate-image` command, which includes:
+- Automatic prompt sanitization (cute → friendly-looking)
+- Proper safety prefixes
+- Correct model selection
+- File saving to output/images/
+
 ## 🎨 Image Generation Best Practices
 
 When generating images with CGMB, follow these guidelines for best results:
