@@ -1433,6 +1433,8 @@ program
   .option('-o, --output <path>', 'Output file path')
   .option('--safe-mode', 'Use extra-safe prompt formatting', true)
   .action(async (prompt, options) => {
+    let timeoutId: NodeJS.Timeout | undefined;
+    
     try {
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
@@ -1464,11 +1466,24 @@ program
       const aiStudioLayer = new LayerManager(defaultConfig).getAIStudioLayer();
       await aiStudioLayer.initialize();
       
-      const result = await aiStudioLayer.generateImage(safePrompt, {
-        style: options.style,
-        quality: 'high',
-        aspectRatio: '1:1'
-      });
+      // Execute with immediate response timeout mechanism
+      const result = await Promise.race([
+        aiStudioLayer.generateImage(safePrompt, {
+          style: options.style,
+          quality: 'high',
+          aspectRatio: '1:1'
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error('Image generation timeout after 3 minutes'));
+          }, 180000); // 3 minutes timeout
+        })
+      ]) as any;
+      
+      // Clear timeout immediately upon completion
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       
       if (result.success && result.outputPath) {
         if (options.output) {
@@ -1490,6 +1505,11 @@ program
         }
       }
     } catch (error) {
+      // Clear timeout on error
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      
       logger.error('Image generation failed', error as Error);
       console.error('❌ Failed to generate image:', (error as Error).message);
       console.log('\n💡 Troubleshooting tips:');
@@ -1508,6 +1528,8 @@ program
   .option('-o, --output <path>', 'Output audio file path')
   .option('--script', 'Generate script first then convert to audio')
   .action(async (text, options) => {
+    let timeoutId: NodeJS.Timeout | undefined;
+    
     try {
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
@@ -1524,16 +1546,25 @@ program
       const aiStudioLayer = new LayerManager(defaultConfig).getAIStudioLayer();
       await aiStudioLayer.initialize();
       
-      let result;
-      if (options.script) {
-        console.log('📝 Generating audio script first...');
-        result = await aiStudioLayer.generateAudioWithScript(text);
-      } else {
-        result = await aiStudioLayer.generateAudio(text, {
-          voice: options.voice,
-          format: 'wav',
-          quality: 'hd'
-        });
+      // Execute with immediate response timeout mechanism
+      const result = await Promise.race([
+        options.script ? 
+          aiStudioLayer.generateAudioWithScript(text) :
+          aiStudioLayer.generateAudio(text, {
+            voice: options.voice,
+            format: 'wav',
+            quality: 'hd'
+          }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error('Audio generation timeout after 2 minutes'));
+          }, 120000); // 2 minutes timeout
+        })
+      ]) as any;
+      
+      // Clear timeout immediately upon completion
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
       
       if (result.success && result.outputPath) {
@@ -1552,6 +1583,11 @@ program
         console.error('❌ Audio generation failed:', result.error || 'Unknown error');
       }
     } catch (error) {
+      // Clear timeout on error
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      
       logger.error('Audio generation failed', error as Error);
       console.error('❌ Failed to generate audio:', (error as Error).message);
       process.exit(1);
@@ -1565,6 +1601,8 @@ program
   .option('-t, --type <type>', 'Analysis type (summary, extract, compare)', 'summary')
   .option('-p, --prompt <prompt>', 'Custom analysis prompt')
   .action(async (files, options) => {
+    let timeoutId: NodeJS.Timeout | undefined;
+    
     try {
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
@@ -1582,14 +1620,27 @@ program
       const layerManager = new LayerManager(defaultConfig);
       const analysisPrompt = options.prompt || `Please ${options.type} these documents`;
       
-      const result = await layerManager.executeWithOptimalLayer({
-        prompt: analysisPrompt,
-        files: files.map((f: string) => ({ path: f, type: 'document' as const })),
-        options: {
-          analysisType: options.type,
-          depth: 'deep'
-        }
-      });
+      // Execute with immediate response timeout mechanism
+      const result = await Promise.race([
+        layerManager.executeWithOptimalLayer({
+          prompt: analysisPrompt,
+          files: files.map((f: string) => ({ path: f, type: 'document' as const })),
+          options: {
+            analysisType: options.type,
+            depth: 'deep'
+          }
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error('Document analysis timeout after 5 minutes'));
+          }, 300000); // 5 minutes timeout for document analysis
+        })
+      ]) as any;
+      
+      // Clear timeout immediately upon completion
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       
       if (result.success) {
         console.log('\n✅ Analysis complete!');
@@ -1606,6 +1657,11 @@ program
         console.error('❌ Analysis failed:', result.error || 'Unknown error');
       }
     } catch (error) {
+      // Clear timeout on error
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      
       logger.error('Document analysis failed', error as Error);
       console.error('❌ Failed to analyze documents:', (error as Error).message);
       process.exit(1);
@@ -1620,6 +1676,8 @@ program
   .option('-w, --workflow <type>', 'Workflow type (analysis, conversion, extraction)', 'analysis')
   .option('-o, --output <format>', 'Output format (text, json, markdown)', 'text')
   .action(async (files, options) => {
+    let timeoutId: NodeJS.Timeout | undefined;
+    
     try {
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
@@ -1648,15 +1706,28 @@ program
       
       console.log('📊 Detected file types:', fileRefs.map((f: any) => `${f.path} (${f.type})`).join(', '));
       
-      const result = await layerManager.executeWithOptimalLayer({
-        prompt: options.prompt,
-        files: fileRefs,
-        options: {
-          workflow: options.workflow,
-          outputFormat: options.output,
-          execution_mode: 'adaptive'
-        }
-      });
+      // Execute with immediate response timeout mechanism
+      const result = await Promise.race([
+        layerManager.executeWithOptimalLayer({
+          prompt: options.prompt,
+          files: fileRefs,
+          options: {
+            workflow: options.workflow,
+            outputFormat: options.output,
+            execution_mode: 'adaptive'
+          }
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error('Multimodal processing timeout after 5 minutes'));
+          }, 300000); // 5 minutes timeout for multimodal processing
+        })
+      ]) as any;
+      
+      // Clear timeout immediately upon completion
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       
       if (result.success) {
         console.log('\n✅ Processing complete!');
@@ -1680,6 +1751,11 @@ program
         console.error('❌ Multimodal processing failed:', result.error || 'Unknown error');
       }
     } catch (error) {
+      // Clear timeout on error
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      
       logger.error('Multimodal processing failed', error as Error);
       console.error('❌ Failed to process files:', (error as Error).message);
       console.log('\n💡 Tips:');

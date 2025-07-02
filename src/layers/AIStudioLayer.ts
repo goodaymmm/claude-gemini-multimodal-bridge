@@ -23,6 +23,7 @@ import {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
+import { WaveFile } from 'wavefile';
 
 // Language detection patterns for auto-translation
 const LANGUAGE_PATTERNS = {
@@ -495,7 +496,11 @@ export class AIStudioLayer implements LayerInterface {
    */
   private async translatePromptToEnglish(prompt: string, detectedLang: string): Promise<string> {
     if (!this.geminiLayer) {
-      throw new Error('GeminiCLILayer not available for translation. Please ensure proper initialization.');
+      logger.warn('GeminiCLILayer not available for translation - will use original prompt', {
+        hasGeminiLayer: !!this.geminiLayer,
+        originalPrompt: prompt
+      });
+      return prompt;
     }
 
     try {
@@ -504,11 +509,41 @@ export class AIStudioLayer implements LayerInterface {
       
       logger.info(`Translating ${languageName} prompt to English`, {
         originalLength: prompt.length,
-        detectedLanguage: detectedLang
+        detectedLanguage: detectedLang,
+        geminiLayerAvailable: !!this.geminiLayer
       });
 
-      const translatedResult = await this.geminiLayer.executeSimple(translationPrompt);
-      const translatedPrompt = translatedResult.trim();
+      // Verify geminiLayer has execute method
+      if (typeof this.geminiLayer.execute !== 'function') {
+        throw new Error(`GeminiCLILayer.execute is not a function. Available methods: ${Object.getOwnPropertyNames(this.geminiLayer).join(', ')}`);
+      }
+
+      const translationTask = {
+        type: 'text_processing',
+        prompt: translationPrompt,
+        useSearch: false
+      };
+      
+      logger.debug('Sending translation task to GeminiCLILayer', {
+        taskType: translationTask.type,
+        promptLength: translationTask.prompt.length,
+        useSearch: translationTask.useSearch
+      });
+      
+      const translationResult = await this.geminiLayer.execute(translationTask);
+      
+      logger.debug('Translation result received', {
+        success: translationResult?.success,
+        hasData: !!translationResult?.data,
+        dataType: typeof translationResult?.data,
+        dataLength: typeof translationResult?.data === 'string' ? translationResult.data.length : 0
+      });
+      
+      if (!translationResult || !translationResult.success || !translationResult.data) {
+        throw new Error(`Translation failed: ${!translationResult ? 'No result object' : !translationResult.success ? 'Execution failed' : 'No valid data received'}`);
+      }
+      
+      const translatedPrompt = String(translationResult.data).trim();
 
       logger.info('Translation completed', {
         original: prompt,
@@ -520,7 +555,9 @@ export class AIStudioLayer implements LayerInterface {
     } catch (error) {
       logger.warn('Translation failed, using original prompt', {
         error: (error as Error).message,
-        originalPrompt: prompt
+        errorType: (error as Error).constructor.name,
+        originalPrompt: prompt,
+        geminiLayerType: this.geminiLayer ? this.geminiLayer.constructor.name : 'undefined'
       });
       // Fallback to original prompt if translation fails
       return prompt;
@@ -744,9 +781,70 @@ export class AIStudioLayer implements LayerInterface {
           const relativePath = path.join('output', 'audio', filename);
           const absolutePath = path.join(outputDir, filename);
           
-          const buffer = Buffer.from(audioData, 'base64');
-          await fsPromises.writeFile(absolutePath, buffer);
-          const fileSize = buffer.length;
+          // Create proper WAV file with headers using wavefile library
+          const rawAudioBuffer = Buffer.from(audioData, 'base64');
+          
+          logger.debug('Processing raw audio data for WAV conversion', {
+            rawDataSize: rawAudioBuffer.length,
+            first16Bytes: Array.from(rawAudioBuffer.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')
+          });
+          
+          let wavBuffer: Buffer;
+          
+          try {
+            // Create WAV file with proper headers
+            // Gemini TTS outputs LINEAR16 PCM at 24kHz, mono audio
+            const wav = new WaveFile();
+            
+            // Use the correct method for LINEAR16 PCM data
+            // fromScratch expects: channels, sampleRate, bitDepthString, samples
+            wav.fromScratch(1, 24000, '16', rawAudioBuffer);
+            
+            // Get complete WAV file buffer with headers
+            const wavData = wav.toBuffer();
+            wavBuffer = Buffer.from(wavData);
+            
+            // Additional validation - check WAV header
+            const riffHeader = wavBuffer.toString('ascii', 0, 4);
+            const waveHeader = wavBuffer.toString('ascii', 8, 12);
+            
+            if (riffHeader !== 'RIFF' || waveHeader !== 'WAVE') {
+              throw new Error(`Invalid WAV header: RIFF=${riffHeader}, WAVE=${waveHeader}`);
+            }
+            
+            logger.info('Generated valid WAV file with proper headers', {
+              riffHeader,
+              waveHeader,
+              originalDataSize: rawAudioBuffer.length,
+              finalWavSize: wavBuffer.length,
+              sampleRate: 24000,
+              bitDepth: 16,
+              channels: 1,
+              estimatedDuration: `${(rawAudioBuffer.length / (24000 * 2)).toFixed(2)}s`
+            });
+            
+          } catch (wavError) {
+            logger.error('WAV file creation with WaveFile library failed, using manual header', {
+              error: (wavError as Error).message,
+              rawDataSize: rawAudioBuffer.length
+            });
+            
+            // Fallback: save raw data with a basic WAV header manually
+            wavBuffer = this.createManualWavHeader(rawAudioBuffer, 24000, 16, 1);
+            
+            logger.warn('Used manual WAV header as fallback', {
+              finalWavSize: wavBuffer.length
+            });
+          }
+          
+          await fsPromises.writeFile(absolutePath, wavBuffer);
+          const fileSize = wavBuffer.length;
+          
+          logger.info('WAV file written to disk', {
+            outputPath: absolutePath,
+            size: fileSize,
+            originalDataSize: rawAudioBuffer.length
+          });
           const outputPath = relativePath;
 
           const duration = Date.now() - startTime;
@@ -1268,10 +1366,6 @@ export class AIStudioLayer implements LayerInterface {
       let output = '';
       let errorOutput = '';
 
-      const timeoutId = setTimeout(() => {
-        reject(new Error(`AI Studio MCP command timeout after ${timeout}ms`));
-      }, timeout);
-
       // Send MCP request
       const mcpRequest = {
         jsonrpc: '2.0',
@@ -1283,14 +1377,33 @@ export class AIStudioLayer implements LayerInterface {
         }
       };
 
+      // Create cleanup function to ensure proper timeout clearing
+      let isResolved = false;
+      let timeoutId: NodeJS.Timeout;
+      
+      const cleanup = () => {
+        if (!isResolved) {
+          isResolved = true;
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
+          try {
+            process.stdout.removeListener('data', dataHandler);
+            process.stderr.removeListener('data', errorHandler);
+          } catch (error) {
+            // Ignore cleanup errors
+          }
+        }
+      };
+      
       try {
         process.stdin.write(JSON.stringify(mcpRequest) + '\n');
       } catch (error) {
-        clearTimeout(timeoutId);
+        cleanup();
         reject(new Error(`Failed to send MCP request: ${(error as Error).message}`));
         return;
       }
-
+      
       const dataHandler = (data: Buffer) => {
         output += data.toString();
         
@@ -1301,9 +1414,7 @@ export class AIStudioLayer implements LayerInterface {
             try {
               const mcpResponse = JSON.parse(line);
               if (mcpResponse.result || mcpResponse.error) {
-                clearTimeout(timeoutId);
-                process.stdout.removeListener('data', dataHandler);
-                process.stderr.removeListener('data', errorHandler);
+                cleanup();
                 
                 if (mcpResponse.error) {
                   reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
@@ -1323,6 +1434,12 @@ export class AIStudioLayer implements LayerInterface {
       const errorHandler = (data: Buffer) => {
         errorOutput += data.toString();
       };
+      
+      // Set up timeout with immediate cleanup
+      timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation completed but response delayed`));
+      }, timeout);
 
       process.stdout.on('data', dataHandler);
       process.stderr.on('data', errorHandler);
@@ -1725,6 +1842,54 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Create a WAV file with proper headers manually (fallback method)
+   */
+  private createManualWavHeader(pcmData: Buffer, sampleRate: number, bitDepth: number, channels: number): Buffer {
+    const byteRate = sampleRate * channels * (bitDepth / 8);
+    const blockAlign = channels * (bitDepth / 8);
+    const dataSize = pcmData.length;
+    const fileSize = 36 + dataSize;
+    
+    // Create WAV header buffer
+    const header = Buffer.alloc(44);
+    
+    // RIFF chunk descriptor
+    header.write('RIFF', 0);
+    header.writeUInt32LE(fileSize, 4);
+    header.write('WAVE', 8);
+    
+    // fmt sub-chunk
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16); // PCM format chunk size
+    header.writeUInt16LE(1, 20);  // PCM format
+    header.writeUInt16LE(channels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(bitDepth, 34);
+    
+    // data sub-chunk
+    header.write('data', 36);
+    header.writeUInt32LE(dataSize, 40);
+    
+    // Combine header and PCM data
+    const wavBuffer = Buffer.concat([header, pcmData]);
+    
+    logger.debug('Manual WAV header created', {
+      headerSize: header.length,
+      dataSize: pcmData.length,
+      totalSize: wavBuffer.length,
+      sampleRate,
+      bitDepth,
+      channels,
+      byteRate,
+      blockAlign
+    });
+    
+    return wavBuffer;
+  }
+
+  /**
    * Detection methods for generation requests
    */
   private isImageGenerationRequest(prompt: string): boolean {
@@ -1836,16 +2001,64 @@ export class AIStudioLayer implements LayerInterface {
     const filename = `generated-audio-${timestamp}.${format}`;
     const outputPath = join(outputDir, filename);
     
-    const buffer = Buffer.from(base64Data, 'base64');
+    // Create proper WAV file with headers if format is wav
+    let finalBuffer: Buffer;
+    if (format === 'wav') {
+      const rawAudioBuffer = Buffer.from(base64Data, 'base64');
+      
+      logger.debug('Processing audio data for saveGeneratedAudio', {
+        rawDataSize: rawAudioBuffer.length,
+        format
+      });
+      
+      try {
+        // Create WAV file with proper headers using WaveFile library
+        const wav = new WaveFile();
+        wav.fromScratch(1, 24000, '16', rawAudioBuffer);
+        const wavData = wav.toBuffer();
+        finalBuffer = Buffer.from(wavData);
+        
+        // Validate WAV header
+        const riffHeader = finalBuffer.toString('ascii', 0, 4);
+        const waveHeader = finalBuffer.toString('ascii', 8, 12);
+        
+        if (riffHeader !== 'RIFF' || waveHeader !== 'WAVE') {
+          throw new Error(`Invalid WAV header: RIFF=${riffHeader}, WAVE=${waveHeader}`);
+        }
+        
+        logger.info('Generated WAV file with proper headers', {
+          originalDataSize: rawAudioBuffer.length,
+          finalWavSize: finalBuffer.length,
+          sampleRate: 24000,
+          bitDepth: 16,
+          channels: 1
+        });
+        
+      } catch (wavError) {
+        logger.error('WAV creation failed in saveGeneratedAudio, using manual header', {
+          error: (wavError as Error).message
+        });
+        
+        // Fallback to manual WAV header creation
+        finalBuffer = this.createManualWavHeader(rawAudioBuffer, 24000, 16, 1);
+        
+        logger.warn('Used manual WAV header fallback in saveGeneratedAudio', {
+          finalWavSize: finalBuffer.length
+        });
+      }
+    } else {
+      finalBuffer = Buffer.from(base64Data, 'base64');
+    }
+    
     await new Promise<void>((resolve, reject) => {
       const stream = createWriteStream(outputPath);
-      stream.write(buffer);
+      stream.write(finalBuffer);
       stream.end();
       stream.on('finish', resolve);
       stream.on('error', reject);
     });
     
-    logger.info('Saved generated audio', { outputPath, size: buffer.length });
+    logger.info('Saved generated audio', { outputPath, size: finalBuffer.length });
     return outputPath;
   }
 
