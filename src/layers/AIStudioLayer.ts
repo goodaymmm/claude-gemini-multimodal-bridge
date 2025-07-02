@@ -16,7 +16,8 @@ import {
   MediaGenResult,
   MultimodalFile,
   MultimodalResult,
-  VideoGenOptions
+  VideoGenOptions,
+  AI_MODELS
 } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -428,7 +429,7 @@ export class AIStudioLayer implements LayerInterface {
 
         logger.info('Generating image with Gemini 2.0 Flash', {
           promptLength: prompt.length,
-          model: 'gemini-2.0-flash-exp-0111',
+          model: AI_MODELS.IMAGE_GENERATION,
           quality: options.quality || 'standard'
         });
 
@@ -460,7 +461,7 @@ export class AIStudioLayer implements LayerInterface {
           prompt: safePrompt,
           numberOfImages: (options as any).count || 1,
           aspectRatio: this.getAspectRatio(options),
-          model: 'gemini-2.0-flash-exp-0111',
+          model: AI_MODELS.IMAGE_GENERATION,
           personGeneration: 'ALLOW'
         };
 
@@ -498,7 +499,7 @@ export class AIStudioLayer implements LayerInterface {
               width: options.width || 1024,
               height: options.height || 1024,
             },
-            model: 'gemini-2.0-flash-exp-0111',
+            model: AI_MODELS.IMAGE_GENERATION,
             settings: options,
             cost: this.calculateGenerationCost('image', options),
             responseText: result.metadata?.responseText
@@ -529,10 +530,11 @@ export class AIStudioLayer implements LayerInterface {
   async generateAudio(text: string, options: Partial<AudioGenOptions> = {}): Promise<MediaGenResult> {
     return retry(
       async () => {
-        logger.info('Generating audio with gemini-2.5-flash-preview-tts', {
+        logger.info('Generating audio with Gemini TTS', {
           textLength: text.length,
           voice: options.voice || 'Kore',
-          format: 'wav'
+          format: 'wav',
+          model: AI_MODELS.AUDIO_GENERATION
         });
 
         const startTime = Date.now();
@@ -540,7 +542,7 @@ export class AIStudioLayer implements LayerInterface {
         // Use the official TTS model and configuration
         const audioParams = {
           text,
-          model: 'gemini-2.5-flash-preview-tts',
+          model: AI_MODELS.AUDIO_GENERATION,
           voiceName: options.voice || 'Kore',
           // Simple single speaker configuration
           voiceConfig: {
@@ -1820,26 +1822,26 @@ export class AIStudioLayer implements LayerInterface {
   private selectOptimalModel(taskType: string): string {
     // Image-related tasks use the image generation model
     if (taskType.includes('image') || taskType.includes('visual') || taskType.includes('picture') || taskType.includes('photo')) {
-      return 'gemini-2.0-flash-preview-image-generation';
+      return AI_MODELS.IMAGE_GENERATION;
     }
     
     // Document processing uses gemini-2.5-flash for better performance
     if (taskType.includes('document') || taskType.includes('pdf') || taskType.includes('text') || taskType.includes('analyze')) {
-      return 'gemini-2.5-flash';
+      return AI_MODELS.DOCUMENT_PROCESSING;
     }
     
     // Audio generation uses TTS model
     if (taskType.includes('audio') || taskType.includes('speech') || taskType.includes('tts') || taskType.includes('voice')) {
-      return 'gemini-2.5-flash-preview-tts';
+      return AI_MODELS.AUDIO_GENERATION;
     }
     
     // Script generation for audio uses regular flash model
     if (taskType.includes('script') || taskType.includes('transcript')) {
-      return 'gemini-2.0-flash';
+      return AI_MODELS.GEMINI_FLASH;
     }
     
     // Default for other multimodal tasks
-    return 'gemini-2.0-flash-exp';
+    return AI_MODELS.MULTIMODAL_DEFAULT;
   }
 
   /**
@@ -1856,7 +1858,7 @@ export class AIStudioLayer implements LayerInterface {
     };
     
     // Add responseModalities for image generation
-    if (model === 'gemini-2.0-flash-preview-image-generation') {
+    if (model === AI_MODELS.IMAGE_GENERATION) {
       config.generationConfig.responseMimeType = 'application/json';
       // Note: responseModalities would be set here if supported by the SDK
     }

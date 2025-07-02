@@ -704,3 +704,30 @@ export const ResourceEstimateSchema = z.object({
   required_capabilities: z.array(z.enum(['claude', 'gemini', 'aistudio'])),
 });
 export type ResourceEstimate = z.infer<typeof ResourceEstimateSchema>;
+
+// ===================================
+// AI Model Constants
+// ===================================
+
+// Model constants for consistency across the application
+export const AI_MODELS = {
+  // Image generation model - Gemini 2.0 Flash with image generation capabilities
+  IMAGE_GENERATION: 'gemini-2.0-flash-preview-image-generation',
+  
+  // Audio generation model - Gemini 2.5 Flash TTS
+  AUDIO_GENERATION: 'gemini-2.5-flash-preview-tts',
+  
+  // General purpose models
+  GEMINI_FLASH: 'gemini-2.0-flash',
+  GEMINI_FLASH_EXP: 'gemini-2.0-flash-exp',
+  GEMINI_FLASH_2_5: 'gemini-2.5-flash',
+  
+  // Document processing model with 1M token context
+  DOCUMENT_PROCESSING: 'gemini-2.5-flash',
+  
+  // Default multimodal model
+  MULTIMODAL_DEFAULT: 'gemini-2.0-flash-exp'
+} as const;
+
+// Type for AI model values
+export type AIModelName = typeof AI_MODELS[keyof typeof AI_MODELS];

@@ -21,6 +21,8 @@ import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
 import { promises as fsPromises } from 'fs';
+// Import AI_MODELS from the build output location
+import { AI_MODELS } from '../core/types.js';
 
 // Input validation schemas
 const GenerateImageSchema = z.object({
@@ -28,7 +30,7 @@ const GenerateImageSchema = z.object({
   numberOfImages: z.number().min(1).max(4).optional().default(1),
   aspectRatio: z.enum(['1:1', '3:4', '4:3', '9:16', '16:9']).optional().default('1:1'),
   personGeneration: z.enum(['ALLOW', 'BLOCK']).optional().default('ALLOW'),
-  model: z.string().optional().default('gemini-2.0-flash-exp-0111')
+  model: z.string().optional()
 });
 
 const AnalyzeImageSchema = z.object({
@@ -401,7 +403,7 @@ class AIStudioMCPServer {
       
       // Use the official image generation model with responseModalities
       const model = this.genAI.getGenerativeModel({ 
-        model: 'gemini-2.0-flash-preview-image-generation'
+        model: params.model || AI_MODELS.IMAGE_GENERATION
       });
 
       // Generate image with official API approach
@@ -493,7 +495,7 @@ To retrieve this file, use:
           createdAt: new Date().toISOString()
         } : null,
         metadata: {
-          model: 'gemini-2.0-flash-preview-image-generation',
+          model: params.model || AI_MODELS.IMAGE_GENERATION,
           originalPrompt: params.prompt,
           safePrompt: safePrompt,
           numberOfImages: params.numberOfImages,
