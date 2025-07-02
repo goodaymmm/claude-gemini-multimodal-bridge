@@ -76,7 +76,7 @@ export class ErrorHandler {
   }
 
   /**
-   * Wrap async operations with comprehensive error handling
+   * Wrap async operations with comprehensive error handling and proper timeout management
    */
   public static async safeExecute<T>(
     operation: () => Promise<T>,
@@ -94,10 +94,7 @@ export class ErrorHandler {
       let result: T;
       
       if (context.timeout) {
-        result = await Promise.race([
-          operation(),
-          this.createTimeoutPromise<T>(context.timeout, context.operationName),
-        ]) as T;
+        result = await this.executeWithTimeout(operation, context.timeout, context.operationName);
       } else {
         result = await operation();
       }
@@ -257,18 +254,48 @@ export class ErrorHandler {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  private static async createTimeoutPromise<T>(
+  /**
+   * Execute operation with proper timeout management using AbortController
+   */
+  private static async executeWithTimeout<T>(
+    operation: () => Promise<T>,
     timeout: number,
     operationName: string
   ): Promise<T> {
-    return new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(new CGMBError(
-          `Operation '${operationName}' timed out after ${timeout}ms`,
-          'TIMEOUT_ERROR'
-        ));
-      }, timeout);
-    });
+    const abortController = new AbortController();
+    let timeoutId: NodeJS.Timeout | undefined;
+
+    try {
+      // Create timeout promise that can be properly cancelled
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          abortController.abort();
+          reject(new CGMBError(
+            `Operation '${operationName}' timed out after ${timeout}ms`,
+            'TIMEOUT_ERROR'
+          ));
+        }, timeout);
+      });
+
+      // Race between operation and timeout
+      const result = await Promise.race([
+        operation(),
+        timeoutPromise
+      ]);
+
+      // Clear timeout if operation completed successfully
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      return result;
+    } catch (error) {
+      // Ensure timeout is always cleared
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      throw error;
+    }
   }
 
   private static shouldNotRetry(error: Error): boolean {

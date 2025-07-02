@@ -15,6 +15,7 @@ import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';
+const pdfParse = require('pdf-parse');
 
 /**
  * DocumentAnalysis tool provides advanced document analysis capabilities
@@ -184,6 +185,86 @@ export class DocumentAnalysis {
   }
 
   /**
+   * Extract text from PDF using pdf-parse for better analysis
+   */
+  private async extractPDFText(pdfPath: string): Promise<string> {
+    try {
+      logger.info('Extracting text from PDF', { pdfPath });
+      
+      const buffer = await fs.readFile(pdfPath);
+      const data = await pdfParse(buffer, {
+        // PDF parsing options for better text extraction
+        max: 0, // Process all pages
+        pagerender: (pageData: any) => {
+          // Custom page rendering to preserve structure
+          let renderOptions = {
+            normalizeWhitespace: false,
+            disableCombineTextItems: false
+          };
+          return pageData.getTextContent(renderOptions)
+            .then((textContent: any) => {
+              let lastY, text = '';
+              for (let item of textContent.items) {
+                if (lastY == item.transform[5] || !lastY) {
+                  text += item.str;
+                } else {
+                  text += '\n' + item.str;
+                }
+                lastY = item.transform[5];
+              }
+              return text;
+            });
+        }
+      });
+
+      const extractedText = data.text.trim();
+      
+      logger.info('PDF text extraction completed', {
+        pdfPath,
+        textLength: extractedText.length,
+        pageCount: data.numpages,
+        hasText: extractedText.length > 0
+      });
+
+      if (extractedText.length === 0) {
+        logger.warn('No text extracted from PDF, may be image-based or encrypted', { pdfPath });
+        return `[PDF Document: ${path.basename(pdfPath)}]\nNo text content could be extracted. This may be an image-based PDF or contain special formatting that requires OCR processing.`;
+      }
+
+      // Add metadata header
+      const metadata = `[PDF Document: ${path.basename(pdfPath)} - ${data.numpages} pages]\n\n`;
+      return metadata + extractedText;
+      
+    } catch (error) {
+      logger.error('Failed to extract PDF text', {
+        pdfPath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      
+      // Return fallback indication
+      return `[PDF Document: ${path.basename(pdfPath)}]\nText extraction failed: ${error instanceof Error ? error.message : String(error)}\nNote: This PDF may require specialized OCR processing or multimodal AI analysis.`;
+    }
+  }
+
+  /**
+   * Preprocess document for better analysis (handles PDF text extraction)
+   */
+  private async preprocessDocument(documentPath: string): Promise<{ path: string; content?: string }> {
+    const ext = path.extname(documentPath).toLowerCase();
+    
+    if (ext === '.pdf') {
+      const extractedText = await this.extractPDFText(documentPath);
+      return {
+        path: documentPath,
+        content: extractedText
+      };
+    }
+    
+    // For other document types, return as-is for multimodal processing
+    return { path: documentPath };
+  }
+
+  /**
    * Validate analysis arguments
    */
   private async validateAnalysisArgs(args: DocumentAnalysisArgs): Promise<void> {
@@ -291,11 +372,16 @@ export class DocumentAnalysis {
           const stats = await fs.stat(doc.path);
           const fileType = this.determineDocumentType(doc.path);
           
+          // Preprocess document (handles PDF text extraction)
+          const preprocessed = await this.preprocessDocument(doc.path);
+          
           const processedDoc: FileReference = {
             ...doc,
             size: stats.size,
             type: 'document' as any,
             encoding: doc.encoding || 'utf-8',
+            // Add extracted content for PDFs
+            content: preprocessed.content,
           };
 
           processedDocs.push(processedDoc);
@@ -304,6 +390,8 @@ export class DocumentAnalysis {
             path: processedDoc.path,
             type: processedDoc.type,
             size: processedDoc.size,
+            hasExtractedContent: !!preprocessed.content,
+            contentLength: preprocessed.content?.length || 0
           });
         }
 

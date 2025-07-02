@@ -24,6 +24,33 @@ import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 
+// Language detection patterns for auto-translation
+const LANGUAGE_PATTERNS = {
+  ja: /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/,    // Hiragana, Katakana, CJK Unified Ideographs
+  ko: /[\uAC00-\uD7AF]/,                              // Hangul Syllables
+  zh: /[\u4E00-\u9FFF]/,                              // CJK Unified Ideographs Extended
+  fr: /[àâäéèêëïîôöùûüÿç]/,                          // French special characters
+  de: /[äöüßÄÖÜ]/,                                   // German special characters
+  es: /[ñáéíóúü¿¡]/,                                 // Spanish special characters
+  ru: /[\u0400-\u04FF]/,                             // Cyrillic
+  ar: /[\u0600-\u06FF]/,                             // Arabic
+  hi: /[\u0900-\u097F]/,                             // Devanagari
+  th: /[\u0E00-\u0E7F]/                              // Thai
+};
+
+const SUPPORTED_LANGUAGES = {
+  ja: 'Japanese',
+  ko: 'Korean', 
+  zh: 'Chinese',
+  fr: 'French',
+  de: 'German',
+  es: 'Spanish',
+  ru: 'Russian',
+  ar: 'Arabic',
+  hi: 'Hindi',
+  th: 'Thai'
+};
+
 // Problematic words to safe alternatives mapping
 const promptSanitizer: Record<string, string> = {
   // Emotional modifiers to specific descriptions
@@ -38,6 +65,22 @@ const promptSanitizer: Record<string, string> = {
   'beautiful': 'visually pleasing',
   'pretty': 'well-formed'
 };
+
+// Function to detect language of prompt text
+function detectLanguage(text: string): string | null {
+  // Remove spaces and check for patterns
+  const cleanText = text.trim();
+  
+  // Check each language pattern
+  for (const [langCode, pattern] of Object.entries(LANGUAGE_PATTERNS)) {
+    if (pattern.test(cleanText)) {
+      return langCode;
+    }
+  }
+  
+  // Default to English if no pattern matches
+  return 'en';
+}
 
 // Function to sanitize prompts by replacing problematic words
 function sanitizePrompt(prompt: string): string {
@@ -56,6 +99,7 @@ function sanitizePrompt(prompt: string): string {
 export class AIStudioLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private genAI: GoogleGenAI | null = null;
+  private geminiLayer?: any; // Reference to GeminiCLILayer for translation
   private mcpServerProcess?: any;
   private persistentMCPProcess?: any; // Persistent MCP process for better performance
   private mcpProcessStartTime = 0; // Track when MCP process was started
@@ -78,8 +122,9 @@ export class AIStudioLayer implements LayerInterface {
     code: ['.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.cs', '.rb', '.go', '.rs']
   };
 
-  constructor() {
+  constructor(geminiLayer?: any) {
     this.authVerifier = new AuthVerifier();
+    this.geminiLayer = geminiLayer;
     
     // Initialize Google AI Studio API client
     const apiKey = process.env.AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
@@ -446,20 +491,48 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Translate prompt to English using GeminiCLILayer (for image generation only)
+   */
+  private async translatePromptToEnglish(prompt: string, detectedLang: string): Promise<string> {
+    if (!this.geminiLayer) {
+      throw new Error('GeminiCLILayer not available for translation. Please ensure proper initialization.');
+    }
+
+    try {
+      const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
+      const translationPrompt = `Translate this ${languageName} text to English for image generation purposes. Keep it descriptive and suitable for image generation. Only return the English translation: "${prompt}"`;
+      
+      logger.info(`Translating ${languageName} prompt to English`, {
+        originalLength: prompt.length,
+        detectedLanguage: detectedLang
+      });
+
+      const translatedResult = await this.geminiLayer.executeSimple(translationPrompt);
+      const translatedPrompt = translatedResult.trim();
+
+      logger.info('Translation completed', {
+        original: prompt,
+        translated: translatedPrompt,
+        originalLanguage: languageName
+      });
+
+      return translatedPrompt;
+    } catch (error) {
+      logger.warn('Translation failed, using original prompt', {
+        error: (error as Error).message,
+        originalPrompt: prompt
+      });
+      // Fallback to original prompt if translation fails
+      return prompt;
+    }
+  }
+
+  /**
    * Generate image using AI Studio with Gemini 2.0 Flash for cost efficiency
    */
   async generateImage(prompt: string, options: Partial<ImageGenOptions> = {}): Promise<MediaGenResult> {
     return retry(
       async () => {
-        // Validate English prompt
-        if (!this.isEnglishPrompt(prompt)) {
-          throw new Error(
-            'Image generation requires English prompts. ' +
-            'Please translate your prompt to English before calling this command. ' +
-            'Example: "beautiful sunset" instead of "美しい夕日"'
-          );
-        }
-
         logger.info('Generating image with Gemini 2.0 Flash', {
           promptLength: prompt.length,
           model: AI_MODELS.IMAGE_GENERATION,
@@ -467,13 +540,32 @@ export class AIStudioLayer implements LayerInterface {
         });
 
         const startTime = Date.now();
+        let processedPrompt = prompt;
         
-        // First sanitize the prompt to replace problematic words
-        let sanitizedPrompt = sanitizePrompt(prompt);
+        // Auto-detect language and translate if needed
+        const detectedLang = detectLanguage(prompt);
+        if (detectedLang && detectedLang !== 'en') {
+          const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
+          logger.info(`Non-English prompt detected (${languageName}), translating to English...`, {
+            originalPrompt: prompt,
+            detectedLanguage: detectedLang
+          });
+
+          processedPrompt = await this.translatePromptToEnglish(prompt, detectedLang);
+          
+          logger.info('Prompt translation completed', {
+            originalPrompt: prompt,
+            translatedPrompt: processedPrompt,
+            language: `${languageName} → English`
+          });
+        }
+        
+        // Sanitize the prompt to replace problematic words
+        let sanitizedPrompt = sanitizePrompt(processedPrompt);
         logger.debug('Prompt sanitization', { 
-          original: prompt, 
+          original: processedPrompt, 
           sanitized: sanitizedPrompt,
-          changed: prompt !== sanitizedPrompt
+          changed: processedPrompt !== sanitizedPrompt
         });
         
         // Add safety prefix to prompt if needed
@@ -489,13 +581,16 @@ export class AIStudioLayer implements LayerInterface {
         ];
         
         const hasPrefix = safetyPrefixes.some(prefix => 
-          prompt.toLowerCase().startsWith(prefix)
+          sanitizedPrompt.toLowerCase().startsWith(prefix)
         );
         
         if (!hasPrefix) {
           const prefix = safetyPrefixes[Math.floor(Math.random() * safetyPrefixes.length)];
-          safePrompt = `${prefix} ${prompt}`;
-          logger.info('Added safety prefix to prompt', { original: prompt, safe: safePrompt });
+          safePrompt = `${prefix} ${sanitizedPrompt}`;
+          logger.info('Added safety prefix to prompt', { 
+            original: sanitizedPrompt, 
+            safe: safePrompt 
+          });
         }
         
         // Direct Google AI Studio image generation API call
@@ -565,7 +660,18 @@ export class AIStudioLayer implements LayerInterface {
             model: AI_MODELS.IMAGE_GENERATION,
             settings: options,
             cost: this.calculateGenerationCost('image', options),
-            responseText: textContent
+            responseText: textContent,
+            translation: detectedLang !== 'en' ? {
+              detectedLanguage: detectedLang,
+              languageName: SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang,
+              originalPrompt: prompt,
+              translatedPrompt: processedPrompt,
+              wasTranslated: true
+            } : {
+              detectedLanguage: 'en',
+              languageName: 'English',
+              wasTranslated: false
+            }
           },
           media: {
             type: 'image',
@@ -951,21 +1057,6 @@ export class AIStudioLayer implements LayerInterface {
     }
     
     return baseTime;
-  }
-
-  /**
-   * Check if prompt is in English
-   */
-  private isEnglishPrompt(prompt: string): boolean {
-    // Simple check for non-ASCII characters indicating non-English text
-    const nonEnglishPattern = /[^\x00-\x7F]/;
-    
-    // If contains significant non-ASCII characters, likely not English
-    const nonAsciiCount = (prompt.match(nonEnglishPattern) || []).length;
-    const asciiRatio = (prompt.length - nonAsciiCount) / prompt.length;
-    
-    // If more than 80% ASCII characters, consider it English
-    return asciiRatio > 0.8;
   }
 
   /**

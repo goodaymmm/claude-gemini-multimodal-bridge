@@ -100,7 +100,8 @@ export class LayerManager {
   public getAIStudioLayer(): AIStudioLayer {
     if (!this.aiStudioLayer) {
       logger.info('Lazy initializing AI Studio layer');
-      this.aiStudioLayer = new AIStudioLayer();
+      // Pass GeminiCLILayer reference for translation functionality
+      this.aiStudioLayer = new AIStudioLayer(this.getGeminiLayer());
       if (!this.layerInitialized.aistudio) {
         // Initialize only when first accessed
         this.aiStudioLayer.initialize().then(() => {
