@@ -24,6 +24,8 @@ export default [
       '@typescript-eslint/no-non-null-assertion': 'warn',
       '@typescript-eslint/prefer-nullish-coalescing': 'error',
       '@typescript-eslint/prefer-optional-chain': 'error',
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/await-thenable': 'error',
       
       // General rules
       'no-console': 'off', // Allow console for CLI tool
@@ -56,7 +58,14 @@ export default [
       'node_modules/**',
       'dist/**',
       'coverage/**',
-      '*.js'
+      'output/**',
+      'logs/**',
+      'temp/**',
+      'tmp/**',
+      '*.js',
+      '.cgmb-cache/**',
+      'test-files/**',
+      'examples/output/**'
     ]
   }
 ];

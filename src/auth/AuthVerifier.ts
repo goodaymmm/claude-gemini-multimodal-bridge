@@ -448,16 +448,20 @@ export class AuthVerifier {
    */
   private async testGeminiApiKey(apiKey: string): Promise<void> {
     // Import Google AI library dynamically to avoid loading if not needed
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const { GoogleGenAI } = await import('@google/genai');
     
     try {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+      const genAI = new GoogleGenAI({ apiKey });
       
       // Simple test prompt to validate API key and check quota
-      const result = await model.generateContent('Test');
+      const result = await genAI.models.generateContent({
+        model: 'gemini-pro',
+        contents: [{
+          parts: [{ text: 'Test' }]
+        }]
+      });
       
-      if (!result.response) {
+      if (!result.candidates || result.candidates.length === 0) {
         throw new Error('API key test failed - no response');
       }
       

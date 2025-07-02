@@ -24,17 +24,22 @@ This file lists all the created files for the CGMB project.
 - 🔢 **Model Constants**: Centralized AI model names for consistency
 - 🔤 **Prompt Sanitization**: Automatic conversion of problematic words for better content policy compliance
 - 📖 **Improved Documentation**: Better Claude Code integration guidance and image generation best practices
+- 📦 **genai Migration Complete**: Migrated from @google/generative-ai to @google/genai v1.8.0
+- 🚫 **package-lock.json Excluded**: Removed from repository to prevent merge conflicts
+- 📋 **.npmignore Added**: Proper NPM package exclusion configuration
+- 🔧 **ESLint Enhanced**: Updated rules and ignore patterns for output directories
 
 ## Project Root Files
-- package.json              # Node.js project configuration and dependencies
+- package.json              # Node.js project configuration and dependencies (genai v1.8.0)
 - tsconfig.json             # TypeScript compiler configuration  
 - .env.example              # Environment variables template
-- .gitignore                # Git ignore patterns
+- .gitignore                # Git ignore patterns (includes output/, package-lock.json, .npmignore)
+- .npmignore                # NPM package exclusion configuration
 - README.md                 # Project documentation and usage guide
 - CLAUDE.md                 # Claude Code usage guidelines and patterns
 - PROJECT_FILES.md          # This file - project structure documentation
 - CHANGELOG.md              # Version history and release notes
-- eslint.config.js          # ESLint configuration for code quality
+- eslint.config.js          # ESLint configuration for code quality (enhanced rules)
 
 ## Documentation (/docs)
 - docs/ENHANCED_CLI_GUIDE.md  # Comprehensive CLI command reference
@@ -58,7 +63,7 @@ This file lists all the created files for the CGMB project.
 - src/mcp-servers/ai-studio-mcp-server.ts  # Custom AI Studio MCP server with file retrieval tools and prompt sanitization
 
 ### Authentication System (/src/auth)
-- src/auth/AuthVerifier.ts      # Multi-service authentication verification
+- src/auth/AuthVerifier.ts      # Multi-service authentication verification (genai migrated)
 - src/auth/OAuthManager.ts      # OAuth flow management for Gemini
 - src/auth/InteractiveSetup.ts  # User-friendly authentication wizard
 - src/auth/AuthStateManager.ts  # Persistent authentication state with TTL
@@ -141,4 +146,11 @@ This file lists all the created files for the CGMB project.
 - ESLint rules (eslint.config.js)
 - NPM package config (package.json)
 
-Last updated: 2025-01-02
+## Package Management Updates
+- Migrated from @google/generative-ai to @google/genai v1.8.0
+- Removed package dependency conflicts
+- Added .npmignore for clean NPM package distribution
+- Excluded package-lock.json from repository to prevent merge conflicts
+- Ready for NPM publication with optimized package size
+
+Last updated: 2025-07-02 | genai migration complete | NPM-ready

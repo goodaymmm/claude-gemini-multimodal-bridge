@@ -2,7 +2,7 @@
 
 ## 🚀 Overview
 
-This guide covers all CLI commands available in Claude-Gemini Multimodal Bridge v1.1.0, including the latest enhancements for file generation and retrieval.
+This guide covers all CLI commands available in Claude-Gemini Multimodal Bridge v1.1.0, including genai package migration, file generation and retrieval, and NPM package-ready features.
 
 ## 📋 Quick Reference
 
@@ -419,4 +419,25 @@ done
 
 ---
 
-Last updated: 2025-01-02 | Version: 1.1.0
+## 📦 Package Information
+
+**Current Status**: Ready for NPM publication
+- ✅ genai v1.8.0 migration complete
+- ✅ package-lock.json excluded from repository
+- ✅ .npmignore configured for clean package distribution
+- ✅ All dependencies optimized and conflicts resolved
+
+**Development Setup**:
+```bash
+git clone <repository>
+cd claude-gemini-multimodal-bridge
+npm install  # Generates package-lock.json locally
+npm run build
+npm run dev
+```
+
+**Note**: package-lock.json is excluded from repository to prevent merge conflicts. Each environment generates its own lock file during npm install.
+
+---
+
+Last updated: 2025-07-02 | Version: 1.1.0 | genai migration complete

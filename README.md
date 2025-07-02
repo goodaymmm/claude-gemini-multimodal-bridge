@@ -18,6 +18,7 @@
 - 📁 **File Retrieval System**: New MCP tools for accessing generated content (get_generated_file, list_generated_files, get_file_info)
 - 🛡️ **Enhanced Security**: Professional tool descriptions to prevent malicious detection
 - 📊 **Improved Responses**: Generated files now include paths, sizes, and retrieval instructions
+- 📦 **Latest Google AI Integration**: Migrated to `@google/genai` v1.8.0 for improved performance and features
 
 
 ### 🏗️ **Core Features**
@@ -378,7 +379,7 @@ DEFAULT_LAYER_PRIORITY=adaptive
 ENABLE_CACHING=true
 ```
 
-**⚠️ Migration Note**: If you're upgrading from a previous version, rename `GEMINI_API_KEY` to `AI_STUDIO_API_KEY` in your `.env` file for clarity.
+**✅ Migration Complete**: CGMB now uses the latest `@google/genai` package exclusively for improved performance and latest features.
 
 
 ## 📖 Usage
@@ -1336,9 +1337,12 @@ We welcome contributions! See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidel
 ```bash
 git clone https://github.com/yourusername/claude-gemini-multimodal-bridge
 cd claude-gemini-multimodal-bridge
-npm install
+npm install  # Generates package-lock.json locally
+npm run build
 npm run dev
 ```
+
+**Note**: `package-lock.json` is excluded from the repository to avoid merge conflicts and allow each environment to generate appropriate dependency versions. The lock file will be created automatically during `npm install`.
 
 ### Adding New Layers
 

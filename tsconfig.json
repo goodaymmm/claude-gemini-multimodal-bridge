@@ -38,6 +38,13 @@
   "exclude": [
     "node_modules",
     "dist",
+    "output",
+    "logs",
+    "temp",
+    "tmp",
+    ".cgmb-cache",
+    "test-files",
+    "examples/output",
     "**/*.js",
     "scripts/**/*.cjs",
     "*.md"

@@ -16,7 +16,7 @@ import {
   ListToolsRequestSchema,
   McpError
 } from '@modelcontextprotocol/sdk/types.js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI, Modality } from '@google/genai';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -90,7 +90,7 @@ function sanitizePrompt(prompt: string): string {
 
 class AIStudioMCPServer {
   private server: Server;
-  private genAI: GoogleGenerativeAI;
+  private genAI: GoogleGenAI;
 
   constructor() {
     // Get API key from environment
@@ -99,7 +99,7 @@ class AIStudioMCPServer {
       throw new Error('AI_STUDIO_API_KEY environment variable is required');
     }
 
-    this.genAI = new GoogleGenerativeAI(apiKey);
+    this.genAI = new GoogleGenAI({ apiKey });
     this.server = new Server(
       {
         name: 'ai-studio-mcp-server',
@@ -433,39 +433,25 @@ class AIStudioMCPServer {
         safePrompt = `${prefix} ${params.prompt}`;
       }
       
-      // Use the official image generation model with responseModalities
-      const model = this.genAI.getGenerativeModel({ 
-        model: params.model || AI_MODELS.IMAGE_GENERATION
-      });
-
-      // Generate image with official API approach
-      const response = await model.generateContent({
-        contents: [{
-          role: 'user',
-          parts: [{
-            text: safePrompt
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.8,
-          topK: 40,
-          topP: 0.95,
-          maxOutputTokens: 8192,
+      // Generate image with official API approach from documentation
+      const response = await this.genAI.models.generateContent({
+        model: params.model || AI_MODELS.IMAGE_GENERATION,
+        contents: safePrompt,
+        config: {
+          responseModalities: [Modality.TEXT, Modality.IMAGE],
         },
       });
 
-      const result = response.response;
       let imageData = null;
       let textContent = '';
       
-      // Extract image data from response
-      if (result.candidates?.[0]?.content.parts) {
-        for (const part of result.candidates[0].content.parts) {
-          if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
-            imageData = part.inlineData.data;
-            break;
-          } else if (part.text) {
+      // Extract image data from response according to official docs
+      if (response.candidates?.[0]?.content?.parts) {
+        for (const part of response.candidates[0].content.parts) {
+          if (part.text) {
             textContent = part.text;
+          } else if (part.inlineData) {
+            imageData = part.inlineData.data;
           }
         }
       }
@@ -580,30 +566,29 @@ To retrieve this file, use:
       const imageData = fs.readFileSync(params.imagePath);
       const mimeType = this.getMimeType(params.imagePath);
 
-      const model = this.genAI.getGenerativeModel({ 
-        model: 'gemini-2.0-flash-preview-image-generation' 
-      });
+      const parts = [
+        params.prompt,
+        {
+          inlineData: {
+            data: imageData.toString('base64'),
+            mimeType
+          }
+        }
+      ];
 
-      const response = await model.generateContent({
-        contents: [{
-          role: 'user',
-          parts: [
-            { text: params.prompt },
-            {
-              inlineData: {
-                data: imageData.toString('base64'),
-                mimeType
-              }
-            }
-          ]
-        }]
+      const response = await this.genAI.models.generateContent({
+        model: 'gemini-2.0-flash-preview-image-generation',
+        contents: parts,
+        config: {
+          responseModalities: [Modality.TEXT],
+        },
       });
 
       return {
         content: [
           {
             type: 'text',
-            text: response.response.text()
+            text: response.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated'
           }
         ],
         metadata: {
@@ -625,7 +610,6 @@ To retrieve this file, use:
     const params = MultimodalProcessSchema.parse(args);
     
     try {
-      const model = this.genAI.getGenerativeModel({ model: params.model });
       const parts: any[] = [{ text: params.instructions }];
 
       // Process each file
@@ -653,15 +637,19 @@ To retrieve this file, use:
         }
       }
 
-      const response = await model.generateContent({
-        contents: [{ role: 'user', parts }]
+      const response = await this.genAI.models.generateContent({
+        model: params.model || 'gemini-2.5-flash',
+        contents: parts,
+        config: {
+          responseModalities: [Modality.TEXT],
+        },
       });
 
       return {
         content: [
           {
             type: 'text',
-            text: response.response.text()
+            text: response.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated'
           }
         ],
         metadata: {
@@ -684,7 +672,6 @@ To retrieve this file, use:
     const { documents, instructions, options = {} } = args;
     
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
       const parts: any[] = [{ text: instructions }];
 
       // Read and process documents
@@ -700,18 +687,22 @@ To retrieve this file, use:
         });
       }
 
-      const response = await model.generateContent({
-        contents: [{ role: 'user', parts }]
+      const response = await this.genAI.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: parts.map(part => part.text).join('\n'),
+        config: {
+          responseModalities: [Modality.TEXT],
+        },
       });
 
       return {
         content: [
           {
             type: 'text',
-            text: response.response.text()
+            text: response.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated'
           }
         ],
-        analysis: response.response.text(),
+        analysis: response.candidates?.[0]?.content?.parts?.[0]?.text || 'No analysis generated',
         metadata: {
           documentsProcessed: documents.length,
           options
