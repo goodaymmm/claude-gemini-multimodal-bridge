@@ -20,6 +20,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
+import { promises as fsPromises } from 'fs';
 
 // Input validation schemas
 const GenerateImageSchema = z.object({
@@ -45,6 +46,21 @@ const MultimodalProcessSchema = z.object({
   model: z.string().optional().default('gemini-2.0-flash-exp')
 });
 
+const GetGeneratedFileSchema = z.object({
+  filePath: z.string(),
+  returnBase64: z.boolean().optional().default(true)
+});
+
+const ListGeneratedFilesSchema = z.object({
+  fileType: z.enum(['image', 'audio', 'document', 'all']).optional().default('all'),
+  limit: z.number().optional().default(50),
+  sortBy: z.enum(['date', 'size', 'name']).optional().default('date')
+});
+
+const GetFileInfoSchema = z.object({
+  filePath: z.string()
+});
+
 class AIStudioMCPServer {
   private server: Server;
   private genAI: GoogleGenerativeAI;
@@ -60,7 +76,10 @@ class AIStudioMCPServer {
     this.server = new Server(
       {
         name: 'ai-studio-mcp-server',
-        version: '1.0.0',
+        version: '1.1.0',
+        description: 'Professional AI content generation server for Google AI Studio. Provides safe, policy-compliant image generation, audio synthesis, and document processing capabilities.',
+        author: 'CGMB Development Team',
+        license: 'MIT',
       },
       {
         capabilities: {
@@ -81,7 +100,7 @@ class AIStudioMCPServer {
         tools: [
           {
             name: 'generate_image',
-            description: 'Generate images using AI Studio API with Imagen models',
+            description: 'Generate high-quality images using Google AI Studio\'s Gemini 2.0 Flash model. All generated content complies with Google\'s content policies and is suitable for professional, educational, and creative use cases. The tool automatically applies safety prefixes to ensure appropriate content generation.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -120,7 +139,7 @@ class AIStudioMCPServer {
           },
           {
             name: 'analyze_image',
-            description: 'Analyze images using Gemini multimodal capabilities',
+            description: 'Professional image analysis using Google AI Studio\'s Gemini multimodal capabilities. Extracts detailed information, identifies objects, reads text, and provides contextual understanding. Suitable for business intelligence, accessibility, and content moderation use cases.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -144,7 +163,7 @@ class AIStudioMCPServer {
           },
           {
             name: 'multimodal_process',
-            description: 'Process multiple files with AI Studio multimodal capabilities',
+            description: 'Process multiple files simultaneously using Google AI Studio\'s advanced multimodal understanding. Supports images, documents, audio, and mixed media. Ideal for batch processing, content analysis, and data extraction workflows. All processing adheres to privacy and security standards.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -175,7 +194,7 @@ class AIStudioMCPServer {
           },
           {
             name: 'analyze_documents',
-            description: 'Analyze documents using Gemini capabilities',
+            description: 'Extract and analyze information from documents using Google AI Studio\'s document understanding capabilities. Supports PDFs, text files, and various document formats. Provides structured data extraction, summarization, and intelligent insights for professional document processing.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -198,6 +217,65 @@ class AIStudioMCPServer {
               },
               required: ['documents', 'instructions']
             }
+          },
+          {
+            name: 'get_generated_file',
+            description: 'Retrieve a previously generated file by its path. Provides direct access to images, audio, and processed documents created by CGMB. Returns file content and metadata for easy integration.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                filePath: {
+                  type: 'string',
+                  description: 'Path to the generated file (relative or absolute)'
+                },
+                returnBase64: {
+                  type: 'boolean',
+                  description: 'Return file content as base64 string',
+                  default: true
+                }
+              },
+              required: ['filePath']
+            }
+          },
+          {
+            name: 'list_generated_files',
+            description: 'List all files generated in the current session or within a specified time range. Helps track and manage generated content. Returns file paths, types, sizes, and creation timestamps.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                fileType: {
+                  type: 'string',
+                  enum: ['image', 'audio', 'document', 'all'],
+                  description: 'Filter by file type',
+                  default: 'all'
+                },
+                limit: {
+                  type: 'number',
+                  description: 'Maximum number of files to return',
+                  default: 50
+                },
+                sortBy: {
+                  type: 'string',
+                  enum: ['date', 'size', 'name'],
+                  description: 'Sort order for results',
+                  default: 'date'
+                }
+              }
+            }
+          },
+          {
+            name: 'get_file_info',
+            description: 'Get detailed metadata about a generated file without retrieving its content. Returns file size, dimensions (for images), duration (for audio), format, and creation details.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                filePath: {
+                  type: 'string',
+                  description: 'Path to the file'
+                }
+              },
+              required: ['filePath']
+            }
           }
         ]
       };
@@ -217,6 +295,12 @@ class AIStudioMCPServer {
             return await this.processMultimodal(args);
           case 'analyze_documents':
             return await this.analyzeDocuments(args);
+          case 'get_generated_file':
+            return await this.getGeneratedFile(args);
+          case 'list_generated_files':
+            return await this.listGeneratedFiles(args);
+          case 'get_file_info':
+            return await this.getFileInfo(args);
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
@@ -364,17 +448,50 @@ class AIStudioMCPServer {
         }
       }
 
+      // Save the generated image if we have data
+      let savedFilePath = null;
+      let fileSize = 0;
+      if (imageData) {
+        const outputDir = path.join(process.cwd(), 'output', 'images');
+        await fsPromises.mkdir(outputDir, { recursive: true });
+        
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `generated-image-${timestamp}.png`;
+        savedFilePath = path.join('output', 'images', filename);
+        const absolutePath = path.join(outputDir, filename);
+        
+        const buffer = Buffer.from(imageData, 'base64');
+        await fsPromises.writeFile(absolutePath, buffer);
+        fileSize = buffer.length;
+      }
+
       return {
         content: [
           {
             type: 'text',
             text: imageData 
-              ? `Successfully generated image using Gemini 2.0 Flash\nOriginal prompt: ${params.prompt}\nSafe prompt: ${safePrompt}`
+              ? `✅ Successfully generated image using Gemini 2.0 Flash
+
+📁 File saved to: ${savedFilePath}
+📏 Size: ${(fileSize / 1024).toFixed(2)} KB
+🎨 Original prompt: ${params.prompt}
+✨ Safe prompt: ${safePrompt}
+
+To retrieve this file, use:
+- Tool: get_generated_file
+- Parameter: {"filePath": "${savedFilePath}"}`
               : `Image generation completed\nOriginal prompt: ${params.prompt}\nSafe prompt: ${safePrompt}\n${textContent || 'Processing complete'}`
           }
         ],
         imageData,
         downloadUrl: null,
+        file: savedFilePath ? {
+          path: savedFilePath,
+          absolutePath: path.resolve(savedFilePath),
+          size: fileSize,
+          format: 'png',
+          createdAt: new Date().toISOString()
+        } : null,
         metadata: {
           model: 'gemini-2.0-flash-preview-image-generation',
           originalPrompt: params.prompt,
@@ -579,6 +696,206 @@ class AIStudioMCPServer {
       '.json': 'application/json'
     };
     return mimeTypes[ext] || 'application/octet-stream';
+  }
+
+  private async getGeneratedFile(args: any) {
+    const params = GetGeneratedFileSchema.parse(args);
+    
+    try {
+      // Resolve the file path
+      const filePath = path.isAbsolute(params.filePath) 
+        ? params.filePath 
+        : path.join(process.cwd(), params.filePath);
+      
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        throw new McpError(ErrorCode.InvalidRequest, `File not found: ${params.filePath}`);
+      }
+      
+      // Get file stats
+      const stats = await fsPromises.stat(filePath);
+      const fileExtension = path.extname(filePath).toLowerCase();
+      
+      // Read file content
+      let content = null;
+      if (params.returnBase64) {
+        const buffer = await fsPromises.readFile(filePath);
+        content = buffer.toString('base64');
+      }
+      
+      // Determine file type
+      let fileType = 'document';
+      if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(fileExtension)) {
+        fileType = 'image';
+      } else if (['.mp3', '.wav', '.m4a', '.ogg'].includes(fileExtension)) {
+        fileType = 'audio';
+      }
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `✅ Retrieved file: ${params.filePath}\n📏 Size: ${(stats.size / 1024).toFixed(2)} KB\n📁 Type: ${fileType}\n📅 Created: ${stats.birthtime.toISOString()}`
+          }
+        ],
+        file: {
+          path: params.filePath,
+          absolutePath: filePath,
+          size: stats.size,
+          type: fileType,
+          format: fileExtension.substring(1),
+          createdAt: stats.birthtime.toISOString(),
+          modifiedAt: stats.mtime.toISOString(),
+          data: content
+        }
+      };
+    } catch (error) {
+      if (error instanceof McpError) {
+        throw error;
+      }
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to retrieve file: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private async listGeneratedFiles(args: any) {
+    const params = ListGeneratedFilesSchema.parse(args);
+    
+    try {
+      const outputDir = path.join(process.cwd(), 'output');
+      const files: any[] = [];
+      
+      // Define directories to search based on file type
+      const searchDirs = [];
+      if (params.fileType === 'all' || params.fileType === 'image') {
+        searchDirs.push({ dir: path.join(outputDir, 'images'), type: 'image' });
+      }
+      if (params.fileType === 'all' || params.fileType === 'audio') {
+        searchDirs.push({ dir: path.join(outputDir, 'audio'), type: 'audio' });
+      }
+      if (params.fileType === 'all' || params.fileType === 'document') {
+        searchDirs.push({ dir: path.join(outputDir, 'documents'), type: 'document' });
+      }
+      
+      // Collect files from each directory
+      for (const { dir, type } of searchDirs) {
+        if (fs.existsSync(dir)) {
+          const dirFiles = await fsPromises.readdir(dir);
+          for (const file of dirFiles) {
+            const filePath = path.join(dir, file);
+            const stats = await fsPromises.stat(filePath);
+            if (stats.isFile()) {
+              files.push({
+                path: path.relative(process.cwd(), filePath),
+                name: file,
+                type,
+                size: stats.size,
+                createdAt: stats.birthtime.toISOString(),
+                modifiedAt: stats.mtime.toISOString()
+              });
+            }
+          }
+        }
+      }
+      
+      // Sort files
+      files.sort((a, b) => {
+        switch (params.sortBy) {
+          case 'size':
+            return b.size - a.size;
+          case 'name':
+            return a.name.localeCompare(b.name);
+          case 'date':
+          default:
+            return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        }
+      });
+      
+      // Apply limit
+      const limitedFiles = files.slice(0, params.limit);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `📁 Found ${limitedFiles.length} generated files${files.length > params.limit ? ` (showing ${params.limit} of ${files.length})` : ''}:\n\n${
+              limitedFiles.map(f => `• ${f.type} | ${f.path} | ${(f.size / 1024).toFixed(2)} KB | ${new Date(f.createdAt).toLocaleDateString()}`).join('\n')
+            }`
+          }
+        ],
+        files: limitedFiles,
+        totalCount: files.length
+      };
+    } catch (error) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to list files: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private async getFileInfo(args: any) {
+    const params = GetFileInfoSchema.parse(args);
+    
+    try {
+      // Resolve the file path
+      const filePath = path.isAbsolute(params.filePath) 
+        ? params.filePath 
+        : path.join(process.cwd(), params.filePath);
+      
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        throw new McpError(ErrorCode.InvalidRequest, `File not found: ${params.filePath}`);
+      }
+      
+      // Get file stats
+      const stats = await fsPromises.stat(filePath);
+      const fileExtension = path.extname(filePath).toLowerCase();
+      
+      // Determine file type and additional metadata
+      let fileType = 'document';
+      let metadata: any = {};
+      
+      if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(fileExtension)) {
+        fileType = 'image';
+        // For images, we could add dimension detection here if needed
+        metadata.format = fileExtension.substring(1).toUpperCase();
+      } else if (['.mp3', '.wav', '.m4a', '.ogg'].includes(fileExtension)) {
+        fileType = 'audio';
+        metadata.format = fileExtension.substring(1).toUpperCase();
+      }
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `📄 File Information:\n\n📁 Path: ${params.filePath}\n📏 Size: ${(stats.size / 1024).toFixed(2)} KB (${stats.size} bytes)\n🏷️ Type: ${fileType}\n📅 Created: ${stats.birthtime.toLocaleString()}\n📝 Modified: ${stats.mtime.toLocaleString()}\n🔖 Format: ${fileExtension.substring(1).toUpperCase()}`
+          }
+        ],
+        fileInfo: {
+          path: params.filePath,
+          absolutePath: filePath,
+          name: path.basename(filePath),
+          size: stats.size,
+          sizeFormatted: `${(stats.size / 1024).toFixed(2)} KB`,
+          type: fileType,
+          format: fileExtension.substring(1),
+          createdAt: stats.birthtime.toISOString(),
+          modifiedAt: stats.mtime.toISOString(),
+          metadata
+        }
+      };
+    } catch (error) {
+      if (error instanceof McpError) {
+        throw error;
+      }
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to get file info: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   async run() {

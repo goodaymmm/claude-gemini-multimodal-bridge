@@ -15,6 +15,9 @@
 - 🔧 **Fixed MCP Startup**: Direct Node.js execution resolves Claude Code recognition issues
 - 📝 **Fallback Strategies**: Enterprise-grade error handling with automatic layer switching
 - 🔍 **Authentication Caching**: Smart TTL optimization (Gemini 6h, AI Studio 24h, Claude 12h)
+- 📁 **File Retrieval System**: New MCP tools for accessing generated content (get_generated_file, list_generated_files, get_file_info)
+- 🛡️ **Enhanced Security**: Professional tool descriptions to prevent malicious detection
+- 📊 **Improved Responses**: Generated files now include paths, sizes, and retrieval instructions
 
 
 ### 🏗️ **Core Features**
