@@ -22,6 +22,8 @@ This file lists all the created files for the CGMB project.
 - 🛡️ **Enhanced Security**: Professional tool descriptions to prevent malicious detection
 - 📚 **NPM Publishing Ready**: Comprehensive guide and package configuration added
 - 🔢 **Model Constants**: Centralized AI model names for consistency
+- 🔤 **Prompt Sanitization**: Automatic conversion of problematic words for better content policy compliance
+- 📖 **Improved Documentation**: Better Claude Code integration guidance and image generation best practices
 
 ## Project Root Files
 - package.json              # Node.js project configuration and dependencies
@@ -50,10 +52,10 @@ This file lists all the created files for the CGMB project.
 ### Layer Implementations (/src/layers) (v1.1.0 Enhanced)
 - src/layers/ClaudeCodeLayer.ts   # Claude Code integration layer
 - src/layers/GeminiCLILayer.ts    # Simplified Gemini CLI integration (435 lines, mcp-gemini-cli patterns)
-- src/layers/AIStudioLayer.ts     # Google AI Studio MCP layer with standardized model constants
+- src/layers/AIStudioLayer.ts     # Google AI Studio MCP layer with standardized model constants and prompt sanitization
 
 ### MCP Servers (/src/mcp-servers)
-- src/mcp-servers/ai-studio-mcp-server.ts  # Custom AI Studio MCP server with file retrieval tools
+- src/mcp-servers/ai-studio-mcp-server.ts  # Custom AI Studio MCP server with file retrieval tools and prompt sanitization
 
 ### Authentication System (/src/auth)
 - src/auth/AuthVerifier.ts      # Multi-service authentication verification

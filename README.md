@@ -244,6 +244,34 @@ When using CGMB in Claude Code, simply say what you want:
 
 No need to specify tools or commands - just describe your intent!
 
+## 🖥️ Using CGMB as MCP Server
+
+### In Claude Code (Recommended)
+CGMB is automatically available as an MCP server - **no need to run `cgmb serve`**:
+```
+"CGMB generate an image of professional cat portrait"
+"CGMB search for latest AI developments"
+"CGMB analyze this document"
+```
+
+### For Testing/Development
+```bash
+# Foreground mode (recommended for testing)
+cgmb serve
+
+# The server will show "CGMB Server started and listening..."
+# This uses stdio for MCP communication
+
+# Note: Background mode (&) will show timeout warnings but the server runs correctly
+# This is expected behavior for MCP servers using stdio communication
+```
+
+### Important Notes
+- MCP servers communicate via stdio (standard input/output)
+- Background execution (`&`) causes Claude Code to show timeout warnings
+- The server is actually running correctly despite the timeout message
+- For production use with Claude Code, the server is auto-started - no manual `serve` needed
+
 ## 🚀 Enhanced CLI Commands
 
 ### Enhanced CLI Commands (NEW!)
@@ -1137,6 +1165,47 @@ npm run mcp:test
 ### Integration with Claude Code
 
 The AI Studio MCP server is automatically integrated when you run `cgmb serve`. It handles all AI Studio-related requests transparently, providing enhanced multimodal capabilities to Claude Code.
+
+## 🎨 Image Generation Best Practices
+
+When generating images with CGMB, follow these guidelines for best results:
+
+### ✅ Recommended Prompts
+- **Specific descriptions**: "professional photograph of orange tabby cat in garden"
+- **Technical terms**: "technical illustration of robotic assistant with blue LED lights"
+- **Educational context**: "educational diagram showing solar system planets"
+- **Action-focused**: "cat playing with red yarn ball on wooden floor"
+- **Visual details**: "grey striped cat sitting on green grass under sunny sky"
+
+### ❌ Avoid These Terms
+CGMB automatically converts problematic words, but it's better to avoid them:
+- **Emotional descriptors**: cute, adorable, sweet, pretty, beautiful
+- **Ambiguous terms**: little, baby, tiny
+- **Subjective qualities**: sexy, hot
+
+### 🔄 Automatic Word Conversion
+CGMB automatically converts problematic words to safer alternatives:
+- "cute" → "friendly-looking"
+- "adorable" → "appealing"
+- "beautiful" → "visually pleasing"
+- "little" → "small-sized"
+
+### 💡 If Generation Fails
+1. **Remove emotional adjectives**: Replace "cute cat" with "domestic cat"
+2. **Add specific details**: Include colors, sizes, settings, or actions
+3. **Use professional context**: "reference photo", "educational illustration"
+4. **Try alternative descriptions**: "feline" instead of "cat", "canine" instead of "dog"
+
+### Example Transformations
+```bash
+# Instead of:
+"CGMB generate an image of a cute cat"
+
+# Try:
+"CGMB generate an image of a friendly-looking orange tabby cat sitting in sunlight"
+"CGMB generate an image of a domestic cat playing with toys"
+"CGMB generate an image of a professional photograph of a grey striped cat"
+```
 
 ## 🐛 Troubleshooting
 

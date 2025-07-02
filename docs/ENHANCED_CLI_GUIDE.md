@@ -61,19 +61,21 @@ cgmb chat "Compare React Native vs Flutter for enterprise apps"
 ### Generate Images with AI Studio
 
 ```bash
-# Basic image generation
+# Basic image generation (automatic prompt sanitization)
 cgmb generate-image "futuristic city skyline at sunset"
 
 # Specify output file
-cgmb generate-image "cute robot assistant" --output robot.png
-cgmb generate-image "cute robot assistant" -o robot.png  # Short form
+cgmb generate-image "friendly robot assistant" --output robot.png
+cgmb generate-image "friendly robot assistant" -o robot.png  # Short form
 
 # Different art styles
 cgmb generate-image "mountain landscape" --style photorealistic
 cgmb generate-image "abstract art" --style artistic
 
-# Disable safety prefix (use with caution)
-cgmb generate-image "professional headshot" --no-safe-mode
+# Automatic word conversion examples
+cgmb generate-image "cute cat"  # → "friendly-looking cat"
+cgmb generate-image "adorable puppy"  # → "appealing puppy"
+cgmb generate-image "beautiful sunset"  # → "visually pleasing sunset"
 ```
 
 **Options**:
@@ -81,10 +83,23 @@ cgmb generate-image "professional headshot" --no-safe-mode
 - `-o, --output <path>`: Save to specific file
 - `--safe-mode`: Use safety prefixes (default: true)
 
+**🔤 Automatic Prompt Sanitization**:
+CGMB automatically converts problematic words:
+- "cute" → "friendly-looking"
+- "adorable" → "appealing"
+- "beautiful" → "visually pleasing"
+- "little" → "small-sized"
+
+**✅ Best Practices**:
+- Use specific descriptions: "orange tabby cat" instead of "cute cat"
+- Add visual details: colors, patterns, settings
+- Professional context: "reference photo", "educational illustration"
+
 **Important Notes**:
 - English prompts required (translate if needed)
 - Files saved to `output/images/` by default
 - Automatic safety prefixes prevent content policy issues
+- If generation fails, try more specific descriptions
 
 ---
 
@@ -332,8 +347,12 @@ cgmb c "stock price of GOOGL today"
 
 3. **Content policy errors**
    ```bash
-   # Use safe mode (default)
-   cgmb generate-image "portrait" --safe-mode
+   # CGMB automatically sanitizes prompts
+   cgmb generate-image "cute cat"  # → "friendly-looking cat"
+   
+   # If still failing, try:
+   cgmb generate-image "domestic cat in garden"
+   cgmb generate-image "orange tabby cat sitting on grass"
    ```
 
 4. **Timeout errors**
