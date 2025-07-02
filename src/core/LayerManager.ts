@@ -812,7 +812,6 @@ export class LayerManager {
     // Detect generation requests (especially image/video/audio generation)
     const isGenerationRequest = this.detectGenerationRequest(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
     const isImageGeneration = this.detectImageGeneration(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
-    const isVideoGeneration = this.detectVideoGeneration(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
     const isAudioGeneration = this.detectAudioGeneration(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
     
     // Detect document processing tasks
@@ -820,9 +819,26 @@ export class LayerManager {
     
     const requiresComplexReasoning = hasComplexPrompt || multipleSteps;
     const requiresMultimodalProcessing = hasMultimodalFiles || isGenerationRequest;
-    const requiresGrounding = (typeof inputData.prompt === 'string' && inputData.prompt.includes('search')) || 
-                             (typeof inputData.prompt === 'string' && inputData.prompt.includes('latest')) ||
-                             (typeof inputData.prompt === 'string' && inputData.prompt.includes('current'));
+    const requiresGrounding = false || 
+      (typeof inputData.prompt === 'string' && (
+        inputData.prompt.toLowerCase().includes('search') ||
+        inputData.prompt.toLowerCase().includes('latest') ||
+        inputData.prompt.toLowerCase().includes('current') ||
+        inputData.prompt.toLowerCase().includes('today') ||
+        inputData.prompt.toLowerCase().includes('weather') ||
+        inputData.prompt.toLowerCase().includes('news') ||
+        inputData.prompt.toLowerCase().includes('stock') ||
+        inputData.prompt.toLowerCase().includes('now') ||
+        inputData.prompt.toLowerCase().includes('recent') ||
+        inputData.prompt.toLowerCase().includes('update') ||
+        inputData.prompt.includes('検索') ||
+        inputData.prompt.includes('最新') ||
+        inputData.prompt.includes('今日') ||
+        inputData.prompt.includes('天気') ||
+        inputData.prompt.includes('ニュース') ||
+        inputData.prompt.includes('株価') ||
+        inputData.prompt.includes('現在')
+      ));
 
     let estimatedComplexity: 'low' | 'medium' | 'high' = 'low';
     
@@ -838,12 +854,17 @@ export class LayerManager {
     // Check if this is a simple prompt (no files, no generation, no complex reasoning)
     const isSimplePrompt = !hasMultimodalFiles && !isGenerationRequest && !requiresComplexReasoning && !multipleSteps;
     
-    // HIGHEST PRIORITY: AI Studio for any generation tasks
-    if (isImageGeneration || isVideoGeneration || isAudioGeneration || isGenerationRequest) {
+    // HIGHEST PRIORITY: Web search goes to Gemini CLI
+    if (requiresGrounding && !hasMultimodalFiles) {
+      recommendedLayer = 'gemini';
+      logger.info('Routing to Gemini CLI for web search', {
+        prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 100) + '...' : 'No prompt',
+        requiresGrounding: true
+      });
+    } else if (isImageGeneration || isAudioGeneration || isGenerationRequest) {
       recommendedLayer = 'aistudio';
       logger.info('Routing to AI Studio for generation task', {
         isImageGeneration,
-        isVideoGeneration, 
         isAudioGeneration,
         prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 100) + '...' : 'No prompt'
       });
@@ -874,7 +895,6 @@ export class LayerManager {
       multipleSteps,
       isGenerationRequest,
       isImageGeneration,
-      isVideoGeneration,
       isAudioGeneration,
       isDocumentProcessing,
       isSimplePrompt,
@@ -1403,32 +1423,6 @@ export class LayerManager {
     return hasImageKeyword && hasGenerationKeyword;
   }
 
-  /**
-   * Detect if request is for video generation
-   */
-  private detectVideoGeneration(prompt: string, _workflow: ExecutionPlan): boolean {
-    if (!prompt) {return false;}
-    
-    const videoKeywords = [
-      'video', 'movie', 'animation', 'clip', 'motion',
-      '動画', 'ビデオ', 'ムービー', 'アニメーション'
-    ];
-    
-    const generationKeywords = [
-      'generate', 'create', 'make', 'produce',
-      '生成', '作成', '作る'
-    ];
-    
-    const hasVideoKeyword = videoKeywords.some(keyword => 
-      prompt.toLowerCase().includes(keyword.toLowerCase())
-    );
-    
-    const hasGenerationKeyword = generationKeywords.some(keyword => 
-      prompt.toLowerCase().includes(keyword.toLowerCase())
-    );
-    
-    return hasVideoKeyword && hasGenerationKeyword;
-  }
 
   /**
    * Detect if request is for audio generation

@@ -232,8 +232,7 @@ export class AIStudioLayer implements LayerInterface {
             break;
           case 'video_generation':
           case 'generate_video':
-            result = await this.generateVideo(task.prompt || task.text, task.options || {});
-            break;
+            throw new Error('Video generation is not yet implemented');
           case 'audio_generation':
           case 'generate_audio':
             result = await this.generateAudio(task.prompt || task.text, task.options || {});
@@ -495,77 +494,6 @@ export class AIStudioLayer implements LayerInterface {
     );
   }
 
-  /**
-   * Generate video using AI Studio
-   */
-  async generateVideo(prompt: string, options: Partial<VideoGenOptions> = {}): Promise<MediaGenResult> {
-    return retry(
-      async () => {
-        logger.info('Generating video with AI Studio', {
-          promptLength: prompt.length,
-          model: options.model || 'veo-2',
-          duration: options.duration || 5
-        });
-
-        const startTime = Date.now();
-        
-        const videoOptions = {
-          width: options.width || 1024,
-          height: options.height || 576,
-          duration: options.duration || 5,
-          fps: options.fps || '30',
-          quality: options.quality || 'standard',
-          model: options.model || 'veo-2',
-          motion: options.motion || 'medium',
-          seed: options.seed,
-        };
-
-        const result = await this.executeMCPCommand('generate_video', {
-          prompt,
-          options: videoOptions,
-          // Add responseModalities for proper AI Studio API format (per Error4.md analysis)
-          generationConfig: {
-            responseMimeType: 'video/mp4',
-            responseModalities: ['TEXT', 'VIDEO']
-          }
-        });
-
-        const duration = Date.now() - startTime;
-        
-        // Download and save the generated video
-        const outputPath = await this.downloadGeneratedMedia(
-          result.downloadUrl || result.videoUrl,
-          'video',
-          options.quality || 'standard'
-        );
-
-        return {
-          success: true,
-          generationType: 'video' as GenerationType,
-          outputPath,
-          originalPrompt: prompt,
-          metadata: {
-            duration,
-            fileSize: result.fileSize || 0,
-            format: 'mp4',
-            dimensions: {
-              width: options.width || 1024,
-              height: options.height || 576,
-            },
-            model: options.model || 'veo-2',
-            settings: options,
-            cost: this.calculateGenerationCost('video', options),
-          },
-          downloadUrl: result.downloadUrl,
-        };
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 10000, // Longer delay for video generation
-        operationName: 'generate-video',
-      }
-    );
-  }
 
   /**
    * Generate audio using AI Studio
@@ -573,36 +501,40 @@ export class AIStudioLayer implements LayerInterface {
   async generateAudio(text: string, options: Partial<AudioGenOptions> = {}): Promise<MediaGenResult> {
     return retry(
       async () => {
-        logger.info('Generating audio with AI Studio', {
+        logger.info('Generating audio with gemini-2.5-flash-preview-tts', {
           textLength: text.length,
-          voice: options.voice || 'alloy',
-          format: options.format || 'mp3'
+          voice: options.voice || 'Kore',
+          format: 'wav'
         });
 
         const startTime = Date.now();
         
-        const audioOptions = {
-          voice: options.voice || 'alloy',
-          language: options.language || 'en',
-          speed: options.speed || 1.0,
-          format: options.format || 'mp3',
-          quality: options.quality || 'standard',
-          model: options.model || 'text-to-speech',
+        // Use the official TTS model and configuration
+        const audioParams = {
+          text,
+          model: 'gemini-2.5-flash-preview-tts',
+          voiceName: options.voice || 'Kore',
+          // Simple single speaker configuration
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName: options.voice || 'Kore' }
+          }
         };
 
-        const result = await this.executeMCPCommand('generate_audio', {
-          text,
-          options: audioOptions,
-        });
+        logger.debug('Calling MCP server for audio generation', audioParams);
+        
+        const result = await this.executeMCPCommandOptimized('generate_audio', audioParams);
 
         const duration = Date.now() - startTime;
         
-        // Download and save the generated audio
-        const outputPath = await this.downloadGeneratedMedia(
-          result.downloadUrl || result.audioUrl,
-          'audio',
-          options.quality || 'standard'
-        );
+        // Process the MCP server response
+        let outputPath = '';
+        
+        if (result.audioData) {
+          // Save WAV audio data to file
+          outputPath = await this.saveGeneratedAudio(result.audioData, 'wav');
+        } else {
+          throw new Error('Audio generation completed but no audio data received');
+        }
 
         return {
           success: true,
@@ -611,11 +543,12 @@ export class AIStudioLayer implements LayerInterface {
           originalPrompt: text,
           metadata: {
             duration,
-            fileSize: result.fileSize || 0,
-            format: options.format || 'mp3',
-            model: options.model || 'text-to-speech',
+            fileSize: result.metadata?.fileSize || 0,
+            format: 'wav',
+            model: 'gemini-2.5-flash-preview-tts',
             settings: options,
             cost: this.calculateGenerationCost('audio', options),
+            voice: options.voice || 'Kore'
           },
           downloadUrl: result.downloadUrl,
         };
@@ -626,6 +559,46 @@ export class AIStudioLayer implements LayerInterface {
         operationName: 'generate-audio',
       }
     );
+  }
+
+  /**
+   * Generate audio with script generation (2-step process)
+   */
+  async generateAudioWithScript(prompt: string, options: any = {}): Promise<MediaGenResult> {
+    logger.info('Generating audio with script generation', {
+      prompt: prompt.substring(0, 100),
+      hasMultipleSpeakers: !!options.speakers
+    });
+
+    try {
+      // Step 1: Generate script using gemini-2.0-flash
+      const scriptPrompt = options.scriptPrompt || 
+        `Generate a script for the following request: ${prompt}. ` +
+        (options.speakers ? 
+          `Include dialogue for speakers: ${options.speakers.map((s: any) => s.name).join(', ')}.` : 
+          'Write it as a single narrator script.');
+      
+      const scriptResult = await this.executeMCPCommandOptimized('generate_text', {
+        prompt: scriptPrompt,
+        model: 'gemini-2.0-flash',
+        maxOutputTokens: 1000
+      });
+
+      const script = scriptResult.text || scriptResult.content?.[0]?.text || 'No script generated';
+      logger.info('Script generated successfully', { scriptLength: script.length });
+
+      // Step 2: Convert script to audio
+      const audioOptions = {
+        ...options,
+        script // Pass the generated script for reference
+      };
+      
+      return await this.generateAudio(script, audioOptions);
+      
+    } catch (error) {
+      logger.error('Failed to generate audio with script', error as Error);
+      throw error;
+    }
   }
 
   /**
@@ -994,7 +967,7 @@ export class AIStudioLayer implements LayerInterface {
       logger.info('Detected video generation request in general processing', {
         prompt: prompt.substring(0, 100)
       });
-      return await this.generateVideo(prompt, task.options || {});
+      throw new Error('Video generation is not yet implemented');
     }
     
     if (this.isAudioGenerationRequest(prompt)) {
@@ -1644,6 +1617,30 @@ export class AIStudioLayer implements LayerInterface {
     return outputPath;
   }
 
+  /**
+   * Save generated audio from base64 data
+   */
+  private async saveGeneratedAudio(base64Data: string, format: string = 'wav'): Promise<string> {
+    const outputDir = join(process.cwd(), 'output', 'audio');
+    await mkdir(outputDir, { recursive: true });
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `generated-audio-${timestamp}.${format}`;
+    const outputPath = join(outputDir, filename);
+    
+    const buffer = Buffer.from(base64Data, 'base64');
+    await new Promise<void>((resolve, reject) => {
+      const stream = createWriteStream(outputPath);
+      stream.write(buffer);
+      stream.end();
+      stream.on('finish', resolve);
+      stream.on('error', reject);
+    });
+    
+    logger.info('Saved generated audio', { outputPath, size: buffer.length });
+    return outputPath;
+  }
+
 
   /**
    * Enhanced document processing with Google AI official spec compliance
@@ -1803,13 +1800,14 @@ export class AIStudioLayer implements LayerInterface {
       return 'gemini-2.5-flash';
     }
     
-    // Video/audio generation tasks
-    if (taskType.includes('video')) {
-      return 'gemini-2.0-flash-exp'; // Video generation model when available
+    // Audio generation uses TTS model
+    if (taskType.includes('audio') || taskType.includes('speech') || taskType.includes('tts') || taskType.includes('voice')) {
+      return 'gemini-2.5-flash-preview-tts';
     }
     
-    if (taskType.includes('audio') || taskType.includes('sound') || taskType.includes('music')) {
-      return 'gemini-2.0-flash-exp'; // Audio generation model when available
+    // Script generation for audio uses regular flash model
+    if (taskType.includes('script') || taskType.includes('transcript')) {
+      return 'gemini-2.0-flash';
     }
     
     // Default for other multimodal tasks

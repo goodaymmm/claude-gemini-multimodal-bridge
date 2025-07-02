@@ -2,7 +2,7 @@
 
 This file lists all the created files for the CGMB project.
 
-## 🚀 Version 1.1.0 - Enterprise-Grade Enhancements (2025-07-01)
+## 🚀 Version 1.1.0 - Enterprise-Grade Enhancements (2025-07-02)
 - 🏢 **Enterprise-Grade Authentication**: Service-specific caching with OAuth priority for Gemini CLI
 - 🧠 **Intelligent Layer Routing**: Automatic task analysis and optimal AI layer selection
 - ⚡ **Simplified Architecture**: Streamlined Gemini CLI integration (435 lines vs 1458 lines)
@@ -13,6 +13,11 @@ This file lists all the created files for the CGMB project.
 - 📊 **TypeScript Optimization**: All compilation errors resolved with improved type safety
 - 🔄 **Lazy Layer Loading**: Layers initialize only when needed for faster startup
 - 📈 **Performance Monitoring**: Built-in intelligence routing and fallback metrics
+- 🌐 **Web Search Priority**: Web search tasks now route to Gemini CLI as highest priority
+- 🎵 **Audio Generation**: Proper implementation with gemini-2.5-flash-preview-tts model
+- 🖼️ **Image Generation**: Correct model usage (gemini-2.0-flash-preview-image-generation)
+- 🚫 **Video Generation Removed**: Unimplemented video generation code completely removed
+- 📝 **Script Generation**: Two-step audio generation process with script creation
 
 ## Project Root Files
 - package.json              # Node.js project configuration and dependencies
@@ -40,8 +45,8 @@ This file lists all the created files for the CGMB project.
 
 ## Layer Implementations (/src/layers) ✅ COMPLETED (v1.1.0 Enhanced)
 - src/layers/ClaudeCodeLayer.ts   # Claude Code integration layer
-- src/layers/GeminiCLILayer.ts    # Simplified Gemini CLI integration (435 lines, mcp-gemini-cli patterns)
-- src/layers/AIStudioLayer.ts     # Google AI Studio MCP layer
+- src/layers/GeminiCLILayer.ts    # Simplified Gemini CLI integration (435 lines, mcp-gemini-cli patterns), prioritized for web search
+- src/layers/AIStudioLayer.ts     # Google AI Studio MCP layer with proper audio/image generation models
 
 ### MCP Servers (/src/mcp-servers) ✅ COMPLETED
 - src/mcp-servers/ai-studio-mcp-server.ts  # Custom AI Studio MCP server implementation
@@ -131,6 +136,11 @@ This file lists all the created files for the CGMB project.
 - Fixed MCP startup issues with direct Node.js execution
 - All TypeScript compilation errors resolved
 - Enhanced fallback strategies and error recovery
+- Web search tasks prioritized to Gemini CLI layer
+- Audio generation using gemini-2.5-flash-preview-tts model
+- Image generation using gemini-2.0-flash-preview-image-generation model
+- Video generation code completely removed (not implemented)
+- Two-step audio generation with script creation support
 
 ✅ **Core Features**
 - ⚡ Performance optimization (PromptOptimizer, SearchCache, Adaptive Timeouts)
