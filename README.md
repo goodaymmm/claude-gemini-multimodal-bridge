@@ -223,6 +223,27 @@ claude "Hello! Test the enhanced capabilities."
 
 This ensures that CGMB is properly invoked as an MCP server within Claude Code with perfect reliability!
 
+## 🤖 Claude Code Integration
+
+When using CGMB in Claude Code, simply say what you want:
+
+### Quick Examples
+- **Image Generation**: "CGMB generate an image of a futuristic city"
+- **Audio Generation**: "CGMB create audio saying 'Welcome to our podcast'"  
+- **Web Search**: "CGMB search for latest quantum computing breakthroughs"
+- **Document Analysis**: "CGMB analyze @report.pdf and extract key findings"
+- **Multiple Files**: "CGMB process @image1.png @document.pdf together"
+
+### How It Works
+1. Include "CGMB" in your request
+2. Describe what you want in natural language
+3. CGMB automatically routes to the best AI layer:
+   - Gemini CLI: Web search, current information
+   - AI Studio: Images, audio, file processing
+   - Claude Code: Complex reasoning, code analysis
+
+No need to specify tools or commands - just describe your intent!
+
 ## 🚀 Enhanced CLI Commands
 
 ### Enhanced CLI Commands (NEW!)

@@ -133,7 +133,7 @@ class AIStudioMCPServer {
                 model: {
                   type: 'string',
                   description: 'AI Studio model to use for generation',
-                  default: 'gemini-2.0-flash-exp-0111'
+                  default: AI_MODELS.IMAGE_GENERATION
                 }
               },
               required: ['prompt']
