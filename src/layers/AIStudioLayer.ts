@@ -1688,7 +1688,7 @@ export class AIStudioLayer implements LayerInterface {
             documentCount: documents.length,
             estimatedTokens,
             maxTokensPerDocument: this.MAX_DOCUMENT_PAGES * this.TOKENS_PER_PAGE,
-            processingModel: 'gemini-2.0-flash-exp',
+            processingModel: 'gemini-2.5-flash',
             compliance: 'Google AI Studio Official Specifications'
           }
         };
@@ -1787,5 +1787,54 @@ export class AIStudioLayer implements LayerInterface {
     return documents.reduce((total, doc) => {
       return total + (doc.estimatedTokens || this.TOKENS_PER_PAGE);
     }, 0);
+  }
+
+  /**
+   * Select optimal model based on task type
+   */
+  private selectOptimalModel(taskType: string): string {
+    // Image-related tasks use the image generation model
+    if (taskType.includes('image') || taskType.includes('visual') || taskType.includes('picture') || taskType.includes('photo')) {
+      return 'gemini-2.0-flash-preview-image-generation';
+    }
+    
+    // Document processing uses gemini-2.5-flash for better performance
+    if (taskType.includes('document') || taskType.includes('pdf') || taskType.includes('text') || taskType.includes('analyze')) {
+      return 'gemini-2.5-flash';
+    }
+    
+    // Video/audio generation tasks
+    if (taskType.includes('video')) {
+      return 'gemini-2.0-flash-exp'; // Video generation model when available
+    }
+    
+    if (taskType.includes('audio') || taskType.includes('sound') || taskType.includes('music')) {
+      return 'gemini-2.0-flash-exp'; // Audio generation model when available
+    }
+    
+    // Default for other multimodal tasks
+    return 'gemini-2.0-flash-exp';
+  }
+
+  /**
+   * Get model configuration for specific task
+   */
+  private getModelConfig(taskType: string): any {
+    const model = this.selectOptimalModel(taskType);
+    const config: any = {
+      model,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 16384
+      }
+    };
+    
+    // Add responseModalities for image generation
+    if (model === 'gemini-2.0-flash-preview-image-generation') {
+      config.generationConfig.responseMimeType = 'application/json';
+      // Note: responseModalities would be set here if supported by the SDK
+    }
+    
+    return config;
   }
 }

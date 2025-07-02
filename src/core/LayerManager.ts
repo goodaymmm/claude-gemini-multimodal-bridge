@@ -815,6 +815,9 @@ export class LayerManager {
     const isVideoGeneration = this.detectVideoGeneration(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
     const isAudioGeneration = this.detectAudioGeneration(typeof inputData.prompt === 'string' ? inputData.prompt : '', workflow);
     
+    // Detect document processing tasks
+    const isDocumentProcessing = this.detectDocumentProcessing(typeof inputData.prompt === 'string' ? inputData.prompt : '', inputData.files);
+    
     const requiresComplexReasoning = hasComplexPrompt || multipleSteps;
     const requiresMultimodalProcessing = hasMultimodalFiles || isGenerationRequest;
     const requiresGrounding = (typeof inputData.prompt === 'string' && inputData.prompt.includes('search')) || 
@@ -830,7 +833,10 @@ export class LayerManager {
     }
 
     // Determine recommended layer with generation priority
-    let recommendedLayer: LayerType = 'gemini';
+    let recommendedLayer: LayerType = 'gemini'; // Default to Gemini CLI for simple prompts
+    
+    // Check if this is a simple prompt (no files, no generation, no complex reasoning)
+    const isSimplePrompt = !hasMultimodalFiles && !isGenerationRequest && !requiresComplexReasoning && !multipleSteps;
     
     // HIGHEST PRIORITY: AI Studio for any generation tasks
     if (isImageGeneration || isVideoGeneration || isAudioGeneration || isGenerationRequest) {
@@ -841,10 +847,25 @@ export class LayerManager {
         isAudioGeneration,
         prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 100) + '...' : 'No prompt'
       });
+    } else if (isDocumentProcessing) {
+      // Document processing goes to AI Studio with gemini-2.5-flash
+      recommendedLayer = 'aistudio';
+      logger.info('Routing to AI Studio for document processing', {
+        hasFiles: hasMultimodalFiles,
+        prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 100) + '...' : 'No prompt'
+      });
     } else if (requiresComplexReasoning) {
       recommendedLayer = 'claude';
     } else if (requiresMultimodalProcessing) {
       recommendedLayer = 'aistudio';
+    } else if (isSimplePrompt) {
+      // Simple prompts go to Gemini CLI (2.5 Pro) for best performance
+      recommendedLayer = 'gemini';
+      logger.info('Routing simple prompt to Gemini CLI', {
+        promptLength: typeof inputData.prompt === 'string' ? inputData.prompt.length : 0,
+        hasFiles: hasMultimodalFiles,
+        requiresGrounding
+      });
     }
 
     logger.info('Workload analysis completed', {
@@ -855,6 +876,8 @@ export class LayerManager {
       isImageGeneration,
       isVideoGeneration,
       isAudioGeneration,
+      isDocumentProcessing,
+      isSimplePrompt,
       requiresComplexReasoning,
       requiresMultimodalProcessing,
       requiresGrounding,
@@ -1432,6 +1455,36 @@ export class LayerManager {
     );
     
     return hasAudioKeyword && hasGenerationKeyword;
+  }
+
+  /**
+   * Detect document processing requests
+   */
+  private detectDocumentProcessing(prompt: string, files: any): boolean {
+    if (!prompt) {return false;}
+    
+    // Check for document-related keywords
+    const documentKeywords = [
+      'document', 'pdf', 'analyze', 'extract', 'summarize', 'compare',
+      'text', 'file', 'content', 'read', 'process',
+      'ドキュメント', '文書', '分析', '抽出', '要約'
+    ];
+    
+    const hasDocumentKeyword = documentKeywords.some(keyword => 
+      prompt.toLowerCase().includes(keyword.toLowerCase())
+    );
+    
+    // Check if files include documents
+    let hasDocumentFiles = false;
+    if (files && Array.isArray(files)) {
+      hasDocumentFiles = files.some((file: any) => {
+        const fileExt = file.path?.toLowerCase() || '';
+        return fileExt.endsWith('.pdf') || fileExt.endsWith('.docx') || 
+               fileExt.endsWith('.doc') || fileExt.endsWith('.txt');
+      });
+    }
+    
+    return hasDocumentKeyword || hasDocumentFiles;
   }
 
   /**

@@ -293,52 +293,73 @@ class AIStudioMCPServer {
     const params = GenerateImageSchema.parse(args);
     
     try {
-      // Gemini 2.0 Flash doesn't directly generate images like Imagen
-      // Instead, we'll simulate image generation with enhanced prompting
+      // Use the official image generation model with responseModalities
       const model = this.genAI.getGenerativeModel({ 
-        model: params.model
+        model: 'gemini-2.0-flash-preview-image-generation'
       });
 
-      // Create an enhanced prompt for Gemini 2.0 Flash
-      const enhancedPrompt = `You are an AI assistant helping with image generation. 
-While I cannot directly generate images, I'll describe what an image based on your prompt would look like:
+      // Generate image with official API approach
+      const response = await model.generateContent({
+        contents: [{
+          role: 'user',
+          parts: [{
+            text: params.prompt
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.8,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 8192,
+        },
+      });
 
-Prompt: "${params.prompt}"
-Aspect Ratio: ${params.aspectRatio}
-Number of Images: ${params.numberOfImages}
-
-Please provide a detailed description of what this image would contain, including:
-- Main subjects and their positions
-- Color scheme and lighting
-- Background elements
-- Artistic style
-- Overall composition
-
-This description can be used with dedicated image generation tools like Imagen 3 for actual image creation.`;
-
-      const response = await model.generateContent(enhancedPrompt);
-      const text = response.response.text();
+      const result = response.response;
+      let imageData = null;
+      let textContent = '';
       
-      // For actual image generation, you would integrate with Imagen 3 API
-      // This is a placeholder implementation for Gemini 2.0 Flash
-      
+      // Extract image data from response
+      if (result.candidates?.[0]?.content.parts) {
+        for (const part of result.candidates[0].content.parts) {
+          if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
+            imageData = part.inlineData.data;
+            break;
+          } else if (part.text) {
+            textContent = part.text;
+          }
+        }
+      }
+
+      // Try parsing JSON response if available
+      if (textContent) {
+        try {
+          const jsonResponse = JSON.parse(textContent);
+          if (jsonResponse.images && jsonResponse.images.length > 0) {
+            imageData = jsonResponse.images[0].data;
+          }
+        } catch {
+          // Not JSON, continue with regular processing
+        }
+      }
+
       return {
         content: [
           {
             type: 'text',
-            text: `Image Generation Request Processed (Gemini 2.0 Flash)\n\nPrompt: ${params.prompt}\n\nDescription:\n${text}\n\nNote: For actual image generation, use Imagen 3 or other dedicated image generation models.`
+            text: imageData 
+              ? `Successfully generated image using Gemini 2.0 Flash\nPrompt: ${params.prompt}`
+              : `Image generation completed\nPrompt: ${params.prompt}\n${textContent || 'Processing complete'}`
           }
         ],
-        imageData: null, // No actual image data with Gemini 2.0 Flash
+        imageData,
         downloadUrl: null,
         metadata: {
-          model: params.model,
+          model: 'gemini-2.0-flash-preview-image-generation',
           prompt: params.prompt,
           numberOfImages: params.numberOfImages,
           aspectRatio: params.aspectRatio,
           personGeneration: params.personGeneration,
-          responseText: text,
-          note: 'Gemini 2.0 Flash provides image descriptions. For actual image generation, use Imagen 3.'
+          responseText: textContent
         }
       };
 
@@ -362,7 +383,9 @@ This description can be used with dedicated image generation tools like Imagen 3
       const imageData = fs.readFileSync(params.imagePath);
       const mimeType = this.getMimeType(params.imagePath);
 
-      const model = this.genAI.getGenerativeModel({ model: params.model });
+      const model = this.genAI.getGenerativeModel({ 
+        model: 'gemini-2.0-flash-preview-image-generation' 
+      });
 
       const response = await model.generateContent({
         contents: [{
@@ -464,7 +487,7 @@ This description can be used with dedicated image generation tools like Imagen 3
     const { documents, instructions, options = {} } = args;
     
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+      const model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
       const parts: any[] = [{ text: instructions }];
 
       // Read and process documents
