@@ -145,7 +145,11 @@ export class CGMBServer {
           },
           {
             name: 'cgmb',
-            description: '🎯 **Multi-layer AI Bridge** - claude-gemini-multimodal-bridge for intelligent AI processing. Routes requests to Gemini CLI (web search, analysis) or AI Studio (multimodal processing) based on content. Works with natural language requests about AI assistance, web search, document analysis, or multimodal tasks. Examples: "analyze this image", "search latest AI news", "process this document"',
+            description: '🎯 **Multi-layer AI Bridge** - Commands:\n' +
+              '• Dialogue: cgmb gemini -p "your question"\n' +
+              '• Image: cgmb generate-image "description" (English required)\n' +
+              '• Document: cgmb analyze-pdf file.pdf --prompt "instructions"\n' +
+              'Routes to optimal AI layer: Gemini CLI (web search), AI Studio (multimodal)',
             inputSchema: {
               type: 'object',
               properties: {

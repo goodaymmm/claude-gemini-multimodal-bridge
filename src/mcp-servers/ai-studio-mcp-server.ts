@@ -27,7 +27,7 @@ const GenerateImageSchema = z.object({
   numberOfImages: z.number().min(1).max(4).optional().default(1),
   aspectRatio: z.enum(['1:1', '3:4', '4:3', '9:16', '16:9']).optional().default('1:1'),
   personGeneration: z.enum(['ALLOW', 'BLOCK']).optional().default('ALLOW'),
-  model: z.string().optional().default('gemini-2.0-flash-preview-image-generation')
+  model: z.string().optional().default('gemini-2.0-flash-exp-0111')
 });
 
 const AnalyzeImageSchema = z.object({
@@ -112,7 +112,7 @@ class AIStudioMCPServer {
                 model: {
                   type: 'string',
                   description: 'AI Studio model to use for generation',
-                  default: 'gemini-2.0-flash-preview-image-generation'
+                  default: 'gemini-2.0-flash-exp-0111'
                 }
               },
               required: ['prompt']
@@ -293,60 +293,52 @@ class AIStudioMCPServer {
     const params = GenerateImageSchema.parse(args);
     
     try {
+      // Gemini 2.0 Flash doesn't directly generate images like Imagen
+      // Instead, we'll simulate image generation with enhanced prompting
       const model = this.genAI.getGenerativeModel({ 
-        model: params.model,
-        generationConfig: {
-          responseMimeType: 'application/json'
-        }
+        model: params.model
       });
 
-      // Create the image generation request using simplified format
-      const response = await model.generateContent({
-        contents: [{
-          role: 'user',
-          parts: [{
-            text: `Generate ${params.numberOfImages} image(s) with aspect ratio ${params.aspectRatio}. Person generation: ${params.personGeneration}. Prompt: ${params.prompt}`
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 1024
-        }
-      });
+      // Create an enhanced prompt for Gemini 2.0 Flash
+      const enhancedPrompt = `You are an AI assistant helping with image generation. 
+While I cannot directly generate images, I'll describe what an image based on your prompt would look like:
 
-      // Process the response
-      const result = response.response;
-      const text = result.text();
-      
-      // Extract image data from response
-      let imageData = null;
-      const downloadUrl = null;
-      
-      if (result.candidates?.[0]?.content.parts) {
-        for (const part of result.candidates[0].content.parts) {
-          if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
-            imageData = part.inlineData.data;
-            break;
-          }
-        }
-      }
+Prompt: "${params.prompt}"
+Aspect Ratio: ${params.aspectRatio}
+Number of Images: ${params.numberOfImages}
 
+Please provide a detailed description of what this image would contain, including:
+- Main subjects and their positions
+- Color scheme and lighting
+- Background elements
+- Artistic style
+- Overall composition
+
+This description can be used with dedicated image generation tools like Imagen 3 for actual image creation.`;
+
+      const response = await model.generateContent(enhancedPrompt);
+      const text = response.response.text();
+      
+      // For actual image generation, you would integrate with Imagen 3 API
+      // This is a placeholder implementation for Gemini 2.0 Flash
+      
       return {
         content: [
           {
             type: 'text',
-            text: `Successfully generated ${params.numberOfImages} image(s) using ${params.model}`
+            text: `Image Generation Request Processed (Gemini 2.0 Flash)\n\nPrompt: ${params.prompt}\n\nDescription:\n${text}\n\nNote: For actual image generation, use Imagen 3 or other dedicated image generation models.`
           }
         ],
-        imageData,
-        downloadUrl,
+        imageData: null, // No actual image data with Gemini 2.0 Flash
+        downloadUrl: null,
         metadata: {
           model: params.model,
           prompt: params.prompt,
           numberOfImages: params.numberOfImages,
           aspectRatio: params.aspectRatio,
           personGeneration: params.personGeneration,
-          responseText: text
+          responseText: text,
+          note: 'Gemini 2.0 Flash provides image descriptions. For actual image generation, use Imagen 3.'
         }
       };
 

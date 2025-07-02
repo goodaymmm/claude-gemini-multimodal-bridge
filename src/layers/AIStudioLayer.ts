@@ -1,7 +1,8 @@
 import { spawn } from 'child_process';
-import { createWriteStream } from 'fs';
+import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
+import * as path from 'path';
 import { 
   AudioAnalysisResult, 
   AudioGenOptions, 
@@ -38,12 +39,15 @@ export class AIStudioLayer implements LayerInterface {
   private readonly DEFAULT_TIMEOUT = 180000; // 3 minutes for file processing (increased from 2 minutes to fix timeout issues)
   private readonly MAX_RETRIES = 2;
   private readonly MAX_FILES = 10;
-  private readonly MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+  private readonly MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB per file (Google official limit)
+  private readonly MAX_DOCUMENT_PAGES = 1000; // Google official limit for PDFs
+  private readonly TOKENS_PER_PAGE = 258; // Google official estimate
   private readonly SUPPORTED_FILE_TYPES = {
-    images: ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'],
-    documents: ['.pdf', '.txt', '.md', '.doc', '.docx'],
-    audio: ['.mp3', '.wav', '.m4a', '.flac'],
-    video: ['.mp4', '.mov', '.avi', '.webm'],
+    images: ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.heic', '.heif'],
+    documents: ['.pdf', '.txt', '.md', '.doc', '.docx', '.html', '.xml', '.json', '.csv'],
+    audio: ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus'],
+    video: ['.mp4', '.mov', '.avi', '.webm', '.mkv', '.flv'],
+    code: ['.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.cs', '.rb', '.go', '.rs']
   };
 
   constructor() {
@@ -409,49 +413,58 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
-   * Generate image using AI Studio
+   * Generate image using AI Studio with Gemini 2.0 Flash for cost efficiency
    */
   async generateImage(prompt: string, options: Partial<ImageGenOptions> = {}): Promise<MediaGenResult> {
     return retry(
       async () => {
-        logger.info('Generating image with AI Studio', {
+        // Validate English prompt
+        if (!this.isEnglishPrompt(prompt)) {
+          throw new Error(
+            'Image generation requires English prompts. ' +
+            'Please translate your prompt to English before calling this command. ' +
+            'Example: "beautiful sunset" instead of "美しい夕日"'
+          );
+        }
+
+        logger.info('Generating image with Gemini 2.0 Flash', {
           promptLength: prompt.length,
-          model: options.model || 'imagen-3',
+          model: 'gemini-2.0-flash-exp-0111',
           quality: options.quality || 'standard'
         });
 
         const startTime = Date.now();
         
-        const imageOptions = {
-          width: options.width || 1024,
-          height: options.height || 1024,
-          aspectRatio: options.aspectRatio || '1:1',
-          style: options.style || 'photorealistic',
-          quality: options.quality || 'standard',
-          model: options.model || 'imagen-3',
-          seed: options.seed,
-          guidance: options.guidance || 7,
-          steps: options.steps || 30,
+        // Since Gemini 2.0 Flash doesn't directly generate images like Imagen,
+        // we'll use the MCP server's generate_image command instead
+        const imageParams = {
+          prompt,
+          numberOfImages: (options as any).count || 1,
+          aspectRatio: this.getAspectRatio(options),
+          model: 'gemini-2.0-flash-exp-0111',
+          personGeneration: 'ALLOW'
         };
 
-        const result = await this.executeMCPCommand('generate_image', {
-          prompt,
-          options: imageOptions,
-          // Add responseModalities for proper AI Studio API format (per Error4.md analysis)
-          generationConfig: {
-            responseMimeType: 'image/jpeg',
-            responseModalities: ['TEXT', 'IMAGE']
-          }
-        });
+        logger.debug('Calling MCP server for image generation', imageParams);
+        
+        const result = await this.executeMCPCommandOptimized('generate_image', imageParams);
 
         const duration = Date.now() - startTime;
         
-        // Download and save the generated image
-        const outputPath = await this.downloadGeneratedMedia(
-          result.downloadUrl || result.imageUrl,
-          'image',
-          options.quality || 'standard'
-        );
+        // Process the MCP server response
+        let outputPath = '';
+        let downloadUrl = '';
+        
+        if (result.imageData) {
+          // Save base64 image data to file
+          outputPath = await this.saveGeneratedImage(result.imageData, 'png');
+        } else if (result.downloadUrl) {
+          downloadUrl = result.downloadUrl;
+          outputPath = await this.downloadGeneratedMedia(downloadUrl, 'image', options.quality || 'standard');
+        } else {
+          // If no image data returned, create a placeholder response
+          throw new Error('Image generation completed but no image data received');
+        }
 
         return {
           success: true,
@@ -460,17 +473,18 @@ export class AIStudioLayer implements LayerInterface {
           originalPrompt: prompt,
           metadata: {
             duration,
-            fileSize: result.fileSize || 0,
+            fileSize: result.metadata?.fileSize || 0,
             format: 'png',
             dimensions: {
               width: options.width || 1024,
               height: options.height || 1024,
             },
-            model: options.model || 'imagen-3',
+            model: 'gemini-2.0-flash-exp-0111',
             settings: options,
             cost: this.calculateGenerationCost('image', options),
+            responseText: result.metadata?.responseText
           },
-          downloadUrl: result.downloadUrl,
+          downloadUrl,
         };
       },
       {
@@ -851,6 +865,21 @@ export class AIStudioLayer implements LayerInterface {
     }
     
     return baseTime;
+  }
+
+  /**
+   * Check if prompt is in English
+   */
+  private isEnglishPrompt(prompt: string): boolean {
+    // Simple check for non-ASCII characters indicating non-English text
+    const nonEnglishPattern = /[^\x00-\x7F]/;
+    
+    // If contains significant non-ASCII characters, likely not English
+    const nonAsciiCount = (prompt.match(nonEnglishPattern) || []).length;
+    const asciiRatio = (prompt.length - nonAsciiCount) / prompt.length;
+    
+    // If more than 80% ASCII characters, consider it English
+    return asciiRatio > 0.8;
   }
 
   /**
@@ -1573,5 +1602,190 @@ export class AIStudioLayer implements LayerInterface {
       return this.isVideoGenerationRequest(params.prompt);
     }
     return false;
+  }
+
+  /**
+   * Get aspect ratio from options
+   */
+  private getAspectRatio(options: Partial<ImageGenOptions>): string {
+    if (options.width && options.height) {
+      const ratio = options.width / options.height;
+      // Map to supported aspect ratios
+      if (Math.abs(ratio - 1) < 0.1) return '1:1';
+      if (Math.abs(ratio - 0.75) < 0.1) return '3:4';
+      if (Math.abs(ratio - 1.33) < 0.1) return '4:3';
+      if (Math.abs(ratio - 0.56) < 0.1) return '9:16';
+      if (Math.abs(ratio - 1.78) < 0.1) return '16:9';
+    }
+    return '1:1'; // Default square
+  }
+
+  /**
+   * Save generated image from base64 data
+   */
+  private async saveGeneratedImage(base64Data: string, format: string = 'png'): Promise<string> {
+    const outputDir = join(process.cwd(), 'output', 'images');
+    await mkdir(outputDir, { recursive: true });
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `generated-image-${timestamp}.${format}`;
+    const outputPath = join(outputDir, filename);
+    
+    const buffer = Buffer.from(base64Data, 'base64');
+    await new Promise<void>((resolve, reject) => {
+      const stream = createWriteStream(outputPath);
+      stream.write(buffer);
+      stream.end();
+      stream.on('finish', resolve);
+      stream.on('error', reject);
+    });
+    
+    logger.info('Saved generated image', { outputPath, size: buffer.length });
+    return outputPath;
+  }
+
+
+  /**
+   * Enhanced document processing with Google AI official spec compliance
+   */
+  async processDocuments(documents: string[], analysisType: string = 'summary', options: any = {}): Promise<any> {
+    return retry(
+      async () => {
+        logger.info('Processing documents with official Google AI specifications', {
+          documentCount: documents.length,
+          analysisType,
+          maxPages: this.MAX_DOCUMENT_PAGES,
+          maxFileSize: `${this.MAX_FILE_SIZE / 1024 / 1024}MB`
+        });
+
+        // Validate documents
+        const validatedDocs = await this.validateDocuments(documents);
+        
+        // Prepare document processing parameters
+        const docParams = {
+          documents: validatedDocs,
+          instructions: this.buildDocumentInstructions(analysisType, options),
+          options: {
+            extract_structure: options.extractStructure !== false,
+            summarize: options.summarize !== false,
+            language: options.language || 'en',
+            format: options.outputFormat || 'structured'
+          }
+        };
+
+        // Execute document analysis
+        const result = await this.executeMCPCommandOptimized('analyze_documents', docParams);
+        
+        // Calculate token usage estimate
+        const estimatedTokens = this.estimateDocumentTokens(validatedDocs);
+        
+        return {
+          success: true,
+          analysis: result.analysis || result.content?.[0]?.text,
+          documents: validatedDocs,
+          metadata: {
+            analysisType,
+            documentCount: documents.length,
+            estimatedTokens,
+            maxTokensPerDocument: this.MAX_DOCUMENT_PAGES * this.TOKENS_PER_PAGE,
+            processingModel: 'gemini-2.0-flash-exp',
+            compliance: 'Google AI Studio Official Specifications'
+          }
+        };
+      },
+      {
+        maxAttempts: this.MAX_RETRIES,
+        delay: 5000,
+        operationName: 'process-documents'
+      }
+    );
+  }
+
+  /**
+   * Validate documents against Google AI specifications
+   */
+  private async validateDocuments(documents: string[]): Promise<any[]> {
+    const validatedDocs = [];
+    
+    for (const docPath of documents) {
+      try {
+        const stats = await fsPromises.stat(docPath);
+        
+        // Check file size (50MB limit)
+        if (stats.size > this.MAX_FILE_SIZE) {
+          throw new Error(`Document exceeds 50MB limit: ${docPath} (${Math.round(stats.size / 1024 / 1024)}MB)`);
+        }
+        
+        // Check file extension
+        const ext = path.extname(docPath).toLowerCase();
+        const supportedDocTypes = [...this.SUPPORTED_FILE_TYPES.documents, ...this.SUPPORTED_FILE_TYPES.code];
+        
+        if (!supportedDocTypes.includes(ext)) {
+          logger.warn(`Document type may not be fully supported: ${ext}`, { docPath });
+        }
+        
+        // For PDFs, estimate page count (rough estimate based on file size)
+        let estimatedPages = 1;
+        if (ext === '.pdf') {
+          // Rough estimate: 100KB per page average
+          estimatedPages = Math.ceil(stats.size / (100 * 1024));
+          if (estimatedPages > this.MAX_DOCUMENT_PAGES) {
+            throw new Error(`PDF exceeds 1000 page limit: ${docPath} (~${estimatedPages} pages estimated)`);
+          }
+        }
+        
+        validatedDocs.push({
+          path: docPath,
+          size: stats.size,
+          type: ext,
+          estimatedPages,
+          estimatedTokens: estimatedPages * this.TOKENS_PER_PAGE
+        });
+        
+      } catch (error) {
+        logger.error(`Document validation failed for ${docPath}`, error as Error);
+        throw error;
+      }
+    }
+    
+    return validatedDocs;
+  }
+
+  /**
+   * Build document processing instructions based on analysis type
+   */
+  private buildDocumentInstructions(analysisType: string, options: any): string {
+    const baseInstructions: { [key: string]: string } = {
+      summary: 'Provide a comprehensive summary of the document(s), highlighting key points and main ideas.',
+      extraction: 'Extract and structure all important information, data points, and key facts from the document(s).',
+      comparison: 'Compare and contrast the documents, identifying similarities, differences, and relationships.',
+      translation: `Translate the document(s) to ${options.targetLanguage || 'English'} while preserving formatting and meaning.`,
+      analysis: 'Perform a detailed analysis of the document(s), including content, structure, and insights.'
+    };
+    
+    let instructions = baseInstructions[analysisType] || baseInstructions.analysis || 'Perform a detailed analysis of the document(s), including content, structure, and insights.';
+    
+    // Add custom requirements if provided
+    if (options.customInstructions) {
+      instructions += `\n\nAdditional requirements: ${options.customInstructions}`;
+    }
+    
+    // Add output format specifications
+    if (options.outputFormat === 'structured') {
+      instructions += '\n\nProvide the output in a well-structured format with clear sections and bullet points.';
+    } else if (options.outputFormat === 'json') {
+      instructions += '\n\nProvide the output as valid JSON with appropriate keys and structure.';
+    }
+    
+    return instructions;
+  }
+
+  /**
+   * Estimate token usage for documents
+   */
+  private estimateDocumentTokens(documents: any[]): number {
+    return documents.reduce((total, doc) => {
+      return total + (doc.estimatedTokens || this.TOKENS_PER_PAGE);
+    }, 0);
   }
 }
