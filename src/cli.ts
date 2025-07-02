@@ -11,6 +11,7 @@ import fs from 'fs';
 import { OAuthManager } from './auth/OAuthManager.js';
 import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
+import { LayerManager } from './core/LayerManager.js';
 
 // ===================================
 // Helper Functions for CLI Commands
@@ -1318,6 +1319,271 @@ program
     } catch (error) {
       logger.error('❌ Multimodal processing failed', error as Error);
       logger.info('💡 Try: cgmb verify');
+      process.exit(1);
+    }
+  });
+
+// Generate Image command
+program
+  .command('generate-image <prompt>')
+  .description('Generate an image using AI Studio')
+  .option('-s, --style <style>', 'Art style (photorealistic, cartoon, digital-art)', 'digital-art')
+  .option('-o, --output <path>', 'Output file path')
+  .option('--safe-mode', 'Use extra-safe prompt formatting', true)
+  .action(async (prompt, options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('🎨 Generating image with AI Studio...');
+      
+      // Add safety prefix if safe mode is enabled
+      let safePrompt = prompt;
+      if (options.safeMode) {
+        // Add safe prefixes to avoid content policy issues
+        const safetyPrefixes = [
+          'digital illustration of',
+          'artistic rendering of',
+          'professional diagram showing',
+          'creative visualization of',
+          'stylized representation of'
+        ];
+        const prefix = safetyPrefixes[Math.floor(Math.random() * safetyPrefixes.length)];
+        safePrompt = `${prefix} ${prompt}`;
+      }
+      
+      const defaultConfig = {
+        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+        cache: { enabled: true, ttl: 3600 },
+        logging: { level: 'info' as const }
+      };
+      const aiStudioLayer = new LayerManager(defaultConfig).getAIStudioLayer();
+      await aiStudioLayer.initialize();
+      
+      const result = await aiStudioLayer.generateImage(safePrompt, {
+        style: options.style,
+        quality: 'high',
+        aspectRatio: '1:1'
+      });
+      
+      if (result.success && result.outputPath) {
+        if (options.output) {
+          // Copy generated file to desired location
+          await fs.promises.copyFile(result.outputPath, options.output);
+          console.log(`✅ Image saved to: ${options.output}`);
+        } else {
+          console.log('✅ Image generated successfully!');
+          console.log(`📁 Generated at: ${result.outputPath}`);
+          console.log(`📊 Size: ${result.metadata?.dimensions?.width}x${result.metadata?.dimensions?.height || 'Unknown'}`);
+          console.log(`🖼️  Format: ${result.metadata?.format || 'PNG'}`);
+          console.log('\n💡 Use --output flag to save the image to a specific location.');
+        }
+      } else {
+        console.error('❌ Image generation failed:', result.error || 'Unknown error');
+        if (result.error?.includes('content policy')) {
+          console.log('\n💡 Try modifying your prompt to be more specific or descriptive.');
+          console.log('   Example: "professional illustration of a happy cat in a garden"');
+        }
+      }
+    } catch (error) {
+      logger.error('Image generation failed', error as Error);
+      console.error('❌ Failed to generate image:', (error as Error).message);
+      console.log('\n💡 Troubleshooting tips:');
+      console.log('   1. Check your AI Studio API key: cgmb auth-status');
+      console.log('   2. Try a simpler prompt');
+      console.log('   3. Use --safe-mode flag (enabled by default)');
+      process.exit(1);
+    }
+  });
+
+// Generate Audio command
+program
+  .command('generate-audio <text>')
+  .description('Generate audio/speech from text using AI Studio')
+  .option('-v, --voice <voice>', 'Voice name (Kore, Puck, etc.)', 'Kore')
+  .option('-o, --output <path>', 'Output audio file path')
+  .option('--script', 'Generate script first then convert to audio')
+  .action(async (text, options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('🎵 Generating audio with AI Studio...');
+      
+      const defaultConfig = {
+        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+        cache: { enabled: true, ttl: 3600 },
+        logging: { level: 'info' as const }
+      };
+      const aiStudioLayer = new LayerManager(defaultConfig).getAIStudioLayer();
+      await aiStudioLayer.initialize();
+      
+      let result;
+      if (options.script) {
+        console.log('📝 Generating audio script first...');
+        result = await aiStudioLayer.generateAudioWithScript(text);
+      } else {
+        result = await aiStudioLayer.generateAudio(text, {
+          voice: options.voice,
+          format: 'wav',
+          quality: 'hd'
+        });
+      }
+      
+      if (result.success && result.outputPath) {
+        if (options.output) {
+          // Copy generated file to desired location
+          await fs.promises.copyFile(result.outputPath, options.output);
+          console.log(`✅ Audio saved to: ${options.output}`);
+        } else {
+          console.log('✅ Audio generated successfully!');
+          console.log(`📁 Generated at: ${result.outputPath}`);
+          console.log(`🎤 Voice: ${options.voice}`);
+          console.log(`📊 Format: ${result.metadata?.format || 'WAV'}`);
+          console.log('\n💡 Use --output flag to save the audio to a specific location.');
+        }
+      } else {
+        console.error('❌ Audio generation failed:', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      logger.error('Audio generation failed', error as Error);
+      console.error('❌ Failed to generate audio:', (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Analyze command
+program
+  .command('analyze <files...>')
+  .description('Analyze documents using AI Studio')
+  .option('-t, --type <type>', 'Analysis type (summary, extract, compare)', 'summary')
+  .option('-p, --prompt <prompt>', 'Custom analysis prompt')
+  .action(async (files, options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('📄 Analyzing documents with AI Studio...');
+      console.log(`📁 Files: ${files.join(', ')}`);
+      
+      const defaultConfig = {
+        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+        cache: { enabled: true, ttl: 3600 },
+        logging: { level: 'info' as const }
+      };
+      const layerManager = new LayerManager(defaultConfig);
+      const analysisPrompt = options.prompt || `Please ${options.type} these documents`;
+      
+      const result = await layerManager.executeWithOptimalLayer({
+        prompt: analysisPrompt,
+        files: files.map((f: string) => ({ path: f, type: 'document' as const })),
+        options: {
+          analysisType: options.type,
+          depth: 'deep'
+        }
+      });
+      
+      if (result.success) {
+        console.log('\n✅ Analysis complete!');
+        console.log('═'.repeat(50));
+        console.log(result.data || 'Analysis completed');
+        console.log('═'.repeat(50));
+        
+        if (result.metadata) {
+          console.log('\n📊 Analysis Metadata:');
+          console.log(`   Layer used: ${result.metadata.layer || 'Unknown'}`);
+          console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
+        }
+      } else {
+        console.error('❌ Analysis failed:', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      logger.error('Document analysis failed', error as Error);
+      console.error('❌ Failed to analyze documents:', (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Multimodal command
+program
+  .command('multimodal <files...>')
+  .description('Process multiple files with AI (images, PDFs, audio, etc.)')
+  .option('-p, --prompt <prompt>', 'Processing prompt', 'Analyze and summarize these files')
+  .option('-w, --workflow <type>', 'Workflow type (analysis, conversion, extraction)', 'analysis')
+  .option('-o, --output <format>', 'Output format (text, json, markdown)', 'text')
+  .action(async (files, options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('🎯 Processing multimodal content...');
+      console.log(`📁 Files: ${files.join(', ')}`);
+      
+      const defaultConfig = {
+        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+        cache: { enabled: true, ttl: 3600 },
+        logging: { level: 'info' as const }
+      };
+      const layerManager = new LayerManager(defaultConfig);
+      
+      // Detect file types
+      const fileRefs = files.map((file: string) => {
+        const ext = path.extname(file).toLowerCase();
+        let type: string = 'document';
+        if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) type = 'image';
+        else if (['.pdf'].includes(ext)) type = 'pdf';
+        else if (['.mp3', '.wav', '.m4a'].includes(ext)) type = 'audio';
+        return { path: file, type };
+      });
+      
+      console.log('📊 Detected file types:', fileRefs.map((f: any) => `${f.path} (${f.type})`).join(', '));
+      
+      const result = await layerManager.executeWithOptimalLayer({
+        prompt: options.prompt,
+        files: fileRefs,
+        options: {
+          workflow: options.workflow,
+          outputFormat: options.output,
+          execution_mode: 'adaptive'
+        }
+      });
+      
+      if (result.success) {
+        console.log('\n✅ Processing complete!');
+        console.log('═'.repeat(50));
+        
+        if (options.output === 'json' && result.data) {
+          console.log(JSON.stringify(result.data, null, 2));
+        } else {
+          console.log(result.data || 'Analysis completed');
+        }
+        
+        console.log('═'.repeat(50));
+        
+        if (result.metadata) {
+          console.log('\n📊 Processing Details:');
+          console.log(`   Layer used: ${result.metadata.layer || 'Unknown'}`);
+          console.log(`   Files processed: ${files.length}`);
+          console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
+        }
+      } else {
+        console.error('❌ Multimodal processing failed:', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      logger.error('Multimodal processing failed', error as Error);
+      console.error('❌ Failed to process files:', (error as Error).message);
+      console.log('\n💡 Tips:');
+      console.log('   1. Ensure all files exist and are accessible');
+      console.log('   2. Check supported formats: images, PDFs, audio, text');
+      console.log('   3. Verify API keys: cgmb auth-status');
       process.exit(1);
     }
   });

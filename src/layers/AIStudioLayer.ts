@@ -434,10 +434,30 @@ export class AIStudioLayer implements LayerInterface {
 
         const startTime = Date.now();
         
+        // Add safety prefix to prompt if needed
+        let safePrompt = prompt;
+        const safetyPrefixes = [
+          'digital illustration of',
+          'artistic rendering of',
+          'professional diagram showing',
+          'creative visualization of',
+          'stylized representation of'
+        ];
+        
+        const hasPrefix = safetyPrefixes.some(prefix => 
+          prompt.toLowerCase().startsWith(prefix)
+        );
+        
+        if (!hasPrefix) {
+          const prefix = safetyPrefixes[Math.floor(Math.random() * safetyPrefixes.length)];
+          safePrompt = `${prefix} ${prompt}`;
+          logger.info('Added safety prefix to prompt', { original: prompt, safe: safePrompt });
+        }
+        
         // Since Gemini 2.0 Flash doesn't directly generate images like Imagen,
         // we'll use the MCP server's generate_image command instead
         const imageParams = {
-          prompt,
+          prompt: safePrompt,
           numberOfImages: (options as any).count || 1,
           aspectRatio: this.getAspectRatio(options),
           model: 'gemini-2.0-flash-exp-0111',
@@ -484,12 +504,20 @@ export class AIStudioLayer implements LayerInterface {
             responseText: result.metadata?.responseText
           },
           downloadUrl,
+          media: result.imageData ? {
+            type: 'image',
+            data: result.imageData,
+            metadata: {
+              format: 'png',
+              dimensions: `${options.width || 1024}x${options.height || 1024}`
+            }
+          } : undefined
         };
       },
       {
         maxAttempts: this.MAX_RETRIES,
         delay: 5000,
-        operationName: 'generate-image',
+        operationName: 'generate-image'
       }
     );
   }

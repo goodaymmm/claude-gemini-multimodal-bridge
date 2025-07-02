@@ -239,6 +239,21 @@ cgmb gemini -p "Quick question" --fast
 # Direct AI Studio for multimodal processing  
 cgmb aistudio -p "Create business infographic" -f image1.png document.pdf
 
+# 🎨 NEW: Image generation with content policy safety
+cgmb generate-image "cute cat in a garden" --output cat.png
+cgmb generate-image "robot assistant" --style photorealistic
+
+# 🎵 NEW: Audio generation with TTS
+cgmb generate-audio "Welcome to our podcast" --voice Kore --output welcome.wav
+cgmb generate-audio "Create intro music" --script  # Two-step generation
+
+# 📄 NEW: Document analysis
+cgmb analyze report.pdf --type summary
+cgmb analyze doc1.pdf doc2.pdf --type compare
+
+# 🎯 NEW: Multimodal processing
+cgmb multimodal image.png document.pdf audio.mp3 --prompt "Create comprehensive report"
+
 # Intelligent layer routing for complex tasks
 cgmb process -p "Comprehensive market analysis" -w analysis -f data.csv --strategy adaptive
 
@@ -845,6 +860,80 @@ cgmb test                          # Basic functionality test
 cgmb test --file image.png         # Test with specific file
 cgmb test --prompt "Custom prompt" # Test with custom prompt
 ```
+
+---
+
+### Content Generation Commands
+
+#### `cgmb generate-image`
+Generate images using AI Studio with automatic content policy safety.
+
+```bash
+cgmb generate-image "cute cat"                              # Basic generation
+cgmb generate-image "robot assistant" --style photorealistic # With style
+cgmb generate-image "landscape" --output landscape.png      # Save to file
+cgmb generate-image "diagram" --safe-mode                   # Extra safety (default: on)
+```
+
+**Options:**
+- `-s, --style <style>`: Art style (photorealistic, cartoon, digital-art)
+- `-o, --output <path>`: Save image to file
+- `--safe-mode`: Use extra-safe prompt formatting (enabled by default)
+
+**Content Policy Notes:**
+- CGMB automatically adds safe prefixes like "digital illustration of"
+- If generation fails, try more descriptive prompts
+- Example: Instead of "cat", use "professional illustration of a happy cat"
+
+---
+
+#### `cgmb generate-audio`
+Generate audio/speech from text using AI Studio TTS.
+
+```bash
+cgmb generate-audio "Hello world"                           # Basic TTS
+cgmb generate-audio "Welcome" --voice Puck                  # Different voice
+cgmb generate-audio "Announcement" --output announce.wav    # Save to file
+cgmb generate-audio "Create podcast intro" --script         # Two-step generation
+```
+
+**Options:**
+- `-v, --voice <voice>`: Voice name (Kore, Puck, etc.)
+- `-o, --output <path>`: Save audio to file
+- `--script`: Generate script first then convert to audio
+
+---
+
+#### `cgmb analyze`
+Analyze documents using AI Studio's multimodal capabilities.
+
+```bash
+cgmb analyze document.pdf                                    # Basic analysis
+cgmb analyze doc1.pdf doc2.pdf --type compare              # Compare documents
+cgmb analyze report.pdf --type extract                      # Extract data
+cgmb analyze paper.pdf --prompt "Summarize methodology"     # Custom analysis
+```
+
+**Options:**
+- `-t, --type <type>`: Analysis type (summary, extract, compare)
+- `-p, --prompt <prompt>`: Custom analysis prompt
+
+---
+
+#### `cgmb multimodal`
+Process multiple files with AI (images, PDFs, audio, etc.).
+
+```bash
+cgmb multimodal file1.png file2.pdf                        # Basic processing
+cgmb multimodal *.jpg --workflow conversion                # Batch conversion
+cgmb multimodal mixed.* --prompt "Create report"           # Custom processing
+cgmb multimodal data.* --output json                       # JSON output
+```
+
+**Options:**
+- `-p, --prompt <prompt>`: Processing prompt
+- `-w, --workflow <type>`: Workflow type (analysis, conversion, extraction)
+- `-o, --output <format>`: Output format (text, json, markdown)
 
 ## 📊 Performance & Optimization
 
