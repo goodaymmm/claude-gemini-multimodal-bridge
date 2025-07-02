@@ -498,45 +498,65 @@ export class AIStudioLayer implements LayerInterface {
           logger.info('Added safety prefix to prompt', { original: prompt, safe: safePrompt });
         }
         
-        // Since Gemini 2.0 Flash doesn't directly generate images like Imagen,
-        // we'll use the MCP server's generate_image command instead
-        const imageParams = {
-          prompt: safePrompt,
-          numberOfImages: (options as any).count || 1,
-          aspectRatio: this.getAspectRatio(options),
-          model: AI_MODELS.IMAGE_GENERATION,
-          personGeneration: 'ALLOW'
-        };
-
-        logger.debug('Calling MCP server for image generation', imageParams);
+        // Direct Google AI Studio image generation API call
+        if (!this.genAI) {
+          throw new Error('Google AI Studio API client not initialized. Please set AI_STUDIO_API_KEY environment variable.');
+        }
         
-        const result = await this.executeMCPCommandOptimized('generate_image', imageParams);
+        const response = await this.genAI.models.generateContent({
+          model: AI_MODELS.IMAGE_GENERATION,
+          contents: [{ parts: [{ text: safePrompt }] }],
+          config: {
+            responseModalities: [Modality.TEXT, Modality.IMAGE],
+          },
+        });
+
+        let imageData = null;
+        let textContent = '';
+        
+        // Extract image data from response according to official docs
+        if (response.candidates?.[0]?.content?.parts) {
+          for (const part of response.candidates[0].content.parts) {
+            if (part.text) {
+              textContent = part.text;
+            } else if (part.inlineData) {
+              imageData = part.inlineData.data;
+            }
+          }
+        }
+
+        if (!imageData) {
+          throw new Error('Image generation completed but no image data received from API');
+        }
+
+        // Save the generated image
+        const outputDir = path.join(process.cwd(), 'output', 'images');
+        await fsPromises.mkdir(outputDir, { recursive: true });
+        
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `generated-image-${timestamp}.png`;
+        const savedFilePath = path.join('output', 'images', filename);
+        const absolutePath = path.join(outputDir, filename);
+        
+        const buffer = Buffer.from(imageData, 'base64');
+        await fsPromises.writeFile(absolutePath, buffer);
+        const fileSize = buffer.length;
+        
+        logger.info('Saved generated image', {
+          outputPath: absolutePath,
+          size: fileSize
+        });
 
         const duration = Date.now() - startTime;
-        
-        // Process the MCP server response
-        let outputPath = '';
-        let downloadUrl = '';
-        
-        if (result.imageData) {
-          // Save base64 image data to file
-          outputPath = await this.saveGeneratedImage(result.imageData, 'png');
-        } else if (result.downloadUrl) {
-          downloadUrl = result.downloadUrl;
-          outputPath = await this.downloadGeneratedMedia(downloadUrl, 'image', options.quality || 'standard');
-        } else {
-          // If no image data returned, create a placeholder response
-          throw new Error('Image generation completed but no image data received');
-        }
 
         return {
           success: true,
           generationType: 'image' as GenerationType,
-          outputPath,
+          outputPath: savedFilePath,
           originalPrompt: prompt,
           metadata: {
             duration,
-            fileSize: result.metadata?.fileSize || 0,
+            fileSize,
             format: 'png',
             dimensions: {
               width: options.width || 1024,
@@ -545,17 +565,16 @@ export class AIStudioLayer implements LayerInterface {
             model: AI_MODELS.IMAGE_GENERATION,
             settings: options,
             cost: this.calculateGenerationCost('image', options),
-            responseText: result.metadata?.responseText
+            responseText: textContent
           },
-          downloadUrl,
-          media: result.imageData ? {
+          media: {
             type: 'image',
-            data: result.imageData,
+            data: imageData,
             metadata: {
               format: 'png',
               dimensions: `${options.width || 1024}x${options.height || 1024}`
             }
-          } : undefined
+          }
         };
       },
       {
@@ -587,50 +606,42 @@ export class AIStudioLayer implements LayerInterface {
           throw new Error('Google AI Studio API client not initialized. Please set AI_STUDIO_API_KEY environment variable.');
         }
         
-        // Direct Google AI Studio TTS API call (same pattern as image generation)
+        // Direct Google AI Studio TTS API call (official documentation compliant)
         try {
           const response = await this.genAI.models.generateContent({
             model: AI_MODELS.AUDIO_GENERATION,
-            contents: text,
+            contents: [{ parts: [{ text }] }],
             config: {
-              responseModalities: [Modality.TEXT, Modality.AUDIO],
+              responseModalities: ['AUDIO'],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: options.voice || 'Kore' }
+                }
+              }
             },
           });
 
-          let audioData = null;
-          let textContent = '';
-          
-          // Extract audio data from response
-          if (response.candidates?.[0]?.content?.parts) {
-            for (const part of response.candidates[0].content.parts) {
-              if (part.text) {
-                textContent = part.text;
-              } else if (part.inlineData) {
-                audioData = part.inlineData.data;
-              }
-            }
-          }
+          // Extract audio data from response (official documentation format)
+          const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
 
           // Save the generated audio if we have data
-          let outputPath = '';
-          let fileSize = 0;
-          if (audioData) {
-            const outputDir = path.join(process.cwd(), 'output', 'audio');
-            await fsPromises.mkdir(outputDir, { recursive: true });
-            
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const format = options.format || 'mp3';
-            const filename = `generated-audio-${timestamp}.${format}`;
-            const relativePath = path.join('output', 'audio', filename);
-            const absolutePath = path.join(outputDir, filename);
-            
-            const buffer = Buffer.from(audioData, 'base64');
-            await fsPromises.writeFile(absolutePath, buffer);
-            fileSize = buffer.length;
-            outputPath = relativePath;
-          } else {
-            throw new Error('Audio generation completed but no audio data received');
+          if (!audioData) {
+            throw new Error('Audio generation failed: No audio data received from API');
           }
+
+          const outputDir = path.join(process.cwd(), 'output', 'audio');
+          await fsPromises.mkdir(outputDir, { recursive: true });
+          
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const format = 'wav'; // Google TTS returns WAV format
+          const filename = `generated-audio-${timestamp}.${format}`;
+          const relativePath = path.join('output', 'audio', filename);
+          const absolutePath = path.join(outputDir, filename);
+          
+          const buffer = Buffer.from(audioData, 'base64');
+          await fsPromises.writeFile(absolutePath, buffer);
+          const fileSize = buffer.length;
+          const outputPath = relativePath;
 
           const duration = Date.now() - startTime;
 
@@ -642,12 +653,11 @@ export class AIStudioLayer implements LayerInterface {
             metadata: {
               duration,
               fileSize,
-              format: options.format || 'mp3',
+              format: 'wav',
               model: AI_MODELS.AUDIO_GENERATION,
               settings: options,
               cost: this.calculateGenerationCost('audio', options),
-              voice: options.voice || 'Kore',
-              responseText: textContent
+              voice: options.voice || 'Kore'
             },
             downloadUrl: undefined,
           };

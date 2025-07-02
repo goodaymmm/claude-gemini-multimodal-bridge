@@ -157,10 +157,10 @@ export class LayerManager {
     // Analyze file types and complexity
     const fileTypes = files.map((f: FileReference) => f.type || this.detectFileType(f.path));
     const hasFiles = files.length > 0;
-    const hasImages = fileTypes.some((type: string) => ['image', 'png', 'jpg', 'jpeg', 'gif', 'webp'].includes(type));
-    const hasDocuments = fileTypes.some((type: string) => ['pdf', 'doc', 'docx', 'txt', 'md'].includes(type));
-    const hasAudio = fileTypes.some((type: string) => ['audio', 'mp3', 'wav', 'm4a'].includes(type));
-    const hasVideo = fileTypes.some((type: string) => ['video', 'mp4', 'mov', 'avi'].includes(type));
+    const hasImages = fileTypes.some((type: string) => ['image'].includes(type));
+    const hasDocuments = fileTypes.some((type: string) => ['pdf', 'document', 'text'].includes(type));
+    const hasAudio = fileTypes.some((type: string) => ['audio'].includes(type));
+    const hasVideo = fileTypes.some((type: string) => ['video'].includes(type));
     
     // Analyze prompt characteristics
     const promptLength = prompt.length;
@@ -173,12 +173,13 @@ export class LayerManager {
     let preferredLayer: LayerType;
     let reasoning: string;
     
-    if (isGenerationTask && (hasImages || hasAudio || hasVideo || prompt.includes('generate') || prompt.includes('create'))) {
-      preferredLayer = 'aistudio';
-      reasoning = 'Generation task requiring AI Studio capabilities (Imagen 3, Veo 2)';
-    } else if (hasFiles && (hasImages || hasDocuments || hasAudio || hasVideo)) {
+    // Priority 1: File processing (multimodal content)
+    if (hasFiles && (hasImages || hasDocuments || hasAudio || hasVideo)) {
       preferredLayer = 'aistudio';
       reasoning = 'Multimodal files requiring AI Studio processing';
+    } else if (isGenerationTask && (hasImages || hasAudio || hasVideo || prompt.includes('generate') || prompt.includes('create'))) {
+      preferredLayer = 'aistudio';
+      reasoning = 'Generation task requiring AI Studio capabilities (Imagen 3, Veo 2)';
     } else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
       preferredLayer = 'gemini';
       reasoning = 'Current information or search required - Gemini CLI optimal';
