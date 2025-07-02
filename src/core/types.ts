@@ -7,6 +7,10 @@ import { z } from 'zod';
 // Layer Types
 export const LayerTypeSchema = z.enum(['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator']);
 export type LayerType = z.infer<typeof LayerTypeSchema>;
+
+// Target Layer Types for direct routing
+export const TargetLayerSchema = z.enum(['gemini', 'aistudio', 'adaptive']);
+export type TargetLayer = z.infer<typeof TargetLayerSchema>;
 export const ExecutionModeSchema = z.enum(['sequential', 'parallel', 'adaptive']);
 export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
 export const QualityLevelSchema = z.enum(['fast', 'balanced', 'quality']);
@@ -15,7 +19,7 @@ export const WorkflowTypeSchema = z.enum(['analysis', 'conversion', 'extraction'
 export type WorkflowType = z.infer<typeof WorkflowTypeSchema>;
 
 // Analysis Types
-export type AnalysisType = 'content' | 'comparative' | 'thematic' | 'sentiment' | 'trend' | 'statistical';
+export type AnalysisType = 'content' | 'comparative' | 'thematic' | 'sentiment' | 'trend' | 'statistical' | 'comprehensive' | 'contextual' | 'summarization' | 'extraction';
 
 // File Types
 export const FileTypeSchema = z.enum([
@@ -52,6 +56,7 @@ export const ProcessingOptionsSchema = z.object({
   detailed: z.boolean().optional(),
   extractionType: z.string().optional(),
   outputFormat: z.string().optional(), // Note: keeping both output_format and outputFormat for compatibility
+  preserveQuality: z.boolean().optional(),
 });
 export type ProcessingOptions = z.infer<typeof ProcessingOptionsSchema>;
 
@@ -69,8 +74,34 @@ export const DocumentAnalysisArgsSchema = z.object({
   analysis_type: z.enum(['summary', 'comparison', 'extraction', 'translation']),
   output_requirements: z.string().optional(),
   options: ProcessingOptionsSchema.optional(),
+  // Additional properties for compatibility
+  analysisType: z.enum(['summary', 'comparison', 'extraction', 'translation']).optional(),
+  extractImages: z.boolean().optional(),
+  extractStructuredData: z.boolean().optional(),
+  requiresGrounding: z.boolean().optional(),
+  depth: z.enum(['shallow', 'medium', 'deep']).optional(),
+  summaryLength: z.string().optional(),
+  dataTypes: z.array(z.string()).optional(),
+  comparisonType: z.string().optional(),
 });
 export type DocumentAnalysisArgs = z.infer<typeof DocumentAnalysisArgsSchema>;
+
+export const DocumentAnalysisResultSchema = z.object({
+  success: z.boolean(),
+  analysis_type: z.enum(['summary', 'comparison', 'extraction', 'translation']),
+  content: z.string(),
+  documents_processed: z.array(z.string()),
+  processing_time: z.number(),
+  insights: z.array(z.string()).optional(),
+  metadata: z.object({
+    total_duration: z.number(),
+    tokens_used: z.number().optional(),
+    cost: z.number().optional(),
+    quality_score: z.number().optional(),
+  }),
+  error: z.string().optional(),
+});
+export type DocumentAnalysisResult = z.infer<typeof DocumentAnalysisResultSchema>;
 
 // Workflow Definitions
 export const WorkflowStepSchema = z.object({
@@ -114,19 +145,26 @@ export const LayerResultSchema = z.object({
     tokens_used: z.number().optional(),
     cost: z.number().optional(),
     model: z.string().optional(),
+    fast_mode: z.boolean().optional(),
+    optimization: z.string().optional(),
+    retry_attempt: z.number().optional(),
   }),
 });
 export type LayerResult = z.infer<typeof LayerResultSchema>;
 
 export const WorkflowResultSchema = z.object({
   success: z.boolean(),
-  results: z.record(LayerResultSchema),
+  results: z.union([z.record(LayerResultSchema), z.array(LayerResultSchema)]),
   summary: z.string().optional(),
   metadata: z.object({
     total_duration: z.number(),
     steps_completed: z.number(),
     steps_failed: z.number(),
     total_cost: z.number().optional(),
+    workflow: z.string().optional(),
+    execution_mode: z.string().optional(),
+    layers_used: z.array(z.string()).optional(),
+    optimization: z.string().optional(),
   }),
 });
 export type WorkflowResult = z.infer<typeof WorkflowResultSchema>;
@@ -224,10 +262,18 @@ export type ImageAnalysisResult = z.infer<typeof ImageAnalysisResultSchema>;
 
 export const MultimodalResultSchema = z.object({
   content: z.string(),
+  success: z.boolean(),
   files_processed: z.array(z.string()),
   processing_time: z.number(),
-  tokens_used: z.number().optional(),
-  model_used: z.string(),
+  workflow_used: WorkflowTypeSchema,
+  layers_involved: z.array(LayerTypeSchema),
+  metadata: z.object({
+    total_duration: z.number(),
+    quality_level: QualityLevelSchema.optional(),
+    tokens_used: z.number().optional(),
+    cost: z.number().optional(),
+  }),
+  error: z.string().optional(),
 });
 export type MultimodalResult = z.infer<typeof MultimodalResultSchema>;
 
@@ -275,6 +321,148 @@ export const ReasoningResultSchema = z.object({
   steps: z.array(z.string()).optional(),
 });
 export type ReasoningResult = z.infer<typeof ReasoningResultSchema>;
+
+// ===================================
+// Layer Requirements and Formatting Types
+// ===================================
+
+// Layer requirement information
+export const LayerRequirementsSchema = z.object({
+  format: z.string(),
+  requirements: z.array(z.string()),
+  capabilities: z.array(z.string()),
+  example: z.record(z.any()),
+  limitations: z.array(z.string()).optional()
+});
+export type LayerRequirements = z.infer<typeof LayerRequirementsSchema>;
+
+// Formatted data for each layer
+export const FormattedLayerDataSchema = z.object({
+  geminiFormat: z.object({
+    stdin: z.string(),
+    args: z.array(z.string())
+  }).optional(),
+  aistudioFormat: z.object({
+    apiData: z.record(z.any()),
+    files: z.array(z.string()) // base64 encoded
+  }).optional()
+});
+export type FormattedLayerData = z.infer<typeof FormattedLayerDataSchema>;
+
+// Enhanced CGMB request with preformatting support
+export const EnhancedCGMBRequestSchema = z.object({
+  prompt: z.string(),
+  targetLayer: TargetLayerSchema.optional(),
+  preformatted: z.boolean().optional(),
+  formattedData: FormattedLayerDataSchema.optional(),
+  files: z.array(FileReferenceSchema).optional(),
+  options: ProcessingOptionsSchema.optional()
+});
+export type EnhancedCGMBRequest = z.infer<typeof EnhancedCGMBRequestSchema>;
+
+// ===================================
+// Media Generation Types and Schemas
+// ===================================
+
+// Media Generation Types
+export const GenerationTypeSchema = z.enum(['image', 'video', 'audio', 'music']);
+export type GenerationType = z.infer<typeof GenerationTypeSchema>;
+
+// Image Generation Options
+export const ImageGenOptionsSchema = z.object({
+  width: z.number().min(64).max(4096).optional(),
+  height: z.number().min(64).max(4096).optional(),
+  aspectRatio: z.enum(['1:1', '16:9', '9:16', '4:3', '3:4']).optional(),
+  style: z.enum(['photorealistic', 'artistic', 'cartoon', 'sketch', 'abstract']).optional(),
+  quality: z.enum(['draft', 'standard', 'high', 'ultra']).optional(),
+  model: z.enum(['imagen-3', 'imagen-2']).default('imagen-3'),
+  seed: z.number().optional(),
+  guidance: z.number().min(1).max(20).optional(),
+  steps: z.number().min(10).max(100).optional(),
+});
+export type ImageGenOptions = z.infer<typeof ImageGenOptionsSchema>;
+
+// Video Generation Options  
+export const VideoGenOptionsSchema = z.object({
+  width: z.number().min(256).max(2048).optional(),
+  height: z.number().min(256).max(2048).optional(),
+  duration: z.number().min(1).max(30).optional(), // seconds
+  fps: z.enum(['24', '30', '60']).default('30'),
+  quality: z.enum(['draft', 'standard', 'high']).optional(),
+  model: z.enum(['veo-2', 'video-generation']).default('veo-2'),
+  motion: z.enum(['static', 'slow', 'medium', 'fast']).optional(),
+  seed: z.number().optional(),
+});
+export type VideoGenOptions = z.infer<typeof VideoGenOptionsSchema>;
+
+// Audio Generation Options
+export const AudioGenOptionsSchema = z.object({
+  voice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']).optional(),
+  language: z.string().optional(),
+  speed: z.number().min(0.25).max(4).optional(),
+  format: z.enum(['mp3', 'wav', 'flac']).default('mp3'),
+  quality: z.enum(['standard', 'hd']).optional(),
+  model: z.enum(['text-to-speech', 'voice-synthesis']).default('text-to-speech'),
+});
+export type AudioGenOptions = z.infer<typeof AudioGenOptionsSchema>;
+
+// Media Generation Results
+export const MediaGenResultSchema = z.object({
+  success: z.boolean(),
+  generationType: GenerationTypeSchema,
+  outputPath: z.string(),
+  originalPrompt: z.string(),
+  metadata: z.object({
+    duration: z.number(),
+    fileSize: z.number(),
+    format: z.string(),
+    dimensions: z.object({
+      width: z.number(),
+      height: z.number(),
+    }).optional(),
+    model: z.string(),
+    settings: z.record(z.any()),
+    cost: z.number().optional(),
+  }),
+  downloadUrl: z.string().optional(),
+  error: z.string().optional(),
+});
+export type MediaGenResult = z.infer<typeof MediaGenResultSchema>;
+
+// Advanced Audio Analysis
+export const AudioAnalysisResultSchema = z.object({
+  transcription: z.string(),
+  language: z.string().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  sentiment: z.enum(['positive', 'negative', 'neutral']).optional(),
+  emotions: z.array(z.string()).optional(),
+  speakers: z.array(z.object({
+    id: z.string(),
+    confidence: z.number(),
+    segments: z.array(z.object({
+      start: z.number(),
+      end: z.number(),
+      text: z.string(),
+    })),
+  })).optional(),
+  metadata: z.object({
+    duration: z.number(),
+    sampleRate: z.number().optional(),
+    channels: z.number().optional(),
+    format: z.string(),
+  }),
+});
+export type AudioAnalysisResult = z.infer<typeof AudioAnalysisResultSchema>;
+
+// Media Generation Arguments
+export const MediaGenerationArgsSchema = z.object({
+  prompt: z.string().min(1),
+  type: GenerationTypeSchema,
+  options: z.record(z.any()).optional(),
+  outputPath: z.string().optional(),
+  downloadAfterGeneration: z.boolean().default(true),
+});
+export type MediaGenerationArgs = z.infer<typeof MediaGenerationArgsSchema>;
 
 // ===================================
 // Authentication Types and Schemas
@@ -452,6 +640,7 @@ export const MultimodalFileSchema = z.object({
   size: z.number().optional(),
   encoding: z.string().optional(),
   content: z.string().optional(),
+  name: z.string().optional(),
   metadata: z.record(z.any()).optional(),
 });
 export type MultimodalFile = z.infer<typeof MultimodalFileSchema>;
@@ -515,3 +704,30 @@ export const ResourceEstimateSchema = z.object({
   required_capabilities: z.array(z.enum(['claude', 'gemini', 'aistudio'])),
 });
 export type ResourceEstimate = z.infer<typeof ResourceEstimateSchema>;
+
+// ===================================
+// AI Model Constants
+// ===================================
+
+// Model constants for consistency across the application
+export const AI_MODELS = {
+  // Image generation model - Gemini 2.0 Flash with image generation capabilities
+  IMAGE_GENERATION: 'gemini-2.0-flash-preview-image-generation',
+  
+  // Audio generation model - Gemini 2.5 Flash TTS
+  AUDIO_GENERATION: 'gemini-2.5-flash-preview-tts',
+  
+  // General purpose models
+  GEMINI_FLASH: 'gemini-2.0-flash',
+  GEMINI_FLASH_EXP: 'gemini-2.0-flash-exp',
+  GEMINI_FLASH_2_5: 'gemini-2.5-flash',
+  
+  // Document processing model with 1M token context
+  DOCUMENT_PROCESSING: 'gemini-2.5-flash',
+  
+  // Default multimodal model
+  MULTIMODAL_DEFAULT: 'gemini-2.0-flash-exp'
+} as const;
+
+// Type for AI model values
+export type AIModelName = typeof AI_MODELS[keyof typeof AI_MODELS];

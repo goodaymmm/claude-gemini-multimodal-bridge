@@ -1,4 +1,4 @@
-import { SetupResult, AuthResult } from '../core/types.js';
+import { AuthResult, SetupResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';
@@ -99,7 +99,7 @@ export class InteractiveSetup {
         console.log('STEP 4: Final Verification');
         console.log('═══════════════════════════════════════\n');
         
-        const verificationResult = await this.verifyAllSetup();
+        const _verificationResult = await this.verifyAllSetup();
         
         // Generate next steps
         const nextSteps: string[] = [];
@@ -209,11 +209,14 @@ export class InteractiveSetup {
       }
     } else {
       console.log('\n📋 Alternative: API key authentication');
-      console.log('   1. Visit: https://aistudio.google.com/');
-      console.log('   2. Click "Get API Key"');
-      console.log('   3. Create new API key');
-      console.log('   4. Set environment variable: GEMINI_API_KEY=your_key_here');
-      console.log('   5. Restart your terminal/application\n');
+      console.log('   📖 Detailed Setup Guide: https://ai.google.dev/gemini-api/docs/api-key');
+      console.log('   📖 API Key Creation: https://aistudio.google.com/app/apikey');
+      console.log('   1. Visit: https://aistudio.google.com/app/apikey');
+      console.log('   2. Sign in with Google account');
+      console.log('   3. Click "Create API Key"');
+      console.log('   4. Copy the generated key');
+      console.log('   5. Set environment: GEMINI_API_KEY=your_key_here');
+      console.log('   6. Restart terminal and test: gemini "hello"\n');
     }
 
     return {
@@ -266,11 +269,12 @@ export class InteractiveSetup {
     if (!apiKey) {
       console.log('⚠️  No API key found - AI Studio requires API key if OAuth not available');
       console.log('\n📋 To set up AI Studio API key:');
-      console.log('   1. Visit: https://aistudio.google.com/');
+      console.log('   📖 API Key Creation: https://aistudio.google.com/app/apikey');
+      console.log('   1. Visit: https://aistudio.google.com/app/apikey');
       console.log('   2. Sign in with Google account');
-      console.log('   3. Navigate to "Get API Key" section');
-      console.log('   4. Create new API key');
-      console.log('   5. Copy the key and set: GEMINI_API_KEY=your_key_here');
+      console.log('   3. Click "Create API Key"');
+      console.log('   4. Copy the generated key');
+      console.log('   5. Set: GEMINI_API_KEY=your_key_here');
       console.log('   6. Note: Same key works for both Gemini CLI and AI Studio\n');
       
       return {
@@ -425,47 +429,106 @@ export class InteractiveSetup {
    */
   displaySetupGuide(): void {
     console.log(`
-🚀 CGMB Authentication Setup Guide
+🚀 CGMB Enhanced Setup Guide
 
-This guide will help you set up authentication for all services.
-💡 TIP: OAuth authentication is recommended (no API keys needed!)
+🎯 NEW: Automatic Installation Available!
+=========================================
+✨ One-command setup: npm install -g claude-gemini-multimodal-bridge
+🔧 Postinstall script automatically handles dependencies and MCP setup
+⚡ Much simpler than manual installation!
 
-STEP 1: Gemini Authentication
+⚠️  QUICK START: Complete these steps IN ORDER
+
+🔧 FOR USERS COMING FROM ERROR.MD FIXES:
+========================================
+✅ Problem 1: Gemini CLI incorrect usage → Fixed with proper -p flag
+✅ Problem 2: AI Studio auth failures → Fixed with AI_STUDIO_API_KEY
+✅ Problem 3: Manual MCP setup → Now automated with postinstall script
+
+STEP 1: Simple Installation (RECOMMENDED)
+==========================================
+🎉 One-command installation with automatic dependency resolution:
+
+npm install -g claude-gemini-multimodal-bridge
+
+This will automatically:
+- Install Gemini CLI (@google/gemini-cli) 
+- Install AI Studio MCP Server (aistudio-mcp-server)
+- Setup Claude Code MCP integration
+- Create .env template file
+- Verify system requirements
+
+STEP 2: Authentication Setup
+=============================
+After installation, run the interactive setup:
+
+cgmb auth --interactive
+
+This will guide you through:
+- Gemini CLI OAuth authentication
+- AI Studio API key setup  
+- Claude Code verification
+
+STEP 3: Manual Installation (If Needed)
+=======================================
+If automatic installation fails, follow these steps:
+
+3a. Install Claude Code:
+npm install -g @anthropic-ai/claude-code
+
+3b. Install Gemini CLI:
+npm install -g @google/gemini-cli
+
+3c. Install AI Studio MCP:
+npm install -g aistudio-mcp-server
+
+3d. Setup authentication:
+cgmb auth --interactive
+
+STEP 4: API Key Configuration
+=============================
+📖 Get API Key: https://aistudio.google.com/app/apikey
+🔑 Use the new dedicated environment variable:
+
+1. Visit: https://aistudio.google.com/app/apikey
+2. Create API key
+3. Add to .env: AI_STUDIO_API_KEY=your_key_here
+   ⚠️  OLD: GEMINI_API_KEY (deprecated)
+   ✅  NEW: AI_STUDIO_API_KEY (clear purpose)
+
+STEP 5: MCP Integration Setup
+============================
+cgmb setup-mcp  # Automatic Claude Code MCP configuration
+
+STEP 6: Verification & Testing
 ==============================
-🥇 RECOMMENDED: OAuth (Free & Secure)
-1. Install: npm install -g @google/gemini-cli
-2. Run: gemini auth
-3. Follow browser authentication flow
-4. Grant permissions when prompted
+cgmb verify                    # Complete system check
+cgmb auth-status --verbose     # Authentication status
 
-🔄 ALTERNATIVE: API Key (If OAuth not available)
-1. Visit: https://aistudio.google.com/
-2. Click "Get API Key"
-3. Create new API key
-4. Set environment: GEMINI_API_KEY=your_key_here
+Test enhanced capabilities:
+claude "What's the latest in AI?"        # Uses Gemini search
+claude "Analyze image.png"               # Uses AI Studio vision
 
-STEP 2: Claude Code CLI
-========================
-🆓 FREE TIER: Uses built-in Claude Code authentication
-- No additional setup needed if using free tier
+🚀 WHAT'S NEW IN THIS VERSION:
+===============================
+🔧 Automatic dependency installation via postinstall script
+🎯 Intelligent MCP configuration management  
+⚡ Enhanced error handling and user guidance
+📊 Better diagnostic and verification tools
+🛡️ Robust authentication state management
 
-💰 PAID TIER: Optional API key for rate limit bypass
-1. Install: npm install -g @anthropic-ai/claude-code
-2. Set CLAUDE_API_KEY=your_key_here (optional)
+🔧 TROUBLESHOOTING:
+==================
+- Installation issues: Check Node.js version (>=18.0.0)
+- Authentication problems: cgmb auth --interactive
+- MCP not working: cgmb setup-mcp --force
+- Missing dependencies: npm install -g <package-name>
 
-STEP 3: Google AI Studio
-=========================
-ℹ️  Auto-configured if Gemini OAuth is working
-- Uses shared authentication from Gemini OAuth
-- Falls back to same API key as Gemini if needed
-
-STEP 4: Verify Setup
-=====================
-Run: cgmb auth-status --verbose
-
-🚀 Quick Start: cgmb auth --interactive
-📊 Check Usage: cgmb quota-status
-🔍 Find Tools: cgmb detect-paths
+💡 FOR DEVELOPERS:
+==================
+- Development mode: git clone && npm install && npm run build
+- Link globally: npm link
+- Debug mode: DEBUG=true cgmb <command>
     `);
   }
 }

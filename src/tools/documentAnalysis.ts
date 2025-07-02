@@ -1,9 +1,9 @@
 import {
+  AnalysisType,
   DocumentAnalysisArgs,
   DocumentAnalysisResult,
-  AnalysisType,
-  LayerResult,
   FileReference,
+  LayerResult,
   ReasoningTask,
 } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
@@ -11,7 +11,7 @@ import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
 import { GeminiCLILayer } from '../layers/GeminiCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
-import { safeExecute, retry } from '../utils/errorHandler.js';
+import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';
@@ -35,7 +35,15 @@ export class DocumentAnalysis {
   ];
 
   constructor() {
-    this.layerManager = new LayerManager();
+    // Create default config for LayerManager
+    const defaultConfig = {
+      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
+      claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
+      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+      cache: { enabled: true, ttl: 3600 },
+      logging: { level: 'info' as const },
+    };
+    this.layerManager = new LayerManager(defaultConfig);
     this.claudeLayer = new ClaudeCodeLayer();
     this.geminiLayer = new GeminiCLILayer();
     this.aiStudioLayer = new AIStudioLayer();
@@ -52,8 +60,8 @@ export class DocumentAnalysis {
         
         logger.info('Starting document analysis', {
           documentCount: args.documents.length,
-          analysisType: args.analysisType,
-          requiresComparison: args.compareDocuments,
+          analysisType: args.analysis_type,
+          requiresComparison: args.analysis_type === 'comparison',
         });
 
         // Validate inputs
@@ -62,8 +70,11 @@ export class DocumentAnalysis {
         // Initialize required layers
         await this.initializeLayers(args);
         
+        // Convert document paths to FileReference objects
+        const documentRefs = this.convertPathsToFileRefs(args.documents);
+        
         // Prepare documents for analysis
-        const processedDocs = await this.prepareDocuments(args.documents);
+        const processedDocs = await this.prepareDocuments(documentRefs);
         
         // Execute analysis based on type
         const analysisResult = await this.executeAnalysis(args, processedDocs);
@@ -77,15 +88,16 @@ export class DocumentAnalysis {
         
         return {
           success: true,
-          analysis: analysisResult,
-          summary,
+          analysis_type: args.analysis_type,
+          content: typeof analysisResult === 'string' ? analysisResult : JSON.stringify(analysisResult),
+          documents_processed: args.documents,
+          processing_time: totalDuration,
           insights: await this.generateInsights(analysisResult, args),
           metadata: {
-            documentsAnalyzed: processedDocs.length,
-            analysisType: args.analysisType,
-            totalDuration,
-            layersUsed: this.determineLayersUsed(args),
-            processingDepth: args.depth || 'medium',
+            total_duration: totalDuration,
+            tokens_used: this.estimateTokensUsed(analysisResult),
+            cost: 0,
+            quality_score: 0.8,
           },
         };
       },
@@ -105,14 +117,13 @@ export class DocumentAnalysis {
     analysisType: AnalysisType = 'comprehensive',
     options?: { depth?: 'shallow' | 'medium' | 'deep'; extractImages?: boolean }
   ): Promise<DocumentAnalysisResult> {
-    const document = await this.createDocumentReference(documentPath);
-    
     return this.analyzeDocuments({
-      documents: [document],
-      analysisType,
-      depth: options?.depth || 'medium',
-      extractImages: options?.extractImages || false,
-      compareDocuments: false,
+      documents: [documentPath],
+      analysis_type: 'summary',
+      options: {
+        depth: options?.depth || 'medium',
+        extractMetadata: options?.extractImages || false,
+      },
     });
   }
 
@@ -127,16 +138,13 @@ export class DocumentAnalysis {
       throw new Error('At least 2 documents required for comparison');
     }
 
-    const documents = await Promise.all(
-      documentPaths.map(path => this.createDocumentReference(path))
-    );
-    
     return this.analyzeDocuments({
-      documents,
-      analysisType: 'comparative',
-      compareDocuments: true,
-      comparisonType,
-      depth: 'deep',
+      documents: documentPaths,
+      analysis_type: 'comparison',
+      options: {
+        depth: 'deep',
+        detailed: true,
+      },
     });
   }
 
@@ -147,16 +155,14 @@ export class DocumentAnalysis {
     documentPaths: string[],
     dataTypes: string[] = ['tables', 'lists', 'key-value-pairs', 'entities']
   ): Promise<DocumentAnalysisResult> {
-    const documents = await Promise.all(
-      documentPaths.map(path => this.createDocumentReference(path))
-    );
-    
     return this.analyzeDocuments({
-      documents,
-      analysisType: 'extraction',
-      extractStructuredData: true,
-      dataTypes,
-      depth: 'deep',
+      documents: documentPaths,
+      analysis_type: 'extraction',
+      options: {
+        depth: 'deep',
+        structured: true,
+        extractionType: dataTypes.join(','),
+      },
     });
   }
 
@@ -167,15 +173,13 @@ export class DocumentAnalysis {
     documentPaths: string[],
     summaryLength: 'brief' | 'detailed' | 'comprehensive' = 'detailed'
   ): Promise<DocumentAnalysisResult> {
-    const documents = await Promise.all(
-      documentPaths.map(path => this.createDocumentReference(path))
-    );
-    
     return this.analyzeDocuments({
-      documents,
-      analysisType: 'summarization',
-      summaryLength,
-      depth: summaryLength === 'comprehensive' ? 'deep' : 'medium',
+      documents: documentPaths,
+      analysis_type: 'summary',
+      options: {
+        depth: summaryLength === 'comprehensive' ? 'deep' : 'medium',
+        detailed: summaryLength !== 'brief',
+      },
     });
   }
 
@@ -194,21 +198,21 @@ export class DocumentAnalysis {
     for (const doc of args.documents) {
       // Check file exists
       try {
-        await fs.access(doc.path);
+        await fs.access(doc);
       } catch {
-        throw new Error(`Document not found: ${doc.path}`);
+        throw new Error(`Document not found: ${doc}`);
       }
 
       // Check file size
-      const stats = await fs.stat(doc.path);
+      const stats = await fs.stat(doc);
       if (stats.size > this.MAX_DOCUMENT_SIZE) {
-        throw new Error(`Document too large: ${doc.path} (max ${this.MAX_DOCUMENT_SIZE / 1024 / 1024}MB)`);
+        throw new Error(`Document too large: ${doc} (max ${this.MAX_DOCUMENT_SIZE / 1024 / 1024}MB)`);
       }
 
       // Check file type
-      const ext = path.extname(doc.path).toLowerCase();
+      const ext = path.extname(doc).toLowerCase();
       if (!this.SUPPORTED_DOCUMENT_TYPES.includes(ext)) {
-        logger.warn('Potentially unsupported document type', { path: doc.path, extension: ext });
+        logger.warn('Potentially unsupported document type', { path: doc, extension: ext });
       }
     }
   }
@@ -249,19 +253,30 @@ export class DocumentAnalysis {
     
     // Use AI Studio for PDF processing and multimodal content
     const hasPDFs = args.documents.some(doc => 
-      path.extname(doc.path).toLowerCase() === '.pdf'
+      path.extname(doc).toLowerCase() === '.pdf'
     );
     
-    if (hasPDFs || args.extractImages || args.extractStructuredData) {
+    if (hasPDFs || (args.options?.extractMetadata) || (args.options?.structured)) {
       layers.add('aistudio');
     }
     
     // Use Gemini for additional context or real-time information
-    if (args.analysisType === 'contextual' || args.requiresGrounding) {
+    if ((args.options?.requiresGrounding)) {
       layers.add('gemini');
     }
     
     return Array.from(layers);
+  }
+
+  /**
+   * Convert document paths to FileReference objects
+   */
+  private convertPathsToFileRefs(documentPaths: string[]): FileReference[] {
+    return documentPaths.map(path => ({
+      path,
+      type: 'document' as any,
+      encoding: 'utf-8',
+    }));
   }
 
   /**
@@ -279,7 +294,7 @@ export class DocumentAnalysis {
           const processedDoc: FileReference = {
             ...doc,
             size: stats.size,
-            type: fileType,
+            type: 'document' as any,
             encoding: doc.encoding || 'utf-8',
           };
 
@@ -334,25 +349,22 @@ export class DocumentAnalysis {
     return retry(
       async () => {
         logger.info('Executing document analysis workflow', {
-          analysisType: args.analysisType,
+          analysisType: args.analysis_type,
           documentCount: documents.length,
         });
 
-        switch (args.analysisType) {
-          case 'comprehensive':
-            return await this.executeComprehensiveAnalysis(documents, args);
-          
-          case 'summarization':
+        switch (args.analysis_type) {
+          case 'summary':
             return await this.executeSummarizationAnalysis(documents, args);
           
           case 'extraction':
             return await this.executeExtractionAnalysis(documents, args);
           
-          case 'comparative':
+          case 'comparison':
             return await this.executeComparativeAnalysis(documents, args);
           
-          case 'contextual':
-            return await this.executeContextualAnalysis(documents, args);
+          case 'translation':
+            return await this.executeTranslationAnalysis(documents, args);
           
           default:
             return await this.executeGeneralAnalysis(documents, args);
@@ -390,12 +402,12 @@ export class DocumentAnalysis {
     }
     
     // Step 2: Use Claude for deep reasoning and analysis
-    const reasoningTask: ReasoningTask = {
+    const reasoningTask = {
       prompt: this.buildComprehensiveAnalysisPrompt(documents, results),
-      depth: args.depth || 'medium',
+      depth: args.options?.depth ?? 'medium',
       domain: 'document_analysis',
       context: `Analyzing ${documents.length} document(s) for comprehensive understanding`,
-    };
+    } as const;
     
     const reasoningResult = await this.claudeLayer.executeComplexReasoning(reasoningTask);
     
@@ -421,7 +433,7 @@ export class DocumentAnalysis {
       const summaryResult = await this.aiStudioLayer.execute({
         action: 'document_analysis',
         files: [doc],
-        instructions: `Summarize this document with ${args.summaryLength || 'detailed'} level of detail. Focus on key points, main arguments, and important information.`,
+        instructions: `Summarize this document with ${args.options?.detailed ? 'detailed' : 'standard'} level of detail. Focus on key points, main arguments, and important information.`,
       });
       
       summaries.push({
@@ -466,7 +478,7 @@ export class DocumentAnalysis {
       const extractionResult = await this.aiStudioLayer.execute({
         action: 'document_analysis',
         files: [doc],
-        instructions: `Extract structured data from this document: ${(args.dataTypes || []).join(', ')}. Provide organized, structured output.`,
+        instructions: `Extract structured data from this document: ${args.options?.extractionType || 'tables,lists,entities'}. Provide organized, structured output.`,
       });
       
       extractions.push({
@@ -481,7 +493,7 @@ export class DocumentAnalysis {
       request: 'Organize and structure the extracted data into a comprehensive format',
       inputs: {
         extractions: extractions,
-        dataTypes: args.dataTypes || [],
+        dataTypes: args.options?.extractionType?.split(',') || [],
       },
     });
     
@@ -522,7 +534,7 @@ export class DocumentAnalysis {
     // Perform comparison analysis
     const comparisonResult = await this.claudeLayer.execute({
       action: 'complex_reasoning',
-      prompt: this.buildComparisonPrompt(documentContents, args.comparisonType || 'comprehensive'),
+      prompt: this.buildComparisonPrompt(documentContents, 'comprehensive'),
       depth: 'deep',
     });
     
@@ -581,6 +593,34 @@ export class DocumentAnalysis {
   }
 
   /**
+   * Execute translation analysis
+   */
+  private async executeTranslationAnalysis(
+    documents: FileReference[],
+    args: DocumentAnalysisArgs
+  ): Promise<any> {
+    const translations = [];
+    
+    for (const doc of documents) {
+      const translationResult = await this.aiStudioLayer.execute({
+        action: 'document_analysis',
+        files: [doc],
+        instructions: `Translate this document. Focus on accurate translation while preserving meaning and context.`,
+      });
+      
+      translations.push({
+        document: doc.path,
+        translation: translationResult.data,
+      });
+    }
+    
+    return {
+      translations,
+      processingType: 'translation',
+    };
+  }
+
+  /**
    * Execute general analysis
    */
   private async executeGeneralAnalysis(
@@ -614,14 +654,14 @@ export class DocumentAnalysis {
   private async generateSummary(analysisResult: any, args: DocumentAnalysisArgs): Promise<string> {
     return retry(
       async () => {
-        const summaryPrompt = `Generate a comprehensive summary of the document analysis results. Include key findings, important insights, and main conclusions. Analysis type: ${args.analysisType}`;
+        const summaryPrompt = `Generate a comprehensive summary of the document analysis results. Include key findings, important insights, and main conclusions. Analysis type: ${args.analysis_type}`;
         
         const summaryResult = await this.claudeLayer.synthesizeResponse({
           request: summaryPrompt,
           inputs: {
             analysisResults: analysisResult,
             documentCount: args.documents.length,
-            analysisType: args.analysisType,
+            analysisType: args.analysis_type,
           },
         });
         
@@ -720,19 +760,6 @@ export class DocumentAnalysis {
     return prompt;
   }
 
-  /**
-   * Create document reference from path
-   */
-  private async createDocumentReference(documentPath: string): Promise<FileReference> {
-    const stats = await fs.stat(documentPath);
-    
-    return {
-      path: documentPath,
-      size: stats.size,
-      type: this.determineDocumentType(documentPath),
-      encoding: 'utf-8',
-    };
-  }
 
   /**
    * Get supported document types
@@ -762,5 +789,14 @@ export class DocumentAnalysis {
       maxDocumentSize: this.MAX_DOCUMENT_SIZE,
       maxDocumentSizeMB: this.MAX_DOCUMENT_SIZE / 1024 / 1024,
     };
+  }
+
+  /**
+   * Estimate tokens used in analysis
+   */
+  private estimateTokensUsed(analysisResult: any): number {
+    const resultText = typeof analysisResult === 'string' ? analysisResult : JSON.stringify(analysisResult);
+    // Rough estimate: 1 token ≈ 4 characters
+    return Math.ceil(resultText.length / 4);
   }
 }

@@ -1,16 +1,17 @@
 import {
+  FileReference,
+  LayerResult,
+  MultimodalFile,
   MultimodalProcessArgs,
   MultimodalProcessArgsSchema,
   MultimodalProcessResult,
-  WorkflowType,
   ProcessingOptions,
-  LayerResult,
-  FileReference,
-  MultimodalFile,
+  WorkflowResult,
+  WorkflowType,
 } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { logger } from '../utils/logger.js';
-import { safeExecute, retry } from '../utils/errorHandler.js';
+import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';
@@ -77,15 +78,15 @@ export class MultimodalProcess {
         
         return {
           success: true,
-          content: result.data || '',
+          content: result.summary || 'Processing completed',
           files_processed: processedFiles.map(f => f.path),
           processing_time: totalDuration,
           workflow_used: validatedArgs.workflow,
-          layers_involved: this.extractLayersUsed(result),
+          layers_involved: this.extractLayersFromWorkflowResult(result),
           metadata: {
             total_duration: totalDuration,
-            tokens_used: result.metadata?.tokens_used,
-            cost: result.metadata?.cost,
+            tokens_used: this.extractTotalTokens(result),
+            cost: result.metadata?.total_cost,
           },
         };
       },
@@ -181,7 +182,7 @@ export class MultimodalProcess {
       options: {
         ...options,
         outputFormat: targetFormat,
-        preserveQuality: true,
+        quality_level: 'quality',
       },
     });
   }
@@ -222,8 +223,25 @@ export class MultimodalProcess {
       throw new Error(`Invalid arguments: ${validationResult.error.message}`);
     }
 
+    // Allow text-only workflows for certain workflow types (addresses Error2.md validation issue)
     if (args.files.length === 0) {
-      throw new Error('At least one file must be provided');
+      const textOnlyWorkflows = ['generation', 'analysis'];
+      const isTextOnlyAllowed = textOnlyWorkflows.includes(args.workflow);
+      
+      if (!isTextOnlyAllowed) {
+        throw new Error('At least one file must be provided for this workflow type');
+      }
+      
+      // For text-only workflows, ensure the prompt is sufficient
+      if (!args.prompt || args.prompt.trim().length < 10) {
+        throw new Error('For text-only workflows, a detailed prompt (minimum 10 characters) is required');
+      }
+      
+      logger.debug('Text-only workflow validated', {
+        workflow: args.workflow,
+        promptLength: args.prompt.length,
+        filesProvided: args.files.length
+      });
     }
 
     if (args.files.length > this.MAX_FILES) {
@@ -264,18 +282,21 @@ export class MultimodalProcess {
           
           // Create processed file reference
           const processedFile: MultimodalFile = {
-            name: path.basename(file.path),
             path: file.path,
             size,
-            mimeType: this.getMimeType(file.path),
             type: fileType,
             encoding: file.encoding || 'utf-8',
+            name: path.basename(file.path),
+            metadata: {
+              mimeType: this.getMimeType(file.path),
+            },
           };
 
           processedFiles.push(processedFile);
           
           logger.debug('File prepared for processing', {
             name: processedFile.name,
+            path: processedFile.path,
             size: processedFile.size,
             type: processedFile.type,
           });
@@ -305,15 +326,16 @@ export class MultimodalProcess {
   /**
    * Determine optimal file type for processing
    */
-  private determineFileType(filePath: string): 'image' | 'document' | 'audio' | 'video' | 'unknown' {
+  private determineFileType(filePath: string): 'image' | 'audio' | 'pdf' | 'document' | 'text' | 'video' {
     const ext = path.extname(filePath).toLowerCase();
     
-    if (this.SUPPORTED_FORMATS.images.includes(ext)) return 'image';
-    if (this.SUPPORTED_FORMATS.documents.includes(ext)) return 'document';
-    if (this.SUPPORTED_FORMATS.audio.includes(ext)) return 'audio';
-    if (this.SUPPORTED_FORMATS.video.includes(ext)) return 'video';
+    if (this.SUPPORTED_FORMATS.images.includes(ext)) {return 'image';}
+    if (ext === '.pdf') {return 'pdf';}
+    if (this.SUPPORTED_FORMATS.documents.includes(ext)) {return 'document';}
+    if (this.SUPPORTED_FORMATS.audio.includes(ext)) {return 'audio';}
+    if (this.SUPPORTED_FORMATS.video.includes(ext)) {return 'video';}
     
-    return 'unknown';
+    return 'text'; // Default to text for unknown files
   }
 
   /**
@@ -380,7 +402,7 @@ export class MultimodalProcess {
     
     // Determine if we need specialized services
     const hasMultimodalFiles = args.files.some(f => 
-      this.determineFileType(f.path) !== 'document' && this.determineFileType(f.path) !== 'unknown'
+      this.determineFileType(f.path) !== 'document' && this.determineFileType(f.path) !== 'text'
     );
     
     if (hasMultimodalFiles || args.workflow === 'analysis') {
@@ -416,7 +438,7 @@ export class MultimodalProcess {
   private async executeWorkflow(
     args: MultimodalProcessArgs,
     files: MultimodalFile[]
-  ): Promise<LayerResult> {
+  ): Promise<WorkflowResult> {
     return retry(
       async () => {
         const workflowTask = {
@@ -435,7 +457,7 @@ export class MultimodalProcess {
         });
 
         // Execute through layer manager with intelligent routing
-        return await this.layerManager.execute(workflowTask);
+        return await this.layerManager.processMultimodal(workflowTask.instructions, workflowTask.files, workflowTask.workflowType, workflowTask.options);
       },
       {
         maxAttempts: 3,
@@ -459,31 +481,19 @@ export class MultimodalProcess {
     
     // Specific workflow detection
     if (lowerInstructions.includes('convert') || lowerInstructions.includes('transform')) {
-      return 'format_conversion';
+      return 'conversion';
     }
     
     if (lowerInstructions.includes('extract') || lowerInstructions.includes('get data')) {
-      return 'data_extraction';
+      return 'extraction';
     }
     
-    if (lowerInstructions.includes('compare') || lowerInstructions.includes('analysis')) {
-      return 'content_analysis';
+    if (lowerInstructions.includes('generate') || lowerInstructions.includes('create')) {
+      return 'generation';
     }
     
-    if (files.length > 5) {
-      return 'batch_processing';
-    }
-    
-    // Default based on file types
-    if (hasImages || hasAudio || hasVideo) {
-      return 'multimodal_processing';
-    }
-    
-    if (hasDocuments) {
-      return 'document_processing';
-    }
-    
-    return 'general_processing';
+    // Default to analysis for most cases
+    return 'analysis';
   }
 
   /**
@@ -546,21 +556,49 @@ export class MultimodalProcess {
   }
 
   /**
+   * Extract layers used from workflow result
+   */
+  private extractLayersFromWorkflowResult(result: WorkflowResult): ('claude' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
+    const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
+    const layers = new Set<typeof validLayers[number]>();
+    
+    Object.values(result.results).forEach(layerResult => {
+      if (layerResult.metadata?.layer && validLayers.includes(layerResult.metadata.layer as any)) {
+        layers.add(layerResult.metadata.layer as any);
+      }
+    });
+    
+    return Array.from(layers);
+  }
+
+  /**
+   * Extract total tokens from workflow result
+   */
+  private extractTotalTokens(result: WorkflowResult): number {
+    return Object.values(result.results).reduce((total, layerResult) => {
+      return total + (layerResult.metadata?.tokens_used || 0);
+    }, 0);
+  }
+
+  /**
    * Extract layers used from result
    */
-  private extractLayersUsed(result: LayerResult): string[] {
-    const layers = new Set<string>();
+  private extractLayersUsed(result: LayerResult): ('claude' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
+    const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
+    const layers = new Set<typeof validLayers[number]>();
     
-    if (result.metadata?.layer) {
-      layers.add(result.metadata.layer);
+    if (result.metadata?.layer && validLayers.includes(result.metadata.layer as any)) {
+      layers.add(result.metadata.layer as any);
     }
     
     // Check for nested results indicating multiple layers
     if (typeof result.data === 'object' && result.data !== null) {
       const dataStr = JSON.stringify(result.data);
-      if (dataStr.includes('claude')) layers.add('claude');
-      if (dataStr.includes('gemini')) layers.add('gemini');
-      if (dataStr.includes('aistudio')) layers.add('aistudio');
+      validLayers.forEach(layer => {
+        if (dataStr.includes(layer)) {
+          layers.add(layer);
+        }
+      });
     }
     
     return Array.from(layers);

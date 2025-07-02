@@ -1,10 +1,10 @@
 import {
-  WorkflowDefinition,
-  WorkflowResult,
   ExecutionPlan,
-  ResourceEstimate,
   FileReference,
   ProcessingOptions,
+  ResourceEstimate,
+  WorkflowDefinition,
+  WorkflowResult,
 } from '../core/types.js';
 import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { MultimodalProcess } from '../tools/multimodalProcess.js';
@@ -19,7 +19,6 @@ import path from 'path';
 export class ConversionWorkflow implements WorkflowDefinition {
   id: string;
   steps: any[];
-  parallel: boolean;
   continueOnError: boolean;
   timeout: number;
 
@@ -52,7 +51,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
   constructor(id?: string) {
     this.id = id || `conversion_workflow_${Date.now()}`;
     this.steps = [];
-    this.parallel = true;
+    
     this.continueOnError = false;
     this.timeout = 600000; // 10 minutes
 
@@ -88,7 +87,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'document-conversion-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -121,7 +120,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'image-conversion-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -154,7 +153,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'audio-conversion-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -187,7 +186,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'data-conversion-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -215,7 +214,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'batch-conversion-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout * conversions.length,
       }
     );
@@ -249,7 +248,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       },
       {
         operationName: 'content-extraction-conversion-workflow',
-        layer: 'claude',
+        layer: 'claude' as const,
         timeout: this.timeout,
       }
     );
@@ -270,7 +269,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'preprocessing',
       steps: ['validate_files', 'analyze_formats', 'prepare_conversion'],
-      estimatedDuration: 30000, // 30 seconds
       requiredLayers: ['aistudio'],
     });
     estimatedDuration += 30000;
@@ -280,7 +278,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'conversion',
       steps: ['execute_conversion', 'verify_output'],
-      estimatedDuration: conversionDuration,
       requiredLayers: ['aistudio'],
     });
     estimatedDuration += conversionDuration;
@@ -290,17 +287,13 @@ export class ConversionWorkflow implements WorkflowDefinition {
     phases.push({
       name: 'postprocessing',
       steps: ['quality_check', 'optimize_output', 'generate_metadata'],
-      estimatedDuration: 60000, // 1 minute
       requiredLayers: ['claude'],
     });
     estimatedDuration += 60000;
 
     return {
-      phases,
-      estimatedDuration,
-      estimatedCost,
-      complexity: conversionComplexity,
-      parallelizable: files.length > 1,
+      steps: [],
+      timeout: estimatedDuration,
     };
   }
 
@@ -340,10 +333,10 @@ export class ConversionWorkflow implements WorkflowDefinition {
     const complexity = this.assessConversionComplexity(inputs.files, inputs.options);
     
     // Base requirements
-    let memory = 1024; // MB
-    let cpu = 1.5;
-    let duration = 120000; // 2 minutes
-    let cost = 0.02;
+    const memory = 1024; // MB
+    const cpu = 1.5;
+    const duration = 120000; // 2 minutes
+    const cost = 0.02;
 
     // Scale with file count and size
     const sizeMultiplier = Math.min(totalSize / (10 * 1024 * 1024), 10); // Max 10x for 100MB+
@@ -351,19 +344,20 @@ export class ConversionWorkflow implements WorkflowDefinition {
 
     // Adjust for complexity
     const complexityMultipliers = {
-      low: { memory: 1, cpu: 1, duration: 1, cost: 1 },
-      medium: { memory: 1.5, cpu: 1.3, duration: 1.5, cost: 1.3 },
-      high: { memory: 2.5, cpu: 2, duration: 2.5, cost: 2 },
+      low: { estimated_tokens: 1, complexity_score: 1, estimated_duration: 1, estimated_cost: 1 },
+      medium: { estimated_tokens: 1.5, complexity_score: 1.3, estimated_duration: 1.5, estimated_cost: 1.3 },
+      high: { estimated_tokens: 2.5, complexity_score: 2, estimated_duration: 2.5, estimated_cost: 2 },
     };
 
     const multiplier = complexityMultipliers[complexity];
 
     return {
-      memory: memory * Math.max(sizeMultiplier, countMultiplier) * multiplier.memory,
-      cpu: cpu * multiplier.cpu,
-      duration: duration * Math.max(sizeMultiplier, countMultiplier) * multiplier.duration,
-      cost: cost * multiplier.cost,
-      bandwidth: Math.min(totalSize / 1024 / 1024, 1000), // MB, max 1GB
+      estimated_tokens: memory * Math.max(sizeMultiplier, countMultiplier) * multiplier.estimated_tokens,
+      complexity_score: cpu * multiplier.complexity_score,
+      estimated_duration: duration * Math.max(sizeMultiplier, countMultiplier) * multiplier.estimated_duration,
+      recommended_execution_mode: 'adaptive' as const,
+      required_capabilities: ['claude', 'gemini', 'aistudio'] as const,
+      estimated_cost: cost * multiplier.estimated_cost,
     };
   }
 
@@ -472,7 +466,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'prepare_documents',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -482,7 +476,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'convert_documents',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'convert_file',
           input: {
             files,
@@ -497,7 +491,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'verify_conversion',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Verify conversion quality and generate conversion report',
@@ -509,7 +503,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
           dependsOn: ['convert_documents'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -528,7 +521,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'analyze_images',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'analyze_image',
           input: {
             files,
@@ -538,7 +531,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'convert_images',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'convert_file',
           input: {
             files,
@@ -553,7 +546,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'verify_image_quality',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Assess image conversion quality and provide optimization recommendations',
@@ -565,7 +558,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
           dependsOn: ['convert_images'],
         },
       ],
-      parallel: files.length > 1,
       continueOnError: true,
       timeout: this.timeout,
     };
@@ -584,7 +576,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'analyze_audio',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'transcribe_audio',
           input: {
             files,
@@ -594,7 +586,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'convert_audio',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'convert_file',
           input: {
             files,
@@ -609,7 +601,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'verify_audio_quality',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Verify audio conversion quality and generate quality report',
@@ -621,7 +613,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
           dependsOn: ['convert_audio'],
         },
       ],
-      parallel: files.length > 1,
       continueOnError: true,
       timeout: this.timeout,
     };
@@ -640,7 +631,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'analyze_data_structure',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'document_analysis',
           input: {
             files,
@@ -650,7 +641,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'convert_data_format',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'convert_file',
           input: {
             files,
@@ -665,7 +656,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'validate_data_integrity',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'complex_reasoning',
           input: {
             prompt: 'Validate data integrity and structure preservation after conversion',
@@ -675,7 +666,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
           dependsOn: ['convert_data_format'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -697,7 +687,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
     conversions.forEach((conversion, index) => {
       steps.push({
         id: `batch_conversion_${index}`,
-        layer: 'aistudio',
+        layer: 'aistudio' as const,
         action: 'convert_file',
         input: {
           files: conversion.files,
@@ -711,7 +701,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
     // Add summary step
     steps.push({
       id: 'summarize_batch_conversion',
-      layer: 'claude',
+      layer: 'claude' as const,
       action: 'synthesize_response',
       input: {
         request: 'Summarize batch conversion results and provide quality assessment',
@@ -725,7 +715,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
     return {
       id: `batch_conversion_${Date.now()}`,
       steps,
-      parallel: true,
       continueOnError: true,
       timeout: this.timeout * conversions.length,
     };
@@ -745,7 +734,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
       steps: [
         {
           id: 'extract_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'multimodal_processing',
           input: {
             files,
@@ -756,7 +745,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'convert_extracted_content',
-          layer: 'aistudio',
+          layer: 'aistudio' as const,
           action: 'convert_file',
           input: {
             content: '{{extract_content}}',
@@ -767,7 +756,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         },
         {
           id: 'organize_converted_content',
-          layer: 'claude',
+          layer: 'claude' as const,
           action: 'synthesize_response',
           input: {
             request: 'Organize and structure the converted content with metadata',
@@ -779,7 +768,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
           dependsOn: ['convert_extracted_content'],
         },
       ],
-      parallel: false,
       continueOnError: false,
       timeout: this.timeout,
     };
@@ -792,24 +780,24 @@ export class ConversionWorkflow implements WorkflowDefinition {
     let complexityScore = 0;
 
     // File count factor
-    if (files.length > 20) complexityScore += 3;
-    else if (files.length > 10) complexityScore += 2;
-    else if (files.length > 5) complexityScore += 1;
+    if (files.length > 20) {complexityScore += 3;}
+    else if (files.length > 10) {complexityScore += 2;}
+    else if (files.length > 5) {complexityScore += 1;}
 
     // File size factor
     const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
-    if (totalSize > 500 * 1024 * 1024) complexityScore += 3; // > 500MB
-    else if (totalSize > 100 * 1024 * 1024) complexityScore += 2; // > 100MB
-    else if (totalSize > 10 * 1024 * 1024) complexityScore += 1; // > 10MB
+    if (totalSize > 500 * 1024 * 1024) {complexityScore += 3;} // > 500MB
+    else if (totalSize > 100 * 1024 * 1024) {complexityScore += 2;} // > 100MB
+    else if (totalSize > 10 * 1024 * 1024) {complexityScore += 1;} // > 10MB
 
     // Options complexity
-    if (options?.quality === 'high') complexityScore += 1;
-    if (options?.preserveFormatting) complexityScore += 1;
-    if (options?.extractImages) complexityScore += 1;
-    if (options?.resize) complexityScore += 1;
+    if (options?.quality === 'high') {complexityScore += 1;}
+    if (options?.preserveFormatting) {complexityScore += 1;}
+    if (options?.extractImages) {complexityScore += 1;}
+    if (options?.resize) {complexityScore += 1;}
 
-    if (complexityScore >= 6) return 'high';
-    if (complexityScore >= 3) return 'medium';
+    if (complexityScore >= 6) {return 'high';}
+    if (complexityScore >= 3) {return 'medium';}
     return 'low';
   }
 

@@ -1,4 +1,4 @@
-import { CGMBError, LayerError, WorkflowError, LayerType } from '../core/types.js';
+import { CGMBError, LayerError, LayerType, WorkflowError } from '../core/types.js';
 import { logger } from './logger.js';
 
 // ===================================
@@ -96,8 +96,8 @@ export class ErrorHandler {
       if (context.timeout) {
         result = await Promise.race([
           operation(),
-          this.createTimeoutPromise(context.timeout, context.operationName),
-        ]);
+          this.createTimeoutPromise<T>(context.timeout, context.operationName),
+        ]) as T;
       } else {
         result = await operation();
       }
@@ -195,7 +195,7 @@ export class ErrorHandler {
     }
 
     let code = 'UNKNOWN_ERROR';
-    let message = error.message;
+    const message = error.message;
 
     // Categorize common errors
     if (error.message.includes('timeout')) {
@@ -306,7 +306,9 @@ export class ErrorHandler {
         });
 
     // Preserve stack trace
-    enhancedError.stack = error.stack;
+    if (error.stack) {
+      enhancedError.stack = error.stack;
+    }
     
     return enhancedError;
   }

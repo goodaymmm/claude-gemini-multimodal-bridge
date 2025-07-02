@@ -1,5 +1,5 @@
 import { execSync, spawn } from 'child_process';
-import { AuthStatus, AuthResult, AuthErrorCode, AuthenticationError, LayerType } from '../core/types.js';
+import { AuthenticationError, AuthErrorCode, AuthStatus } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 
@@ -152,9 +152,11 @@ export class OAuthManager {
    * Detect current authentication method (OAuth vs API key)
    */
   private async detectAuthMethod(): Promise<'oauth' | 'api_key' | 'none'> {
-    // Check for API key first
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-    if (apiKey && apiKey.length > 10) {
+    // Check for Gemini-specific API keys only (exclude AI_STUDIO_API_KEY)
+    const geminiApiKey = process.env.GEMINI_API_KEY ||  // Gemini CLI specific
+                         process.env.GOOGLE_API_KEY;   // Legacy support
+                   
+    if (geminiApiKey && geminiApiKey.length > 10) {
       return 'api_key';
     }
 
@@ -175,7 +177,10 @@ export class OAuthManager {
    * Check API key authentication
    */
   private async checkApiKeyAuth(): Promise<AuthStatus> {
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const apiKey = process.env.AI_STUDIO_API_KEY || 
+                   process.env.GOOGLE_AI_STUDIO_API_KEY ||
+                   process.env.GEMINI_API_KEY ||  // Backward compatibility
+                   process.env.GOOGLE_API_KEY;   // Legacy support
     
     if (!apiKey) {
       return {
@@ -311,7 +316,7 @@ export class OAuthManager {
   /**
    * Check if cached auth status is still valid
    */
-  private isCacheValid(service: string): boolean {
+  private isCacheValid(_service: string): boolean {
     // For now, always revalidate to ensure accuracy
     // In the future, could implement TTL-based caching
     return false;

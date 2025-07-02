@@ -1,8 +1,5 @@
 # Dependencies
 node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Build outputs
 dist/
@@ -37,7 +34,6 @@ coverage/
 .nyc_output
 
 # Dependency directories
-node_modules/
 jspm_packages/
 
 # TypeScript cache
@@ -58,11 +54,7 @@ jspm_packages/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variables file
-.env
-.env.test
-.env.production
-.env.local
+# dotenv environment variables file (avoid duplication)
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -110,6 +102,7 @@ tmp/
 .cgmb-cache/
 test-files/
 examples/output/
+output/
 
 # IDE files
 .vscode/
@@ -136,3 +129,52 @@ config/secrets.json
 test-results/
 screenshots/
 videos/
+
+# Development notes and temporary files
+CLAUDE.md
+CLAUDE.ME
+CHANGELOG.md
+NPM_PACKAGE_TEST.md
+Error*.md
+google_docs.md
+.npmignore
+
+# Additional package manager files
+package-lock.json
+pnpm-lock.yaml
+.pnpm-store/
+yarn.lock
+
+# Backup and temporary files
+*.backup
+*.bak
+*.orig
+*.tmp
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache directories
+.turbo/
+.rush/
+.nx/
+
+# TypeScript declaration maps
+*.d.ts.map
+
+# Additional logs and monitoring
+performance-logs/
+benchmark-results/
+audit-logs/
+
+# Sensitive authentication data
+auth-cache/
+credentials.json
+*.env.*
+
+# Generated and build artifacts
+lib/
+types/
+docs/generated/

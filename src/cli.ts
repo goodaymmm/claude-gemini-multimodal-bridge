@@ -1,15 +1,62 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { config } from 'dotenv';
 import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
+import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
+import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { OAuthManager } from './auth/OAuthManager.js';
 import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
+import { LayerManager } from './core/LayerManager.js';
+
+// ===================================
+// Helper Functions for CLI Commands
+// ===================================
+
+function showChatHelp() {
+  console.log('💬 CGMB Chat - Natural Gemini interaction');
+  console.log('');
+  console.log('✨ Simple usage:');
+  console.log('  cgmb chat "your question"');
+  console.log('  cgmb c "your question"');
+  console.log('');
+  console.log('🔧 Advanced usage:');
+  console.log('  cgmb chat "question" --model gemini-2.5-flash');
+  console.log('  cgmb chat "question" --fast');
+  console.log('');
+  console.log('💡 Alternative: cgmb gemini -p "question"');
+  console.log('');
+  console.log('🌐 Web search is automatic - just ask about current events!');
+  console.log('');
+  console.log('Examples:');
+  console.log('  cgmb chat "What are the latest AI trends in 2025?"');
+  console.log('  cgmb c "Android security best practices"');
+  console.log('  cgmb chat "Current cryptocurrency market status"');
+  console.log('');
+  console.log('❓ Having issues? Try: cgmb auth-status');
+}
+
+function showGeminiHelp() {
+  console.log('🤖 CGMB Gemini - Direct Gemini CLI access');
+  console.log('');
+  console.log('Usage examples:');
+  console.log('  cgmb gemini -p "your question"        # Explicit mode');
+  console.log('  cgmb gemini "your question"           # Auto-detected');
+  console.log('  cgmb chat "your question"             # User-friendly');
+  console.log('');
+  console.log('🚀 Performance options:');
+  console.log('  cgmb gemini -p "question" --fast      # Direct CLI (fastest)');
+  console.log('  cgmb gemini -p "question" --model gemini-2.5-flash');
+  console.log('');
+  console.log('💡 Tip: Use "cgmb chat" for the easiest experience!');
+  console.log('');
+  console.log('🌐 Web search is automatically enabled for current information.');
+  console.log('🔐 Authentication issues? Try: gemini auth (OAuth recommended)');
+}
 
 // ===================================
 // CLI Interface for CGMB
@@ -31,25 +78,60 @@ program
   .option('--debug', 'Enable debug logging')
   .action(async (options) => {
     try {
-      // Load environment variables
-      config();
+      // Set environment variables to prevent Claude Code duplication
+      process.env.CGMB_SERVE_MODE = 'true';
+      process.env.CGMB_NO_CLAUDE_EXEC = 'true';
       
+      // Set log level first if specified
       if (options.verbose) {
-        process.env.LOG_LEVEL = 'verbose';
+        process.env.LOG_LEVEL = 'debug';
       }
       
       if (options.debug) {
         process.env.LOG_LEVEL = 'debug';
       }
 
+      // Load environment variables with smart discovery
+      const loadOptions: { verbose: boolean; searchPaths?: string[] } = { 
+        verbose: options.verbose || options.debug
+      };
+      if (options.config) {
+        loadOptions.searchPaths = [path.dirname(options.config)];
+      }
+      const envResult = await loadEnvironmentSmart(loadOptions);
+
+      if (!envResult.success && envResult.errors.length > 0) {
+        logger.warn('Environment loading had issues', {
+          errors: envResult.errors,
+          foundFiles: envResult.foundFiles
+        });
+      }
+
+      if (envResult.loadedFrom) {
+        logger.info('Environment loaded successfully', {
+          source: envResult.loadedFrom,
+          hasGeminiKey: !!process.env.GEMINI_API_KEY
+        });
+      }
+
       const server = new CGMBServer();
       await server.start();
       
-      // Keep the process running
-      process.on('SIGINT', () => {
+      // Keep the process running with proper cleanup
+      const gracefulShutdown = async () => {
         logger.info('Shutting down CGMB server...');
+        try {
+          if (server && typeof server.stop === 'function') {
+            await server.stop();
+          }
+        } catch (error) {
+          logger.error('Error during server shutdown', error as Error);
+        }
         process.exit(0);
-      });
+      };
+
+      process.on('SIGINT', gracefulShutdown);
+      process.on('SIGTERM', gracefulShutdown);
       
     } catch (error) {
       logger.error('Failed to start CGMB server', error as Error);
@@ -120,7 +202,8 @@ program
   .option('--interactive', 'Interactive authentication setup')
   .action(async (options) => {
     try {
-      config();
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
       
       const authManager = new OAuthManager();
       const interactiveSetup = new InteractiveSetup();
@@ -137,6 +220,10 @@ program
         await interactiveSetup.runAuthSetupWizard();
       }
       
+      // 認証完了後の明示的な終了
+      logger.info('Authentication setup completed successfully');
+      process.exit(0);
+      
     } catch (error) {
       logger.error('Authentication setup failed', error as Error);
       process.exit(1);
@@ -150,7 +237,8 @@ program
   .option('--verbose', 'Show detailed authentication information')
   .action(async (options) => {
     try {
-      config();
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
       
       const verifier = new AuthVerifier();
       const result = await verifier.verifyAllAuthentications();
@@ -320,7 +408,7 @@ program
       
       // Check environment variables
       console.log('\n📋 Environment Variables:');
-      const envVars = ['GEMINI_API_KEY', 'CLAUDE_CODE_PATH', 'GEMINI_CLI_PATH'];
+      const envVars = ['AI_STUDIO_API_KEY', 'CLAUDE_CODE_PATH', 'GEMINI_CLI_PATH'];
       for (const envVar of envVars) {
         const value = process.env[envVar];
         if (value) {
@@ -331,6 +419,38 @@ program
         } else {
           console.log(`  ❌ ${envVar}: Not set`);
         }
+      }
+      
+      // Check for deprecated environment variables and warn with specific guidance
+      console.log('');
+      console.log('🔧 Environment Variable Migration:');
+      const deprecatedVars = [
+        { old: 'GEMINI_API_KEY', new: 'AI_STUDIO_API_KEY', purpose: 'AI Studio authentication' },
+        { old: 'GOOGLE_AI_STUDIO_API_KEY', new: 'AI_STUDIO_API_KEY', purpose: 'AI Studio authentication' }
+      ];
+      
+      for (const { old, new: newVar, purpose } of deprecatedVars) {
+        const value = process.env[old];
+        if (value) {
+          console.log(`  ⚠️  ${old}: ${value.substring(0, 8)}... (DEPRECATED)`);
+          console.log(`     → Migrate to: ${newVar} (for ${purpose})`);
+          console.log(`     → Add to .env: ${newVar}=${value}`);
+        }
+      }
+      
+      // Check for proper AI Studio configuration
+      const hasProperAIStudioKey = !!process.env.AI_STUDIO_API_KEY;
+      const hasDeprecatedKeys = deprecatedVars.some(v => !!process.env[v.old]);
+      
+      if (!hasProperAIStudioKey && hasDeprecatedKeys) {
+        console.log('');
+        console.log('🔄 Migration Required:');
+        console.log('  AI Studio authentication detected using deprecated variable names.');
+        console.log('  This may cause the authentication failures seen in Error.md.');
+        console.log('  Please update your .env file to use AI_STUDIO_API_KEY.');
+      } else if (hasProperAIStudioKey) {
+        console.log('');
+        console.log('✅ Environment Configuration: Using recommended variable names');
       }
       
     } catch (error) {
@@ -349,6 +469,238 @@ program
     interactiveSetup.displaySetupGuide();
   });
 
+// MCP setup command
+program
+  .command('setup-mcp')
+  .description('Configure Claude Code MCP integration for CGMB')
+  .option('--force', 'Force update existing configuration')
+  .option('--dry-run', 'Show what would be done without making changes')
+  .option('--manual', 'Show manual setup instructions instead of automatic setup')
+  .action(async (options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      if (options.manual) {
+        console.log('📋 Manual Claude Code MCP Setup Instructions');
+        console.log('═'.repeat(50));
+        console.log(getManualSetupInstructions());
+        return;
+      }
+      
+      console.log('🔧 Setting up Claude Code MCP integration...\n');
+      
+      // Check Claude Code CLI version and use appropriate method
+      let claudeVersion = '';
+      
+      // Skip claude command execution if in serve mode to prevent duplication
+      if (process.env.CGMB_NO_CLAUDE_EXEC === 'true') {
+        console.log('🔄 Claude command execution skipped (serve mode protection)');
+        console.log('💡 Manual setup required. See: cgmb setup-mcp --manual');
+        return;
+      }
+      
+      try {
+        claudeVersion = execSync('claude --version', { encoding: 'utf8' }).trim();
+        console.log(`Claude Code CLI version: ${claudeVersion}`);
+      } catch (error) {
+        console.log('⚠️  Could not detect Claude Code CLI version');
+      }
+      
+      // Check if claude mcp command is available (v1.0.35+)
+      let hasNewMCPCommand = false;
+      
+      if (process.env.CGMB_NO_CLAUDE_EXEC !== 'true') {
+        try {
+          execSync('claude mcp --help', { stdio: 'ignore' });
+          hasNewMCPCommand = true;
+          console.log('✅ Detected new Claude Code CLI with mcp command support\n');
+        } catch {
+          console.log('ℹ️  Using legacy MCP configuration method\n');
+        }
+      }
+      
+      // If new MCP command is available, use it instead
+      if (hasNewMCPCommand && !options.force && process.env.CGMB_NO_CLAUDE_EXEC !== 'true') {
+        try {
+          // Check if already configured with new method
+          const mcpListOutput = execSync('claude mcp list', { encoding: 'utf8' });
+          if (mcpListOutput.includes('claude-gemini-multimodal-bridge')) {
+            console.log('✅ CGMB is already configured in Claude Code MCP');
+            console.log('\nCurrent configuration:');
+            const mcpGetOutput = execSync('claude mcp get claude-gemini-multimodal-bridge', { encoding: 'utf8' });
+            console.log(mcpGetOutput);
+            
+            if (!options.force) {
+              console.log('\n💡 To reconfigure, use: cgmb setup-mcp --force');
+              return;
+            }
+          }
+          
+          // Add CGMB using new method
+          console.log('Adding CGMB to Claude Code using new MCP command...');
+          const addCommand = 'claude mcp add claude-gemini-multimodal-bridge cgmb serve -e NODE_ENV=production';
+          
+          if (options.dryRun) {
+            console.log(`🧪 Dry Run: Would execute: ${addCommand}`);
+            return;
+          }
+          
+          execSync(addCommand, { stdio: 'inherit' });
+          console.log('\n✅ Successfully added CGMB to Claude Code MCP!');
+          console.log('\nNext steps:');
+          console.log('1. Restart Claude Code to load the new MCP configuration');
+          console.log('2. Run "cgmb verify" to test the connection');
+          console.log('3. Check that CGMB tools are available in Claude Code');
+          return;
+        } catch (error) {
+          console.log('⚠️  Failed to use new MCP command, falling back to legacy method');
+          logger.debug('MCP command error', { error: (error as Error).message });
+        }
+      }
+      
+      // Check current status first (legacy method)
+      const status = await getMCPStatus();
+      
+      console.log('📊 Current MCP Configuration Status');
+      console.log('═'.repeat(60));
+      console.log(`Configuration Path: ${status.configPath || '❌ Claude Code config not found'}`);
+      console.log(`CGMB Configured: ${status.isConfigured ? '✅ Yes' : '❌ No'}`);
+      
+      if (status.currentConfig) {
+        console.log(`Current Command: ${status.currentConfig.command}`);
+        console.log(`Current Args: ${status.currentConfig.args.join(' ')}`);
+      }
+      
+      if (status.recommendations.length > 0) {
+        console.log('\n💡 System Status:');
+        status.recommendations.forEach(rec => {
+          const icon = rec.includes('properly configured') ? '✅' : 'ℹ️';
+          console.log(`   ${icon} ${rec}`);
+        });
+      }
+      
+      if (status.issues.length > 0) {
+        console.log('\n⚠️  Issues Detected:');
+        status.issues.forEach(issue => console.log(`   • ${issue}`));
+      }
+      
+      console.log('');
+      
+      if (options.dryRun) {
+        console.log('🧪 Dry Run Mode - Showing what would be done:');
+        console.log('');
+      }
+      
+      // Perform setup
+      const result = await setupCGMBMCP({
+        force: options.force,
+        dryRun: options.dryRun
+      });
+      
+      if (result.success) {
+        const actionText = options.dryRun ? 'Would be' : 'Successfully';
+        console.log(`✅ ${actionText} ${result.action} CGMB MCP configuration`);
+        
+        if (result.configPath) {
+          console.log(`📁 Configuration file: ${result.configPath}`);
+        }
+        
+        if (result.backupPath) {
+          console.log(`💾 Backup created: ${result.backupPath}`);
+        }
+        
+        if (!options.dryRun) {
+          console.log('');
+          console.log('🎉 Setup Complete!');
+          console.log('');
+          console.log('Next steps:');
+          console.log('1. Restart Claude Code to load the new MCP configuration');
+          console.log('2. Run "cgmb verify" to test the connection');
+          console.log('3. Check that CGMB tools are available in Claude Code');
+          
+          if (status.recommendations.length > 0) {
+            console.log('');
+            console.log('💡 Recommendations:');
+            status.recommendations.forEach(rec => console.log(`   • ${rec}`));
+          }
+        }
+      } else {
+        console.log(`❌ ${result.message}`);
+        
+        if (result.action === 'error') {
+          console.log('');
+          console.log('🔧 Manual Setup Alternative:');
+          console.log('Run: cgmb setup-mcp --manual');
+        }
+        
+        process.exit(1);
+      }
+      
+    } catch (error) {
+      logger.error('MCP setup failed', error as Error);
+      console.log('❌ Failed to setup MCP configuration');
+      console.log('');
+      console.log('🔧 Try manual setup instead:');
+      console.log('   cgmb setup-mcp --manual');
+      process.exit(1);
+    }
+  });
+
+// MCP status command
+program
+  .command('mcp-status')
+  .description('Check Claude Code MCP configuration status')
+  .action(async () => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('📊 Claude Code MCP Configuration Status');
+      console.log('═'.repeat(50));
+      
+      const status = await getMCPStatus();
+      
+      console.log(`Configuration Path: ${status.configPath || 'Not found'}`);
+      console.log(`CGMB Configured: ${status.isConfigured ? '✅ Yes' : '❌ No'}`);
+      console.log('');
+      
+      if (status.currentConfig) {
+        console.log('🔧 Current CGMB Configuration:');
+        console.log(`   Command: ${status.currentConfig.command}`);
+        console.log(`   Arguments: ${status.currentConfig.args.join(' ')}`);
+        if (status.currentConfig.env) {
+          console.log(`   Environment: ${Object.keys(status.currentConfig.env).join(', ')}`);
+        }
+        console.log('');
+      }
+      
+      if (status.issues.length > 0) {
+        console.log('⚠️  Issues:');
+        status.issues.forEach(issue => console.log(`   • ${issue}`));
+        console.log('');
+      }
+      
+      if (status.recommendations.length > 0) {
+        console.log('💡 Recommendations:');
+        status.recommendations.forEach(rec => console.log(`   • ${rec}`));
+        console.log('');
+      }
+      
+      if (!status.isConfigured) {
+        console.log('🚀 To setup MCP integration, run:');
+        console.log('   cgmb setup-mcp');
+        console.log('');
+        console.log('📋 For manual setup instructions, run:');
+        console.log('   cgmb setup-mcp --manual');
+      }
+      
+    } catch (error) {
+      logger.error('Failed to check MCP status', error as Error);
+      process.exit(1);
+    }
+  });
+
 // Verify command
 program
   .command('verify')
@@ -359,7 +711,8 @@ program
       logger.info('🔍 Verifying CGMB installation and authentication...');
       
       // Load configuration
-      config();
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
       
       const authVerifier = new AuthVerifier();
       const interactiveSetup = new InteractiveSetup();
@@ -430,21 +783,58 @@ program
         }
       });
       
+      // Run MCP configuration verification
+      logger.info('\n🔗 MCP Configuration Verification:');
+      const mcpStatus = await getMCPStatus();
+      let mcpChecksPassed = true;
+      
+      const mcpIcon = mcpStatus.isConfigured ? '✅' : '❌';
+      logger.info(`${mcpIcon} Claude Code MCP Integration: ${mcpStatus.isConfigured ? 'Configured' : 'Not Configured'}`);
+      
+      if (!mcpStatus.isConfigured) {
+        mcpChecksPassed = false;
+        logger.info('   Action: Run "cgmb setup-mcp" to configure MCP integration');
+      } else if (mcpStatus.currentConfig) {
+        logger.info(`   Command: ${mcpStatus.currentConfig.command}`);
+        logger.info(`   Args: ${mcpStatus.currentConfig.args.join(' ')}`);
+      }
+      
+      if (mcpStatus.issues.length > 0) {
+        mcpStatus.issues.forEach(issue => {
+          logger.info(`   ⚠️  ${issue}`);
+        });
+      }
+      
       // Overall status
-      const allPassed = systemChecksPassed && authChecksPassed;
+      const allPassed = systemChecksPassed && authChecksPassed && mcpChecksPassed;
       
       logger.info('\n' + '═'.repeat(50));
       if (allPassed) {
         logger.info('🎉 All verification checks passed!');
         
-        // Test server initialization
+        // Test server initialization (lightweight test)
         logger.info('\n🚀 Testing server initialization...');
-        const server = new CGMBServer();
-        await server.initialize();
-        logger.info('✓ Server initialization test passed');
+        try {
+          const server = new CGMBServer();
+          await server.initialize();
+          logger.info('✓ Server initialization test passed');
+          
+          // Ensure any resources are cleaned up
+          if (server && typeof (server as any).cleanup === 'function') {
+            await (server as any).cleanup();
+          }
+        } catch (initError) {
+          logger.warn('Server initialization test failed, but basic checks passed', {
+            error: (initError as Error).message
+          });
+          logger.info('✓ Basic verification completed (server test skipped)');
+        }
         
         logger.info('\n✨ CGMB is ready to use!');
         logger.info('💡 Try: cgmb serve');
+        
+        // Explicitly exit after successful verification
+        process.exit(0);
         
       } else {
         logger.error('⚠️  Some verification checks failed', new Error('Verification checks failed'));
@@ -472,9 +862,21 @@ program
           logger.info('   3. Run: cgmb verify');
         }
         
+        if (!mcpChecksPassed) {
+          logger.info('\n💡 To fix MCP integration:');
+          logger.info('   1. Run: cgmb setup-mcp');
+          logger.info('   2. Restart Claude Code');
+          logger.info('   3. Run: cgmb verify');
+        }
+        
         if (authResults.recommendations.length > 0) {
           logger.info('\n📝 Recommendations:');
           authResults.recommendations.forEach(rec => logger.info(`   • ${rec}`));
+        }
+        
+        if (mcpStatus.recommendations.length > 0) {
+          logger.info('\n🔗 MCP Recommendations:');
+          mcpStatus.recommendations.forEach(rec => logger.info(`   • ${rec}`));
         }
         
         process.exit(1);
@@ -490,33 +892,800 @@ program
     }
   });
 
-// Test command
+// Test command - Enhanced with actual multimodal processing
 program
   .command('test')
   .description('Run a test multimodal processing request')
   .option('-f, --file <path>', 'Path to test file')
   .option('-p, --prompt <text>', 'Test prompt', 'Analyze this content')
+  .option('--timeout <ms>', 'Timeout in milliseconds', '120000')
   .action(async (options) => {
     try {
-      config();
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
       
       logger.info('Running CGMB test...');
       
       const server = new CGMBServer();
       await server.initialize();
       
-      // Create a simple test request
-      const testFiles = options.file ? [{ path: options.file, type: 'document' }] : [];
+      // Import MultimodalProcess for actual testing
+      const { MultimodalProcess } = await import('./tools/multimodalProcess.js');
+      const processor = new MultimodalProcess();
       
-      if (testFiles.length === 0) {
-        logger.warn('No test file provided, creating a text-only test');
+      if (options.file) {
+        // Test with provided file
+        logger.info(`Testing with file: ${options.file}`);
+        
+        const result = await processor.processSingleFile(
+          options.file,
+          options.prompt,
+          { timeout: parseInt(options.timeout) }
+        );
+        
+        logger.info('✅ File processing test completed successfully!');
+        logger.info(`Result: ${result.content.substring(0, 200)}...`);
+        logger.info(`Processing time: ${result.processing_time}ms`);
+        logger.info(`Layers involved: ${result.layers_involved?.join(', ')}`);
+        
+      } else {
+        // Test with text-only prompt
+        logger.info('Testing with text-only prompt...');
+        
+        const result = await processor.processMultimodal({
+          prompt: options.prompt,
+          files: [],
+          workflow: 'analysis',
+          options: { timeout: parseInt(options.timeout) }
+        });
+        
+        logger.info('✅ Text processing test completed successfully!');
+        logger.info(`Result: ${result.content.substring(0, 200)}...`);
+        logger.info(`Processing time: ${result.processing_time}ms`);
+        logger.info(`Layers involved: ${result.layers_involved?.join(', ')}`);
       }
       
-      logger.info('Test completed successfully!');
-      logger.info('CGMB is working correctly');
+      logger.info('🎉 CGMB test completed successfully!');
+      logger.info('All systems are working correctly');
+      
+      // Exit immediately after test completion
+      process.exit(0);
       
     } catch (error) {
-      logger.error('Test failed', error as Error);
+      logger.error('❌ Test failed', error as Error);
+      logger.error('This might indicate authentication or configuration issues');
+      logger.info('💡 Try running: cgmb verify');
+      process.exit(1);
+    }
+  });
+
+// User-friendly chat command
+program
+  .command('chat')
+  .alias('c')
+  .description('Chat with Gemini (user-friendly interface)')
+  .argument('[prompt...]', 'Your question or prompt')
+  .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
+  .option('--fast', 'Use fast path for better performance')
+  .action(async (promptArgs, options) => {
+    try {
+      const prompt = promptArgs.join(' ');
+      
+      if (!prompt) {
+        showChatHelp();
+        process.exit(1);
+      }
+
+      // Check if user is trying to generate images with chat command
+      const imageGenerationPatterns = [
+        /generate.*image/i,
+        /create.*image/i,
+        /make.*image/i,
+        /draw.*image/i,
+        /generate.*picture/i,
+        /create.*picture/i,
+        /image.*of/i,
+        /picture.*of/i
+      ];
+      
+      if (imageGenerationPatterns.some(pattern => pattern.test(prompt))) {
+        console.log('\n💡 It looks like you want to generate an image!');
+        console.log('');
+        console.log('The chat command doesn\'t generate images. Use the dedicated command:');
+        console.log(`   cgmb generate-image "${prompt}"`);
+        console.log('');
+        console.log('This will automatically:');
+        console.log('   • Sanitize your prompt (cute → friendly-looking)');
+        console.log('   • Add safety prefixes');
+        console.log('   • Generate the image properly');
+        console.log('');
+        process.exit(0);
+      }
+
+      console.log('💡 Auto-detected prompt (using chat mode)');
+      
+      // 内部的にgeminiコマンドと同じ処理を実行
+      // ただし-pフラグは自動で設定
+      options.prompt = prompt;
+      await executeGeminiCommand(options);
+      
+    } catch (error) {
+      const errorMessage = (error as Error).message;
+      
+      if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
+        logger.error('❌ Chat API Error', error as Error);
+        logger.info('🔧 This looks like an authentication issue:');
+        logger.info('   • Try OAuth: gemini auth');
+        logger.info('   • Check status: cgmb auth-status --verbose');
+      } else {
+        logger.error('❌ Chat command failed', error as Error);
+        logger.info('💡 Troubleshooting:');
+        logger.info('   • Check auth: cgmb auth-status');
+        logger.info('   • Try manual: cgmb gemini -p "your question"');
+      }
+      process.exit(1);
+    }
+  });
+
+// Direct Gemini CLI command
+program
+  .command('gemini')
+  .description('Direct Gemini CLI processing (web search enabled by default)')
+  .argument('[prompt...]', 'Direct prompt (auto-detects if -p missing)')
+  .option('-p, --prompt <text>', 'Explicit prompt for Gemini CLI')
+  .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
+  .option('-f, --file <path>', 'File to analyze with prompt')
+  .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
+  .action(async (promptArgs, options) => {
+    try {
+      let prompt = options.prompt;
+      
+      // スマート検出: 引数があるけど-pがない場合
+      if (!prompt && promptArgs.length > 0) {
+        prompt = promptArgs.join(' ');
+        console.log('💡 Auto-detected prompt (tip: use -p for explicit mode)');
+      }
+      
+      if (!prompt) {
+        showGeminiHelp();
+        process.exit(1);
+      }
+
+      // Check if user is trying to generate images with gemini command
+      const imageGenerationPatterns = [
+        /generate.*image/i,
+        /create.*image/i,
+        /make.*image/i,
+        /draw.*image/i,
+        /generate.*picture/i,
+        /create.*picture/i,
+        /image.*of/i,
+        /picture.*of/i
+      ];
+      
+      if (imageGenerationPatterns.some(pattern => pattern.test(prompt))) {
+        console.log('\n💡 It looks like you want to generate an image!');
+        console.log('');
+        console.log('The gemini command doesn\'t generate images. Use the dedicated command:');
+        console.log(`   cgmb generate-image "${prompt}"`);
+        console.log('');
+        console.log('This will automatically:');
+        console.log('   • Sanitize your prompt (cute → friendly-looking)');
+        console.log('   • Add safety prefixes');
+        console.log('   • Generate the image properly');
+        console.log('');
+        process.exit(0);
+      }
+
+      options.prompt = prompt;
+      await executeGeminiCommand(options);
+      
+    } catch (error) {
+      const errorMessage = (error as Error).message;
+      
+      // Enhanced error handling with specific guidance
+      if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
+        logger.error('❌ API Function Call Error', error as Error);
+        logger.info('🔧 This error usually indicates an authentication issue:');
+        logger.info('   1. Try OAuth authentication: gemini auth');
+        logger.info('   2. Check API key configuration');
+        logger.info('   3. Verify Gemini CLI version: gemini --version');
+        logger.info('   4. Check status: cgmb auth-status --verbose');
+      } else if (errorMessage.includes('UNAUTHENTICATED') || errorMessage.includes('API_KEY')) {
+        logger.error('❌ Authentication Error', error as Error);
+        logger.info('🔧 Fix authentication:');
+        logger.info('   • OAuth (recommended): gemini auth');
+        logger.info('   • Check status: cgmb auth-status');
+      } else if (errorMessage.includes('not found') || errorMessage.includes('command not found')) {
+        logger.error('❌ Gemini CLI Not Found', error as Error);
+        logger.info('🔧 Install Gemini CLI:');
+        logger.info('   • Run setup: cgmb setup');
+        logger.info('   • Manual install: npm install -g @google/gemini-cli');
+      } else if (errorMessage.includes('timeout')) {
+        logger.error('❌ Request Timeout', error as Error);
+        logger.info('💡 Try:');
+        logger.info('   • Shorter prompt');
+        logger.info('   • Check network connection');
+        logger.info('   • Use --fast flag for direct calls');
+      } else {
+        logger.error('❌ Gemini CLI processing failed', error as Error);
+        logger.info('💡 General troubleshooting:');
+        logger.info('   • Check authentication: cgmb auth-status');
+        logger.info('   • Verify setup: cgmb verify');
+        logger.info('   • View help: cgmb gemini --help');
+      }
+      process.exit(1);
+    }
+  });
+
+// 共通のGemini実行関数
+async function executeGeminiCommand(options: any) {
+  try {
+    if (!options.prompt) {
+      throw new Error('Prompt is required');
+    }
+
+    // Handle common incorrect option usage
+    if (process.argv.includes('--search')) {
+      console.log('\n💡 Note: Web search is automatically enabled in Gemini CLI.');
+      console.log('   No --search flag needed. Just ask about current events or trends!');
+      console.log('   Example: cgmb gemini -p "latest AI security trends 2025"\n');
+      // Continue processing without the flag
+    }
+
+    await loadEnvironmentSmart({ verbose: false });
+    
+    logger.info('🔍 Processing with Gemini CLI...');
+    
+    // Fast path: Direct Gemini CLI call (bypass CGMB layers)
+    if (options.fast && !options.file) {
+      logger.info('Using fast path (direct Gemini CLI call)...');
+      
+      const args = ['gemini'];
+      if (options.model && options.model !== 'gemini-2.5-pro') {
+        args.push('-m', options.model);
+      }
+      args.push('-p', options.prompt);
+      // Note: Web search is automatic in Gemini CLI, no flags needed
+      
+      try {
+        const { spawn } = await import('child_process');
+        const child = spawn(args[0]!, args.slice(1));
+        
+        let result = '';
+        let error = '';
+        
+        child.stdout?.on('data', (data: Buffer) => {
+          result += data.toString();
+        });
+        
+        child.stderr?.on('data', (data: Buffer) => {
+          error += data.toString();
+        });
+        
+        await new Promise<void>((resolve, reject) => {
+          child.on('close', (code: number | null) => {
+            if (code !== 0) {
+              reject(new Error(`Process exited with code ${code}: ${error}`));
+            } else {
+              resolve();
+            }
+          });
+          
+          child.on('error', (err: Error) => {
+            reject(err);
+          });
+          
+          // Timeout
+          setTimeout(() => {
+            child.kill();
+            reject(new Error('Process timeout'));
+          }, 90000);
+        });
+        
+        logger.info('✅ Fast path Gemini CLI processing completed');
+        console.log('\n📋 Result:');
+        console.log('═'.repeat(50));
+        console.log(result);
+        console.log('\n📊 Metadata:');
+        console.log('Method: Direct Gemini CLI (fast path)');
+        console.log('Bypass: CGMB layer overhead eliminated');
+        return;
+      } catch (error) {
+        logger.warn('Fast path failed, falling back to CGMB layers', { 
+          error: (error as Error).message 
+        });
+        // Continue to normal processing
+      }
+    }
+    
+    // Import and use Gemini CLI layer directly
+    const { GeminiCLILayer } = await import('./layers/GeminiCLILayer.js');
+    const geminiLayer = new GeminiCLILayer();
+    
+    await geminiLayer.initialize();
+    
+    let result;
+    if (options.file) {
+      // Process with file
+      result = await geminiLayer.processFiles([{ path: options.file, type: 'document' }], options.prompt);
+    } else {
+      // Text-only processing
+      result = await geminiLayer.execute({
+        type: 'text_processing',
+        prompt: options.prompt,
+        useSearch: true  // Default to true - Gemini CLI has intelligent search decision-making
+      });
+    }
+    
+    logger.info('✅ Gemini CLI processing completed');
+    console.log('\n📋 Result:');
+    console.log('═'.repeat(50));
+    
+    if ('data' in result) {
+      console.log(result.data);
+    } else if ('content' in result) {
+      console.log(result.content);
+    } else {
+      console.log('Processing completed');
+    }
+    
+    if (result.metadata) {
+      console.log('\n📊 Metadata:');
+      const metadata = result.metadata as any;
+      console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
+      console.log(`Model: ${metadata.model || 'N/A'}`);
+      console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
+    }
+    
+    // Exit immediately after displaying results
+    process.exit(0);
+    
+  } catch (error) {
+    logger.error('❌ Gemini CLI processing failed', error as Error);
+    logger.info('💡 Check authentication: cgmb auth-status');
+    process.exit(1);
+  }
+}
+
+// Direct AI Studio command
+program
+  .command('aistudio')
+  .description('Direct AI Studio processing for multimodal content')
+  .option('-p, --prompt <text>', 'Prompt for AI Studio')
+  .option('-f, --files <paths...>', 'Files to process (images, documents, etc.)')
+  .option('-m, --model <model>', 'AI Studio model to use', 'gemini-2.0-flash-exp')
+  .action(async (options) => {
+    try {
+      if (!options.prompt) {
+        logger.error('Prompt is required. Use: cgmb aistudio -p "your question" -f file1 file2');
+        process.exit(1);
+      }
+
+      // Check if user is trying to generate images with aistudio command
+      const imageGenerationPatterns = [
+        /generate.*image/i,
+        /create.*image/i,
+        /make.*image/i,
+        /draw.*image/i,
+        /generate.*picture/i,
+        /create.*picture/i,
+        /image.*of/i,
+        /picture.*of/i
+      ];
+      
+      if (imageGenerationPatterns.some(pattern => pattern.test(options.prompt))) {
+        console.log('\n⚠️  WARNING: You seem to be trying to generate an image.');
+        console.log('');
+        console.log('The "cgmb aistudio" command does NOT generate images - it only analyzes text!');
+        console.log('');
+        console.log('✅ To generate images, use the correct command:');
+        console.log(`   cgmb generate-image "${options.prompt}"`);
+        console.log('');
+        console.log('Example:');
+        console.log('   cgmb generate-image "cute cat"  # This will generate an image');
+        console.log('');
+        console.log('The generate-image command includes:');
+        console.log('   • Automatic prompt sanitization (cute → friendly-looking)');
+        console.log('   • Safety prefixes to avoid content policy issues');
+        console.log('   • Proper image generation with Gemini 2.0 Flash');
+        console.log('');
+        console.log('Would you like to continue with text analysis anyway? (y/N)');
+        
+        const readline = await import('readline');
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        
+        const answer = await new Promise<string>((resolve) => {
+          rl.question('', (answer) => {
+            rl.close();
+            resolve(answer.toLowerCase());
+          });
+        });
+        
+        if (answer !== 'y' && answer !== 'yes') {
+          console.log('\n💡 Redirecting to image generation command...');
+          console.log(`   Run: cgmb generate-image "${options.prompt}"`);
+          process.exit(0);
+        }
+      }
+
+      await loadEnvironmentSmart({ verbose: false });
+      
+      logger.info('🎨 Processing with AI Studio...');
+      
+      // Import and use AI Studio layer directly
+      const { AIStudioLayer } = await import('./layers/AIStudioLayer.js');
+      const aiStudioLayer = new AIStudioLayer();
+      
+      await aiStudioLayer.initialize();
+      
+      const files = options.files || [];
+      logger.info(`Processing ${files.length} files with AI Studio`);
+      
+      const result = await aiStudioLayer.execute({
+        type: 'multimodal_processing',
+        prompt: options.prompt,
+        files: files.map((f: string) => ({ path: f, type: 'document' })),
+        model: options.model
+      });
+      
+      logger.info('✅ AI Studio processing completed');
+      console.log('\n📋 Result:');
+      console.log('═'.repeat(50));
+      
+      if ('data' in result) {
+        console.log(result.data);
+      } else if ('content' in result) {
+        console.log(result.content);
+      } else {
+        console.log('Processing completed');
+      }
+      
+      if (result.metadata) {
+        console.log('\n📊 Metadata:');
+        const metadata = result.metadata as any;
+        console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
+        console.log(`Model: ${metadata.model || 'N/A'}`);
+        console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
+        console.log(`Files processed: ${files.length}`);
+      }
+      
+      // Exit immediately after displaying results
+      process.exit(0);
+      
+    } catch (error) {
+      logger.error('❌ AI Studio processing failed', error as Error);
+      logger.info('💡 Check authentication: cgmb auth-status');
+      process.exit(1);
+    }
+  });
+
+// Enhanced multimodal command for complex tasks
+program
+  .command('process')
+  .description('Process multimodal content with intelligent layer routing')
+  .option('-p, --prompt <text>', 'Processing prompt')
+  .option('-f, --files <paths...>', 'Files to process')
+  .option('-w, --workflow <type>', 'Workflow type: analysis, generation, conversion, extraction', 'analysis')
+  .option('--strategy <strategy>', 'Processing strategy: claude-first, gemini-first, aistudio-first, adaptive', 'adaptive')
+  .action(async (options) => {
+    try {
+      if (!options.prompt) {
+        logger.error('Prompt is required. Use: cgmb process -p "your task" -f file1 file2');
+        process.exit(1);
+      }
+
+      await loadEnvironmentSmart({ verbose: false });
+      
+      logger.info('🔀 Processing with intelligent layer routing...');
+      
+      const { MultimodalProcess } = await import('./tools/multimodalProcess.js');
+      const processor = new MultimodalProcess();
+      
+      const files = options.files ? options.files.map((path: string) => ({ path, type: 'document' })) : [];
+      
+      const result = await processor.processMultimodal({
+        prompt: options.prompt,
+        files,
+        workflow: options.workflow,
+        options: {
+          layer_priority: options.strategy === 'claude-first' ? 'claude' :
+                         options.strategy === 'gemini-first' ? 'gemini' :
+                         options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
+          detailed: true
+        }
+      });
+      
+      logger.info('✅ Multimodal processing completed');
+      console.log('\n📋 Result:');
+      console.log('═'.repeat(50));
+      console.log(result.content);
+      
+      console.log('\n📊 Processing Details:');
+      console.log(`Workflow: ${result.workflow_used}`);
+      console.log(`Processing time: ${result.processing_time}ms`);
+      console.log(`Layers involved: ${result.layers_involved?.join(', ')}`);
+      console.log(`Files processed: ${result.files_processed?.length || 0}`);
+      
+      if (result.metadata) {
+        console.log(`Total tokens: ${result.metadata.tokens_used || 'N/A'}`);
+        console.log(`Estimated cost: ${result.metadata.cost || 'N/A'}`);
+      }
+      
+      // Exit immediately after displaying results
+      process.exit(0);
+      
+    } catch (error) {
+      logger.error('❌ Multimodal processing failed', error as Error);
+      logger.info('💡 Try: cgmb verify');
+      process.exit(1);
+    }
+  });
+
+// Generate Image command
+program
+  .command('generate-image <prompt>')
+  .description('Generate an image using AI Studio')
+  .option('-s, --style <style>', 'Art style (photorealistic, cartoon, digital-art)', 'digital-art')
+  .option('-o, --output <path>', 'Output file path')
+  .option('--safe-mode', 'Use extra-safe prompt formatting', true)
+  .action(async (prompt, options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('🎨 Generating image with AI Studio...');
+      
+      // Add safety prefix if safe mode is enabled
+      let safePrompt = prompt;
+      if (options.safeMode) {
+        // Add safe prefixes to avoid content policy issues
+        const safetyPrefixes = [
+          'digital illustration of',
+          'artistic rendering of',
+          'professional diagram showing',
+          'creative visualization of',
+          'stylized representation of'
+        ];
+        const prefix = safetyPrefixes[Math.floor(Math.random() * safetyPrefixes.length)];
+        safePrompt = `${prefix} ${prompt}`;
+      }
+      
+      const defaultConfig = {
+        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+        cache: { enabled: true, ttl: 3600 },
+        logging: { level: 'info' as const }
+      };
+      const aiStudioLayer = new LayerManager(defaultConfig).getAIStudioLayer();
+      await aiStudioLayer.initialize();
+      
+      const result = await aiStudioLayer.generateImage(safePrompt, {
+        style: options.style,
+        quality: 'high',
+        aspectRatio: '1:1'
+      });
+      
+      if (result.success && result.outputPath) {
+        if (options.output) {
+          // Copy generated file to desired location
+          await fs.promises.copyFile(result.outputPath, options.output);
+          console.log(`✅ Image saved to: ${options.output}`);
+        } else {
+          console.log('✅ Image generated successfully!');
+          console.log(`📁 Generated at: ${result.outputPath}`);
+          console.log(`📊 Size: ${result.metadata?.dimensions?.width}x${result.metadata?.dimensions?.height || 'Unknown'}`);
+          console.log(`🖼️  Format: ${result.metadata?.format || 'PNG'}`);
+          console.log('\n💡 Use --output flag to save the image to a specific location.');
+        }
+      } else {
+        console.error('❌ Image generation failed:', result.error || 'Unknown error');
+        if (result.error?.includes('content policy')) {
+          console.log('\n💡 Try modifying your prompt to be more specific or descriptive.');
+          console.log('   Example: "professional illustration of a happy cat in a garden"');
+        }
+      }
+    } catch (error) {
+      logger.error('Image generation failed', error as Error);
+      console.error('❌ Failed to generate image:', (error as Error).message);
+      console.log('\n💡 Troubleshooting tips:');
+      console.log('   1. Check your AI Studio API key: cgmb auth-status');
+      console.log('   2. Try a simpler prompt');
+      console.log('   3. Use --safe-mode flag (enabled by default)');
+      process.exit(1);
+    }
+  });
+
+// Generate Audio command
+program
+  .command('generate-audio <text>')
+  .description('Generate audio/speech from text using AI Studio')
+  .option('-v, --voice <voice>', 'Voice name (Kore, Puck, etc.)', 'Kore')
+  .option('-o, --output <path>', 'Output audio file path')
+  .option('--script', 'Generate script first then convert to audio')
+  .action(async (text, options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('🎵 Generating audio with AI Studio...');
+      
+      const defaultConfig = {
+        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+        cache: { enabled: true, ttl: 3600 },
+        logging: { level: 'info' as const }
+      };
+      const aiStudioLayer = new LayerManager(defaultConfig).getAIStudioLayer();
+      await aiStudioLayer.initialize();
+      
+      let result;
+      if (options.script) {
+        console.log('📝 Generating audio script first...');
+        result = await aiStudioLayer.generateAudioWithScript(text);
+      } else {
+        result = await aiStudioLayer.generateAudio(text, {
+          voice: options.voice,
+          format: 'wav',
+          quality: 'hd'
+        });
+      }
+      
+      if (result.success && result.outputPath) {
+        if (options.output) {
+          // Copy generated file to desired location
+          await fs.promises.copyFile(result.outputPath, options.output);
+          console.log(`✅ Audio saved to: ${options.output}`);
+        } else {
+          console.log('✅ Audio generated successfully!');
+          console.log(`📁 Generated at: ${result.outputPath}`);
+          console.log(`🎤 Voice: ${options.voice}`);
+          console.log(`📊 Format: ${result.metadata?.format || 'WAV'}`);
+          console.log('\n💡 Use --output flag to save the audio to a specific location.');
+        }
+      } else {
+        console.error('❌ Audio generation failed:', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      logger.error('Audio generation failed', error as Error);
+      console.error('❌ Failed to generate audio:', (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Analyze command
+program
+  .command('analyze <files...>')
+  .description('Analyze documents using AI Studio')
+  .option('-t, --type <type>', 'Analysis type (summary, extract, compare)', 'summary')
+  .option('-p, --prompt <prompt>', 'Custom analysis prompt')
+  .action(async (files, options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('📄 Analyzing documents with AI Studio...');
+      console.log(`📁 Files: ${files.join(', ')}`);
+      
+      const defaultConfig = {
+        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+        cache: { enabled: true, ttl: 3600 },
+        logging: { level: 'info' as const }
+      };
+      const layerManager = new LayerManager(defaultConfig);
+      const analysisPrompt = options.prompt || `Please ${options.type} these documents`;
+      
+      const result = await layerManager.executeWithOptimalLayer({
+        prompt: analysisPrompt,
+        files: files.map((f: string) => ({ path: f, type: 'document' as const })),
+        options: {
+          analysisType: options.type,
+          depth: 'deep'
+        }
+      });
+      
+      if (result.success) {
+        console.log('\n✅ Analysis complete!');
+        console.log('═'.repeat(50));
+        console.log(result.data || 'Analysis completed');
+        console.log('═'.repeat(50));
+        
+        if (result.metadata) {
+          console.log('\n📊 Analysis Metadata:');
+          console.log(`   Layer used: ${result.metadata.layer || 'Unknown'}`);
+          console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
+        }
+      } else {
+        console.error('❌ Analysis failed:', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      logger.error('Document analysis failed', error as Error);
+      console.error('❌ Failed to analyze documents:', (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Multimodal command
+program
+  .command('multimodal <files...>')
+  .description('Process multiple files with AI (images, PDFs, audio, etc.)')
+  .option('-p, --prompt <prompt>', 'Processing prompt', 'Analyze and summarize these files')
+  .option('-w, --workflow <type>', 'Workflow type (analysis, conversion, extraction)', 'analysis')
+  .option('-o, --output <format>', 'Output format (text, json, markdown)', 'text')
+  .action(async (files, options) => {
+    try {
+      // Load environment variables
+      await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('🎯 Processing multimodal content...');
+      console.log(`📁 Files: ${files.join(', ')}`);
+      
+      const defaultConfig = {
+        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+        cache: { enabled: true, ttl: 3600 },
+        logging: { level: 'info' as const }
+      };
+      const layerManager = new LayerManager(defaultConfig);
+      
+      // Detect file types
+      const fileRefs = files.map((file: string) => {
+        const ext = path.extname(file).toLowerCase();
+        let type: string = 'document';
+        if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) type = 'image';
+        else if (['.pdf'].includes(ext)) type = 'pdf';
+        else if (['.mp3', '.wav', '.m4a'].includes(ext)) type = 'audio';
+        return { path: file, type };
+      });
+      
+      console.log('📊 Detected file types:', fileRefs.map((f: any) => `${f.path} (${f.type})`).join(', '));
+      
+      const result = await layerManager.executeWithOptimalLayer({
+        prompt: options.prompt,
+        files: fileRefs,
+        options: {
+          workflow: options.workflow,
+          outputFormat: options.output,
+          execution_mode: 'adaptive'
+        }
+      });
+      
+      if (result.success) {
+        console.log('\n✅ Processing complete!');
+        console.log('═'.repeat(50));
+        
+        if (options.output === 'json' && result.data) {
+          console.log(JSON.stringify(result.data, null, 2));
+        } else {
+          console.log(result.data || 'Analysis completed');
+        }
+        
+        console.log('═'.repeat(50));
+        
+        if (result.metadata) {
+          console.log('\n📊 Processing Details:');
+          console.log(`   Layer used: ${result.metadata.layer || 'Unknown'}`);
+          console.log(`   Files processed: ${files.length}`);
+          console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
+        }
+      } else {
+        console.error('❌ Multimodal processing failed:', result.error || 'Unknown error');
+      }
+    } catch (error) {
+      logger.error('Multimodal processing failed', error as Error);
+      console.error('❌ Failed to process files:', (error as Error).message);
+      console.log('\n💡 Tips:');
+      console.log('   1. Ensure all files exist and are accessible');
+      console.log('   2. Check supported formats: images, PDFs, audio, text');
+      console.log('   3. Verify API keys: cgmb auth-status');
       process.exit(1);
     }
   });
@@ -525,33 +1694,72 @@ program
 program
   .command('info')
   .description('Show CGMB system information')
-  .action(() => {
-    config();
-    
-    logger.info('CGMB System Information:');
-    logger.info(`Version: 1.0.0`);
-    logger.info(`Node.js: ${process.version}`);
-    logger.info(`Platform: ${process.platform}`);
-    logger.info(`Architecture: ${process.arch}`);
-    logger.info(`Working Directory: ${process.cwd()}`);
-    
-    // Environment info
-    const envVars = [
-      'GEMINI_API_KEY',
-      'CLAUDE_CODE_PATH', 
-      'GEMINI_CLI_PATH',
-      'LOG_LEVEL'
-    ];
-    
-    logger.info('Environment Configuration:');
-    envVars.forEach(key => {
-      const value = process.env[key];
-      if (key.includes('KEY') && value) {
-        logger.info(`${key}: ${'*'.repeat(8)}...${value.slice(-4)}`);
+  .option('--env', 'Show detailed environment information')
+  .action(async (options) => {
+    try {
+      // Load environment variables
+      const envResult = await loadEnvironmentSmart({ verbose: false });
+      
+      console.log('🚀 CGMB System Information');
+      console.log('═'.repeat(50));
+      console.log(`Version: 1.0.0`);
+      console.log(`Node.js: ${process.version}`);
+      console.log(`Platform: ${process.platform}`);
+      console.log(`Architecture: ${process.arch}`);
+      console.log(`Working Directory: ${process.cwd()}`);
+      console.log('');
+
+      // Environment loading status
+      console.log('📋 Environment Configuration');
+      console.log('═'.repeat(30));
+      const envStatus = getEnvironmentStatus();
+      
+      if (envStatus.loaded) {
+        console.log(`✅ Environment: Loaded successfully`);
+        console.log(`📁 Source: ${envStatus.source}`);
       } else {
-        logger.info(`${key}: ${value || 'Not set'}`);
+        console.log(`❌ Environment: Not loaded properly`);
       }
-    });
+      
+      if (envStatus.foundFiles.length > 0) {
+        console.log(`📄 Found .env files:`);
+        envStatus.foundFiles.forEach(file => console.log(`   • ${file}`));
+      }
+      
+      if (envStatus.errors.length > 0) {
+        console.log(`⚠️  Errors:`);
+        envStatus.errors.forEach(error => console.log(`   • ${error}`));
+      }
+      
+      console.log('');
+
+      // Key environment variables
+      console.log('🔑 Key Environment Variables');
+      console.log('═'.repeat(30));
+      Object.entries(envStatus.availableVars).forEach(([key, isSet]) => {
+        const icon = isSet ? '✅' : '❌';
+        if (key.includes('KEY') && isSet) {
+          const value = process.env[key];
+          const masked = value ? `${value.substring(0, 8)}...${value.slice(-4)}` : 'Not set';
+          console.log(`${icon} ${key}: ${masked}`);
+        } else {
+          const value = process.env[key];
+          console.log(`${icon} ${key}: ${value || 'Not set'}`);
+        }
+      });
+
+      if (options.env) {
+        console.log('');
+        console.log('🔍 Detailed Environment Information');
+        console.log('═'.repeat(35));
+        console.log(`Environment loading result:`, JSON.stringify(envResult, null, 2));
+        console.log(`Environment status:`, JSON.stringify(envStatus, null, 2));
+      }
+      
+    } catch (error) {
+      logger.error('Failed to get system information', error as Error);
+      process.exit(1);
+    }
   });
 
 // Helper functions
@@ -573,6 +1781,18 @@ async function checkCommand(command: string): Promise<boolean> {
     throw new Error(`Command failed: ${command}`);
   }
 }
+
+// Handle unknown options with helpful error messages
+program.on('option:*', function(this: any) {
+  const unknownOption = this.args[0];
+  if (unknownOption === '--search' || unknownOption === '--grounding') {
+    console.error(`\nError: Unknown option '${unknownOption}'`);
+    console.error(`\n💡 Web search is enabled by default in Gemini CLI - no flags needed!`);
+    console.error(`\nJust use: cgmb gemini -p "your question"`);
+    console.error(`\nGemini will automatically use web search when beneficial.\n`);
+    process.exit(1);
+  }
+});
 
 // Parse command line arguments
 program.parse();

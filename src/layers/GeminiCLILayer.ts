@@ -1,72 +1,79 @@
-import { spawn, execSync } from 'child_process';
-import { LayerInterface, LayerResult, GroundingContext, GroundedResult, MultimodalResult, FileReference } from '../core/types.js';
+import { spawn } from 'child_process';
+import { FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
-import { safeExecute, retry } from '../utils/errorHandler.js';
+import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { OAuthManager } from '../auth/OAuthManager.js';
-import { getQuotaMonitor, QuotaMonitor } from '../utils/quotaMonitor.js';
+import { SearchCache } from '../utils/SearchCache.js';
 
 /**
- * GeminiCLILayer handles Gemini CLI integration with enhanced authentication support
- * Provides grounding with Google Search integration and multimodal processing
+ * Task interface for better type safety
+ */
+interface GeminiTask {
+  type?: string;
+  action?: string;
+  prompt?: string;
+  request?: string;
+  input?: string;
+  useSearch?: boolean;
+  needsGrounding?: boolean;
+  files?: FileReference[];
+  model?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * GeminiCLILayer - Simplified wrapper implementation based on mcp-gemini-cli
+ * Focuses on high-speed search and real-time information processing
+ * Optimized for enterprise-level reliability with intelligent caching
  */
 export class GeminiCLILayer implements LayerInterface {
   private authVerifier: AuthVerifier;
-  private oauthManager: OAuthManager;
-  private quotaMonitor: QuotaMonitor;
-  private geminiPath?: string;
+  private searchCache: SearchCache;
+  private geminiPath: string = 'gemini';
   private isInitialized = false;
-  private readonly DEFAULT_TIMEOUT = 60000; // 1 minute
-  private readonly MAX_RETRIES = 2;
-  private readonly RATE_LIMIT = {
-    requests: 60,
-    window: 60000, // 60 requests per minute
-    daily: 1000,   // 1000 requests per day (free tier)
-  };
-  private requestCount = 0;
-  private dailyRequestCount = 0;
-  private lastRequestTime = 0;
-  private dailyResetTime = 0;
+
+  // Optimized settings for enterprise reliability
+  private readonly DEFAULT_TIMEOUT = 60000; // 60 seconds (extended for quota/network issues)
+  private readonly DEFAULT_MODEL = 'gemini-2.5-pro';
 
   constructor() {
     this.authVerifier = new AuthVerifier();
-    this.oauthManager = new OAuthManager();
-    this.quotaMonitor = getQuotaMonitor(); // Defaults to free tier
-    this.resetDailyCounterIfNeeded();
+    
+    // Initialize search cache for performance optimization (CGMB unique value)
+    this.searchCache = new SearchCache({
+      ttl: parseInt(process.env.CACHE_TTL || '1800000'), // 30 minutes
+      maxEntries: parseInt(process.env.MAX_CACHE_ENTRIES || '1000'),
+      enableMetrics: process.env.ENABLE_CACHING === 'true',
+      similarityThreshold: 0.8
+    });
   }
 
   /**
-   * Initialize the Gemini CLI layer
+   * Initialize the Gemini CLI layer with minimal overhead
    */
   async initialize(): Promise<void> {
+    if (this.isInitialized) {
+      return;
+    }
+
     return safeExecute(
       async () => {
-        if (this.isInitialized) {
-          return;
-        }
+        logger.info('Initializing Gemini CLI layer (simplified)...');
 
-        logger.info('Initializing Gemini CLI layer...');
-
-        // Verify Gemini CLI installation and authentication
+        // Verify authentication using enhanced caching
         const authResult = await this.authVerifier.verifyGeminiAuth();
         if (!authResult.success) {
           throw new Error(`Gemini CLI authentication failed: ${authResult.error}`);
         }
 
-        // Find Gemini CLI executable path
-        this.geminiPath = await this.findGeminiPath();
-        if (!this.geminiPath) {
-          throw new Error('Gemini CLI executable not found');
-        }
-
-        // Test basic functionality
-        await this.testGeminiConnection();
+        // Find Gemini CLI path
+        this.geminiPath = await this.findGeminiPath() || 'gemini';
 
         this.isInitialized = true;
         logger.info('Gemini CLI layer initialized successfully', {
           geminiPath: this.geminiPath,
           authenticated: authResult.success,
-          authMethod: authResult.status.method,
+          authMethod: authResult.status?.method || 'unknown',
         });
       },
       {
@@ -95,211 +102,166 @@ export class GeminiCLILayer implements LayerInterface {
   /**
    * Check if this layer can handle the given task
    */
-  canHandle(task: any): boolean {
+  canHandle(task: GeminiTask): boolean {
     if (!task || typeof task !== 'object') {
       return false;
     }
 
-    // Handle grounding tasks
-    if (task.type === 'grounding' || task.action === 'grounded_search') {
-      return true;
-    }
-
-    // Handle contextual analysis
-    if (task.action === 'contextual_analysis') {
-      return true;
-    }
-
-    // Handle multimodal tasks (basic support)
-    if (task.type === 'multimodal' && task.files) {
-      return true;
-    }
-
-    // Handle general Gemini tasks
-    if (task.type === 'gemini' || task.useSearch || task.needsGrounding) {
-      return true;
-    }
-
-    return false;
+    // Gemini CLI specializes in:
+    // - Search and current information
+    // - Simple text processing
+    // - Real-time queries
+    return !!(
+      task.type === 'search' ||
+      task.type === 'grounding' ||
+      task.action === 'grounded_search' ||
+      task.useSearch !== false || // Default to search-enabled
+      task.needsGrounding ||
+      (task.type === 'gemini' && !task.files) || // Text-only Gemini tasks
+      task.type === 'text_processing'
+    );
   }
 
   /**
-   * Execute a task through Gemini CLI
+   * Main execution method - simplified and optimized
+   * Based on mcp-gemini-cli reference implementation with CGMB enhancements
    */
-  async execute(task: any): Promise<LayerResult> {
+  async execute(task: GeminiTask): Promise<LayerResult> {
+    const startTime = Date.now();
+    
+    // Ensure initialization
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
     return safeExecute(
       async () => {
-        const startTime = Date.now();
-        
-        if (!this.isInitialized) {
-          await this.initialize();
-        }
-
-        // Check quota limits before execution
-        const estimatedTokens = QuotaMonitor.estimateTokens(
-          JSON.stringify(task), 
-          task.files?.length || 0
-        );
-        const quotaCheck = this.quotaMonitor.canMakeRequest(estimatedTokens);
-        if (!quotaCheck.allowed) {
-          throw new Error(`Quota limit exceeded: ${quotaCheck.reason}. ${quotaCheck.waitTime ? `Wait ${Math.ceil(quotaCheck.waitTime / 1000)}s` : 'Try again later'}`);
-        }
-
-        // Check legacy rate limits
-        await this.checkRateLimit();
-
         logger.info('Executing Gemini CLI task', {
           taskType: task.type || 'general',
-          action: task.action || 'execute',
-          useSearch: task.useSearch || false,
+          useSearch: task.useSearch !== false, // Log effective search setting
+          hasFiles: !!(task.files && task.files.length > 0),
+          promptLength: task.prompt?.length || 0,
         });
 
-        let result: any;
-
-        // Route to appropriate execution method based on task type/action
-        switch (task.action || task.type) {
-          case 'grounded_search':
-            result = await this.executeWithGrounding(task.prompt || task.request, task);
-            break;
-          case 'contextual_analysis':
-            result = await this.executeContextualAnalysis(task);
-            break;
-          case 'multimodal':
-            result = await this.processFiles(task.files, task.prompt || task.request);
-            break;
-          default:
-            result = await this.executeGeneral(task);
+        const prompt = this.extractPrompt(task);
+        if (!prompt.trim()) {
+          throw new Error('No prompt provided for Gemini CLI execution');
         }
 
+        // Check cache for search-enabled tasks (CGMB unique feature)
+        if (task.useSearch !== false) {
+          const cachedResult = await this.searchCache.get(prompt, 'gemini');
+          if (cachedResult) {
+            logger.debug('Cache hit for Gemini search', {
+              promptLength: prompt.length,
+              cacheAge: Date.now() - cachedResult.timestamp
+            });
+            
+            return {
+              success: true,
+              data: cachedResult.content,
+              metadata: {
+                layer: 'gemini' as const,
+                duration: Date.now() - startTime,
+                cache_hit: true,
+                model: task.model || this.DEFAULT_MODEL,
+              }
+            };
+          }
+        }
+
+        // Execute via Gemini CLI (mcp-gemini-cli style)
+        const result = await this.executeGeminiCLI(prompt, {
+          model: task.model || this.DEFAULT_MODEL
+        });
+
         const duration = Date.now() - startTime;
-        const tokensUsed = this.estimateTokensUsed(task, result);
-        
-        // Track quota usage
-        this.quotaMonitor.trackRequest(tokensUsed);
-        
+
+        // Cache search results (CGMB enhancement)
+        if (task.useSearch !== false && result.trim()) {
+          await this.searchCache.set(prompt, {
+            content: result,
+            sources: this.extractSources(result),
+            grounded: true,
+            search_used: true,
+            timestamp: Date.now()
+          }, 'gemini', duration);
+        }
+
         return {
           success: true,
           data: result,
           metadata: {
             layer: 'gemini' as const,
             duration,
-            tokens_used: tokensUsed,
-            cost: this.calculateCost(task, result),
-            model: 'gemini-2.5-pro',
-            quota_status: this.quotaMonitor.getQuotaStatus(),
-          },
+            cache_hit: false,
+            model: task.model || this.DEFAULT_MODEL,
+            search_enabled: task.useSearch !== false,
+          }
         };
       },
       {
         operationName: 'execute-gemini-cli-task',
         layer: 'gemini',
-        timeout: this.getTaskTimeout(task),
+        timeout: this.DEFAULT_TIMEOUT,
       }
     );
   }
 
   /**
-   * Execute with grounding (Google Search integration)
+   * Execute with grounding (simplified for search tasks)
    */
   async executeWithGrounding(prompt: string, context: GroundingContext): Promise<GroundedResult> {
-    return retry(
-      async () => {
-        logger.debug('Executing grounded search', {
-          promptLength: prompt.length,
-          useSearch: context.useSearch,
-          searchQuery: context.searchQuery?.substring(0, 50),
-        });
+    const task: GeminiTask = {
+      type: 'grounding',
+      prompt,
+      useSearch: context.useSearch !== false,
+    };
 
-        const args = this.buildGeminiCommand(prompt, {
-          search: context.useSearch !== false, // Default to true
-          files: context.files,
-          context: context.context,
-        });
-
-        const output = await this.executeGeminiProcess(args);
-        
-        return {
-          content: output.trim(),
-          sources: this.extractSources(output),
-          grounded: true,
-          search_used: context.useSearch !== false,
-        };
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 2000,
-        operationName: 'grounded-search',
-      }
-    );
+    const result = await this.execute(task);
+    
+    return {
+      content: result.data as string,
+      sources: this.extractSources(result.data as string),
+      grounded: true,
+      search_used: context.useSearch !== false,
+    };
   }
 
   /**
-   * Process files with multimodal capabilities
+   * Process files (basic support for text files)
    */
   async processFiles(files: FileReference[], prompt: string): Promise<MultimodalResult> {
-    return retry(
-      async () => {
-        logger.debug('Processing files with Gemini', {
-          fileCount: files.length,
-          promptLength: prompt.length,
-        });
+    // Gemini CLI has limited file support - focus on text processing
+    const textFiles = files.filter(f => f.type === 'text' || f.path.endsWith('.txt') || f.path.endsWith('.md'));
+    
+    if (textFiles.length === 0) {
+      throw new Error('Gemini CLI layer only supports text files. Use AI Studio layer for other file types.');
+    }
 
-        // Validate file types and sizes
-        this.validateFiles(files);
+    logger.debug('Processing text files with Gemini CLI', {
+      fileCount: textFiles.length,
+      promptLength: prompt.length,
+    });
 
-        const args = this.buildGeminiCommand(prompt, {
-          files: files.map(f => f.path),
-        });
+    const result = await this.execute({
+      type: 'multimodal',
+      prompt,
+      files: textFiles,
+    });
 
-        const startTime = Date.now();
-        const output = await this.executeGeminiProcess(args);
-        const processingTime = Date.now() - startTime;
-
-        return {
-          content: output.trim(),
-          files_processed: files.map(f => f.path),
-          processing_time: processingTime,
-          tokens_used: this.estimateTokensUsed({ files, prompt }, output),
-          model_used: 'gemini-2.5-pro',
-        };
+    return {
+      content: result.data as string,
+      success: true,
+      files_processed: textFiles.map(f => f.path),
+      processing_time: result.metadata?.duration || 0,
+      workflow_used: 'analysis' as const,
+      layers_involved: ['gemini'] as const,
+      metadata: {
+        total_duration: result.metadata?.duration || 0,
+        ...result.metadata,
       },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 3000,
-        operationName: 'process-files',
-      }
-    );
-  }
-
-  /**
-   * Execute contextual analysis
-   */
-  async executeContextualAnalysis(task: any): Promise<string> {
-    return retry(
-      async () => {
-        logger.debug('Executing contextual analysis', {
-          hasContext: !!task.context,
-          promptLength: task.prompt?.length || 0,
-        });
-
-        let prompt = task.prompt || task.request || '';
-        if (task.context) {
-          prompt += `\n\nContext: ${task.context}`;
-        }
-
-        const args = this.buildGeminiCommand(prompt, {
-          search: task.useSearch,
-        });
-
-        const output = await this.executeGeminiProcess(args);
-        return output.trim();
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 1500,
-        operationName: 'contextual-analysis',
-      }
-    );
+    };
   }
 
   /**
@@ -307,164 +269,134 @@ export class GeminiCLILayer implements LayerInterface {
    */
   getCapabilities(): string[] {
     return [
-      'grounded_search',
-      'contextual_analysis',
-      'multimodal_processing',
-      'real_time_information',
-      'web_search',
-      'image_analysis',
-      'document_processing',
-      'current_events',
+      'real_time_search',
+      'web_grounding',
+      'current_information',
+      'text_processing',
+      'simple_analysis',
+      'search_integration',
     ];
   }
 
   /**
-   * Get cost estimation for a task
+   * Get cost estimation (free tier)
    */
-  getCost(task: any): number {
-    // Free tier: 1000 requests/day, then paid
-    // Assuming free tier usage, cost is 0
-    return 0;
+  getCost(task: GeminiTask): number {
+    return 0; // Free tier usage
   }
 
   /**
-   * Get estimated duration for a task
+   * Get estimated duration
    */
-  getEstimatedDuration(task: any): number {
+  getEstimatedDuration(task: GeminiTask): number {
     const baseTime = 3000; // 3 seconds base
     
-    if (task.files && task.files.length > 0) {
-      return baseTime + (task.files.length * 2000); // +2s per file
-    }
-    
-    if (task.useSearch || task.action === 'grounded_search') {
+    if (task.useSearch !== false) {
       return baseTime + 5000; // +5s for search
-    }
-    
-    if (task.prompt && task.prompt.length > 1000) {
-      return baseTime + 2000; // +2s for long prompts
     }
     
     return baseTime;
   }
 
   /**
-   * Execute general Gemini task
+   * Core Gemini CLI execution - mcp-gemini-cli style with error enhancements
    */
-  private async executeGeneral(task: any): Promise<string> {
-    const prompt = task.prompt || task.request || task.input || 'Please help with this task.';
+  private async executeGeminiCLI(prompt: string, options: { model?: string } = {}): Promise<string> {
+    const args = ['-p', prompt];
     
-    const args = this.buildGeminiCommand(prompt, {
-      search: task.useSearch,
-      files: task.files,
-    });
-
-    return await this.executeGeminiProcess(args);
-  }
-
-  /**
-   * Build Gemini CLI command arguments
-   */
-  private buildGeminiCommand(prompt: string, options: {
-    search?: boolean;
-    files?: string[];
-    context?: string;
-  } = {}): string[] {
-    const args: string[] = [];
-
-    // Add search flag if enabled
-    if (options.search) {
-      args.push('--search');
+    if (options.model && options.model !== this.DEFAULT_MODEL) {
+      args.push('-m', options.model);
     }
-
-    // Add files if provided
-    if (options.files && options.files.length > 0) {
-      options.files.forEach(file => {
-        args.push(`@${file}`);
-      });
-    }
-
-    // Build final prompt
-    let finalPrompt = prompt;
-    if (options.context) {
-      finalPrompt += `\n\nAdditional context: ${options.context}`;
-    }
-
-    args.push(finalPrompt);
-
-    return args;
-  }
-
-  /**
-   * Execute Gemini CLI process
-   */
-  private async executeGeminiProcess(args: string[]): Promise<string> {
-    if (!this.geminiPath) {
-      throw new Error('Gemini CLI not initialized');
-    }
-
-    // Update rate limiting
-    this.requestCount++;
-    this.dailyRequestCount++;
-    this.lastRequestTime = Date.now();
 
     return new Promise<string>((resolve, reject) => {
-      logger.debug('Executing Gemini CLI command', {
-        args: args.length,
-        argsPreview: args.slice(0, -1).join(' ') + ' [prompt]',
+      logger.debug('Executing Gemini CLI', {
+        command: this.geminiPath,
+        args,
+        promptLength: prompt.length
       });
 
-      const child = spawn(this.geminiPath!, args, {
-        stdio: 'pipe',
-        cwd: process.cwd(),
-        env: process.env,
+      const child = spawn(this.geminiPath, args, { 
+        stdio: ['ignore', 'pipe', 'pipe'] 
       });
-
-      let output = '';
-      let errorOutput = '';
-
-      const timeoutId = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error(`Gemini CLI execution timeout after ${this.DEFAULT_TIMEOUT}ms`));
-      }, this.DEFAULT_TIMEOUT);
-
-      child.stdout.on('data', (data) => {
-        output += data.toString();
+      
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout?.on('data', (data) => {
+        stdout += data.toString();
       });
-
-      child.stderr.on('data', (data) => {
-        errorOutput += data.toString();
+      
+      child.stderr?.on('data', (data) => {
+        const chunk = data.toString();
+        stderr += chunk;
+        
+        // Early quota error detection
+        if (chunk.includes('429') || chunk.includes('quota') || chunk.includes('Quota exceeded')) {
+          logger.warn('Quota limit detected in Gemini CLI', { 
+            error: chunk.substring(0, 200) 
+          });
+          child.kill();
+          reject(new Error(`Gemini API quota exceeded. Please wait or try a different model. Details: ${chunk.substring(0, 300)}`));
+          return;
+        }
       });
-
+      
       child.on('close', (code) => {
-        clearTimeout(timeoutId);
+        logger.debug('Gemini CLI process closed', {
+          code,
+          stdoutLength: stdout.length,
+          stderrLength: stderr.length,
+        });
         
         if (code === 0) {
-          logger.debug('Gemini CLI command completed successfully', {
-            outputLength: output.length,
-            code,
-          });
-          resolve(output);
+          resolve(stdout.trim());
         } else {
-          // Handle specific error cases
-          if (errorOutput.includes('authentication') || errorOutput.includes('login')) {
-            reject(new Error('Gemini authentication expired. Please run: gemini auth'));
-          } else if (errorOutput.includes('quota') || errorOutput.includes('rate limit')) {
-            reject(new Error('Gemini API quota exceeded. Please wait or upgrade plan.'));
+          // Enhanced error handling for common issues
+          if (stderr.includes('function response parts') || stderr.includes('function call parts')) {
+            reject(new Error(`Gemini CLI authentication error. Try:\n1. gemini auth (OAuth - recommended)\n2. Check API key configuration\n\nOriginal error: ${stderr}`));
+          } else if (stderr.includes('UNAUTHENTICATED') || stderr.includes('API_KEY')) {
+            reject(new Error(`Authentication failed. Try: gemini auth\n${stderr}`));
+          } else if (stderr.includes('quota') || stderr.includes('limit')) {
+            reject(new Error(`Quota/rate limit exceeded: ${stderr}`));
           } else {
-            const error = `Gemini CLI exited with code ${code}: ${errorOutput}`;
-            logger.error('Gemini CLI command failed', { code, error: errorOutput });
-            reject(new Error(error));
+            reject(new Error(`Gemini CLI failed (code ${code}): ${stderr || 'Unknown error'}`));
           }
         }
       });
-
-      child.on('error', (error) => {
-        clearTimeout(timeoutId);
-        logger.error('Gemini CLI process error', { error: error.message });
-        reject(error);
+      
+      child.on('error', (err) => {
+        reject(new Error(`Gemini CLI spawn error: ${err.message}`));
       });
+      
+      // Set timeout with graceful termination
+      const timeout = setTimeout(() => {
+        logger.warn('Gemini CLI timeout reached, terminating process', {
+          timeoutMs: this.DEFAULT_TIMEOUT,
+          promptLength: prompt.length
+        });
+        
+        // Try graceful termination first
+        child.kill('SIGTERM');
+        
+        // Force kill after 2 seconds if still running
+        setTimeout(() => {
+          if (!child.killed) {
+            child.kill('SIGKILL');
+          }
+        }, 2000);
+        
+        reject(new Error(`Gemini CLI timeout after ${this.DEFAULT_TIMEOUT / 1000}s. This may be due to quota limits or network issues.`));
+      }, this.DEFAULT_TIMEOUT);
+      
+      child.on('close', () => clearTimeout(timeout));
     });
+  }
+
+  /**
+   * Extract prompt from task (unified method)
+   */
+  private extractPrompt(task: GeminiTask): string {
+    return task.prompt || task.request || task.input || '';
   }
 
   /**
@@ -479,6 +411,7 @@ export class GeminiCLILayer implements LayerInterface {
 
     for (const path of possiblePaths) {
       try {
+        const { execSync } = await import('child_process');
         execSync(`${path} --version`, { stdio: 'ignore', timeout: 5000 });
         logger.debug('Found Gemini CLI at', { path });
         return path;
@@ -487,115 +420,7 @@ export class GeminiCLILayer implements LayerInterface {
       }
     }
 
-    // Try system PATH
-    try {
-      const output = execSync('which gemini 2>/dev/null || where gemini 2>nul', {
-        encoding: 'utf8',
-        stdio: 'pipe',
-        timeout: 5000,
-      });
-      
-      const path = output.trim().split('\n')[0];
-      if (path) {
-        return path;
-      }
-    } catch {
-      // System PATH lookup failed
-    }
-
     return undefined;
-  }
-
-  /**
-   * Test Gemini CLI connection
-   */
-  private async testGeminiConnection(): Promise<void> {
-    try {
-      const testArgs = ['--version'];
-      const testResult = await this.executeGeminiProcess(testArgs);
-      
-      if (!testResult) {
-        throw new Error('No response from Gemini CLI');
-      }
-      
-      logger.debug('Gemini CLI connection test successful', {
-        version: testResult.trim(),
-      });
-    } catch (error) {
-      // Don't fail on version command issues - try a simple query instead
-      try {
-        const simpleArgs = ['Test connection'];
-        await this.executeGeminiProcess(simpleArgs);
-        logger.debug('Gemini CLI connection test successful (via simple query)');
-      } catch (testError) {
-        throw new Error(`Gemini CLI connection test failed: ${(testError as Error).message}`);
-      }
-    }
-  }
-
-  /**
-   * Check rate limiting
-   */
-  private async checkRateLimit(): Promise<void> {
-    const now = Date.now();
-    
-    // Reset daily counter if needed
-    this.resetDailyCounterIfNeeded();
-    
-    // Check daily limit
-    if (this.dailyRequestCount >= this.RATE_LIMIT.daily) {
-      throw new Error('Daily Gemini API limit exceeded. Please wait until tomorrow or upgrade your plan.');
-    }
-    
-    // Check per-minute limit
-    const timeSinceLastRequest = now - this.lastRequestTime;
-    if (this.requestCount >= this.RATE_LIMIT.requests && timeSinceLastRequest < this.RATE_LIMIT.window) {
-      const waitTime = this.RATE_LIMIT.window - timeSinceLastRequest;
-      logger.warn('Rate limit reached, waiting', { waitTime });
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-      this.requestCount = 0; // Reset counter
-    }
-  }
-
-  /**
-   * Reset daily counter if needed
-   */
-  private resetDailyCounterIfNeeded(): void {
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
-    
-    if (now - this.dailyResetTime > dayMs) {
-      this.dailyRequestCount = 0;
-      this.dailyResetTime = now;
-      logger.debug('Daily request counter reset');
-    }
-  }
-
-  /**
-   * Validate files for processing
-   */
-  private validateFiles(files: FileReference[]): void {
-    const maxFiles = 10;
-    const maxFileSize = 100 * 1024 * 1024; // 100MB
-    const supportedTypes = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.txt', '.md'];
-
-    if (files.length > maxFiles) {
-      throw new Error(`Too many files. Maximum ${maxFiles} files allowed.`);
-    }
-
-    for (const file of files) {
-      if (file.size && file.size > maxFileSize) {
-        throw new Error(`File ${file.path} is too large. Maximum ${maxFileSize / 1024 / 1024}MB allowed.`);
-      }
-
-      const ext = file.path.toLowerCase().match(/\.[^.]+$/)?.[0];
-      if (ext && !supportedTypes.includes(ext)) {
-        logger.warn('Potentially unsupported file type', { 
-          path: file.path, 
-          extension: ext 
-        });
-      }
-    }
   }
 
   /**
@@ -604,7 +429,7 @@ export class GeminiCLILayer implements LayerInterface {
   private extractSources(output: string): string[] {
     const sources: string[] = [];
     
-    // Look for URL patterns in the output
+    // Look for URL patterns
     const urlPattern = /https?:\/\/[^\s]+/g;
     const urls = output.match(urlPattern);
     
@@ -616,72 +441,23 @@ export class GeminiCLILayer implements LayerInterface {
     const sourcePattern = /Source: (.+?)(?:\n|$)/g;
     let match;
     while ((match = sourcePattern.exec(output)) !== null) {
-      sources.push(match[1].trim());
+      sources.push(match[1]?.trim() || '');
     }
     
     return [...new Set(sources)]; // Remove duplicates
   }
 
   /**
-   * Get task timeout
+   * Get search cache statistics
    */
-  private getTaskTimeout(task: any): number {
-    if (task.timeout) {
-      return task.timeout;
-    }
-    
-    return this.getEstimatedDuration(task) + 15000; // Add 15s buffer
+  getCacheStats() {
+    return this.searchCache.getStats();
   }
 
   /**
-   * Estimate tokens used
+   * Clear search cache
    */
-  private estimateTokensUsed(task: any, result: any): number {
-    const inputText = JSON.stringify(task);
-    const outputText = typeof result === 'string' ? result : JSON.stringify(result);
-    
-    // Rough estimate: 1 token ≈ 4 characters
-    return Math.ceil((inputText.length + outputText.length) / 4);
-  }
-
-  /**
-   * Calculate cost
-   */
-  private calculateCost(task: any, result: any): number {
-    // Free tier usage
-    return 0;
-  }
-
-  /**
-   * Get current rate limit status
-   */
-  getRateLimitStatus(): {
-    requestCount: number;
-    dailyRequestCount: number;
-    remainingRequests: number;
-    remainingDailyRequests: number;
-    resetTime: number;
-  } {
-    return {
-      requestCount: this.requestCount,
-      dailyRequestCount: this.dailyRequestCount,
-      remainingRequests: Math.max(0, this.RATE_LIMIT.requests - this.requestCount),
-      remainingDailyRequests: Math.max(0, this.RATE_LIMIT.daily - this.dailyRequestCount),
-      resetTime: this.lastRequestTime + this.RATE_LIMIT.window,
-    };
-  }
-
-  /**
-   * Get comprehensive quota status
-   */
-  getQuotaStatus() {
-    return this.quotaMonitor.getUsageStats();
-  }
-
-  /**
-   * Check if quota allows the request
-   */
-  canMakeQuotaRequest(estimatedTokens: number = 1000) {
-    return this.quotaMonitor.canMakeRequest(estimatedTokens);
+  async clearCache(): Promise<void> {
+    await this.searchCache.clear();
   }
 }

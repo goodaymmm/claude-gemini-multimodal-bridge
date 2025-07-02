@@ -61,7 +61,7 @@ class Logger {
     if (!Logger.instance) {
       const defaultConfig: LoggerConfig = {
         level: process.env.LOG_LEVEL || 'info',
-        file: process.env.LOG_FILE,
+        ...(process.env.LOG_FILE && { file: process.env.LOG_FILE }),
         console: true,
         json: process.env.NODE_ENV === 'production',
       };
