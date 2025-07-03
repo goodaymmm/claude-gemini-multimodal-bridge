@@ -23,7 +23,8 @@ import * as path from 'path';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
 import { AI_MODELS } from '../core/types.js';
-import { WaveFile } from 'wavefile';
+import pkg from 'wavefile';
+const { WaveFile } = pkg;
 
 
 // Input validation schemas
@@ -1008,9 +1009,18 @@ To retrieve this file, use:
       // Create proper WAV file with headers using WaveFile library
       const rawAudioBuffer = Buffer.from(audioData, 'base64');
       
+      // Google AI Studio returns L16 PCM data (16-bit signed integers)
+      // Convert Buffer to Int16Array for WaveFile.fromScratch()
+      const pcmSamples = [];
+      for (let i = 0; i < rawAudioBuffer.length; i += 2) {
+        // Read 16-bit signed little-endian integers
+        const sample = rawAudioBuffer.readInt16LE(i);
+        pcmSamples.push(sample);
+      }
+      
       // Create WAV file with proper headers per google_docs.md specification
       const wav = new WaveFile();
-      wav.fromScratch(1, 24000, '16', rawAudioBuffer);
+      wav.fromScratch(1, 24000, '16', pcmSamples);
       
       // Get complete WAV file buffer with headers
       const wavBuffer = wav.toBuffer();

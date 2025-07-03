@@ -23,7 +23,8 @@ import {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { WaveFile } from 'wavefile';
+import pkg from 'wavefile';
+const { WaveFile } = pkg;
 
 // Language detection patterns for auto-translation
 const LANGUAGE_PATTERNS = {
@@ -98,6 +99,7 @@ function sanitizePrompt(prompt: string): string {
  * Provides multimodal file processing for PDF, images, audio, and documents
  */
 export class AIStudioLayer implements LayerInterface {
+  private readonly instanceId: string;
   private authVerifier: AuthVerifier;
   private genAI: GoogleGenAI | null = null;
   private geminiLayer?: any; // Reference to GeminiCLILayer for translation
@@ -124,11 +126,18 @@ export class AIStudioLayer implements LayerInterface {
   };
 
   constructor(geminiLayer?: any) {
-    logger.info('🔧 AIStudioLayer constructor called - with latest translation fixes', {
+    // Generate unique instance ID for duplicate detection
+    this.instanceId = `aistudio-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
+    
+    logger.info(`🔧 [${this.instanceId}] AIStudioLayer constructor called - with latest translation fixes`, {
+      instanceId: this.instanceId,
       timestamp: Date.now(),
       hasGeminiLayer: !!geminiLayer,
-      version: 'v2025-07-03-final-debug'
+      version: 'v2025-07-03-instance-tracking'
     });
+    
+    // GHOST LOG DETECTIVE: Monkey-patch console to catch external library logs
+    this.setupGhostLogDetection();
     
     this.authVerifier = new AuthVerifier();
     this.geminiLayer = geminiLayer;
@@ -136,7 +145,19 @@ export class AIStudioLayer implements LayerInterface {
     // Initialize Google AI Studio API client
     const apiKey = process.env.AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
     if (apiKey) {
+      logger.info(`[${this.instanceId}] Creating GoogleGenAI instance with API key`, {
+        instanceId: this.instanceId,
+        hasApiKey: !!apiKey,
+        apiKeySource: process.env.AI_STUDIO_API_KEY ? 'AI_STUDIO_API_KEY' : 
+                     process.env.GEMINI_API_KEY ? 'GEMINI_API_KEY' : 
+                     process.env.GOOGLE_AI_STUDIO_API_KEY ? 'GOOGLE_AI_STUDIO_API_KEY' : 'unknown'
+      });
+      console.trace(`[${this.instanceId}] TRACE: GoogleGenAI instance creation`);
       this.genAI = new GoogleGenAI({ apiKey });
+      logger.info(`[${this.instanceId}] GoogleGenAI instance created successfully`, {
+        instanceId: this.instanceId,
+        hasGenAI: !!this.genAI
+      });
     }
   }
 
@@ -148,7 +169,7 @@ export class AIStudioLayer implements LayerInterface {
       return;
     }
 
-    logger.debug('Performing lightweight AI Studio initialization...');
+    logger.debug(`[${this.instanceId}] Performing lightweight AI Studio initialization...`);
 
     // Skip auth verification if recent check exists
     const now = Date.now();
@@ -161,7 +182,7 @@ export class AIStudioLayer implements LayerInterface {
     }
 
     this.isLightweightInitialized = true;
-    logger.debug('Lightweight AI Studio initialization completed');
+    logger.debug(`[${this.instanceId}] Lightweight AI Studio initialization completed`);
   }
 
   /**
@@ -174,7 +195,7 @@ export class AIStudioLayer implements LayerInterface {
           return;
         }
 
-        logger.info('Initializing AI Studio layer...');
+        logger.info(`[${this.instanceId}] Initializing AI Studio layer...`);
 
         // Verify AI Studio authentication
         const authResult = await this.authVerifier.verifyAIStudioAuth();
@@ -186,17 +207,20 @@ export class AIStudioLayer implements LayerInterface {
         try {
           await this.testMCPServerConnection();
         } catch (mcpError) {
-          logger.warn('AI Studio MCP server not ready, will use fallback mode', {
+          logger.warn(`[${this.instanceId}] AI Studio MCP server prerequisites check failed, using MCP-only architecture`, {
+            instanceId: this.instanceId,
             error: (mcpError as Error).message,
-            fallbackMode: 'Will attempt direct API calls when needed'
+            architecture: 'MCP-only (direct API integration disabled for consistency)'
           });
-          // Continue initialization - don't fail completely
+          // Continue initialization - MCP server will be started when needed
         }
 
         this.isInitialized = true;
-        logger.info('AI Studio layer initialized successfully', {
+        logger.info(`[${this.instanceId}] AI Studio layer initialized successfully`, {
+          instanceId: this.instanceId,
           authenticated: authResult.success,
-          mcpServerAvailable: true,
+          architecture: 'MCP-only integration (direct API disabled)',
+          mcpServerReady: 'Will be started when needed',
         });
       },
       {
@@ -291,7 +315,8 @@ export class AIStudioLayer implements LayerInterface {
           }
         }
 
-        logger.info('🔧 Executing AI Studio task - DEBUG', {
+        logger.info(`🔧 [${this.instanceId}] Executing AI Studio task - DEBUG`, {
+          instanceId: this.instanceId,
           taskType: task.type || 'general',
           action: task.action || 'execute', 
           fileCount: task.files ? task.files.length : 0,
@@ -1089,6 +1114,13 @@ export class AIStudioLayer implements LayerInterface {
    */
   private async executeDirectAPI(command: string, params: any): Promise<any> {
     // Direct API bypass removed to enforce architectural consistency
+    logger.error(`[${this.instanceId}] GHOST LOG DETECTED: Direct API call attempted but should be disabled!`, {
+      instanceId: this.instanceId,
+      command,
+      params,
+      stack: new Error().stack
+    });
+    console.trace(`[${this.instanceId}] GHOST LOG TRACE: Direct API call attempted:`, command);
     throw new Error(`Direct API integration disabled. All operations must use MCP server for architectural consistency. Command: ${command}`);
   }
 
@@ -1214,7 +1246,8 @@ export class AIStudioLayer implements LayerInterface {
     return new Promise<any>((resolve, reject) => {
       const timeout = this.calculateOptimizedTimeout(command, params);
       
-      logger.debug('Executing optimized MCP command', {
+      logger.debug(`[${this.instanceId}] Executing optimized MCP command`, {
+        instanceId: this.instanceId,
         command,
         hasParams: !!params,
         timeout,
@@ -1516,6 +1549,54 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Setup ghost log detection to catch external library logs
+   * This helps identify where "direct API integration" logs are coming from
+   */
+  private setupGhostLogDetection(): void {
+    const originalConsoleDebug = console.debug;
+    const originalConsoleLog = console.log;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleInfo = console.info;
+
+    // Monkey-patch console methods to detect library logs
+    console.debug = (...args: any[]) => {
+      const message = args.join(' ');
+      if (message.includes('direct') || message.includes('API') || message.includes('integration') || 
+          message.includes('precedence') || message.includes('Vertex')) {
+        logger.error(`[${this.instanceId}] GHOST LOG DETECTED - console.debug:`, {
+          instanceId: this.instanceId,
+          message,
+          stack: new Error().stack,
+          source: '@google/genai or external library'
+        });
+        console.trace(`[${this.instanceId}] GHOST LOG TRACE - console.debug:`, message);
+      }
+      originalConsoleDebug.apply(console, args);
+    };
+
+    console.log = (...args: any[]) => {
+      const message = args.join(' ');
+      if (message.includes('direct') || message.includes('API') || message.includes('integration') ||
+          message.includes('AI Studio') || message.includes('using')) {
+        logger.error(`[${this.instanceId}] GHOST LOG DETECTED - console.log:`, {
+          instanceId: this.instanceId,
+          message,
+          stack: new Error().stack,
+          source: 'External library or unknown'
+        });
+        console.trace(`[${this.instanceId}] GHOST LOG TRACE - console.log:`, message);
+      }
+      originalConsoleLog.apply(console, args);
+    };
+
+    logger.info(`[${this.instanceId}] Ghost log detection active - monitoring console methods`, {
+      instanceId: this.instanceId,
+      monitoredMethods: ['console.debug', 'console.log', 'console.warn', 'console.info'],
+      purpose: 'Detect external library logs about direct API integration'
+    });
+  }
+
+  /**
    * Test MCP server connection (lightweight test)
    * Enhanced with better error detection and troubleshooting guidance
    */
@@ -1566,10 +1647,10 @@ export class AIStudioLayer implements LayerInterface {
         });
         
         // Force MCP server usage for unified timeout handling
-        logger.info('AI Studio layer enforcing MCP server usage', {
+        logger.info('AI Studio layer ready with MCP-only architecture', {
           apiKeyAvailable: true,
-          integrationMode: 'mcp_only',
-          note: 'Using MCP server for consistent timeout patterns and proper translation support'
+          architecture: 'MCP-only integration',
+          note: 'Direct API integration disabled for architectural consistency'
         });
         
       } catch (binaryError) {
@@ -1893,8 +1974,17 @@ export class AIStudioLayer implements LayerInterface {
         // Create WAV file with proper headers using WaveFile library (google_docs.md specification)
         const wav = new WaveFile();
         
-        // fromScratch expects: channels, sampleRate, bitDepth, raw audio buffer
-        wav.fromScratch(1, 24000, '16', rawAudioBuffer);
+        // Google AI Studio returns L16 PCM data (16-bit signed integers)
+        // Convert Buffer to Int16Array for WaveFile.fromScratch()
+        const pcmSamples = [];
+        for (let i = 0; i < rawAudioBuffer.length; i += 2) {
+          // Read 16-bit signed little-endian integers
+          const sample = rawAudioBuffer.readInt16LE(i);
+          pcmSamples.push(sample);
+        }
+        
+        // fromScratch expects: channels, sampleRate, bitDepth, PCM samples array
+        wav.fromScratch(1, 24000, '16', pcmSamples);
         const wavData = wav.toBuffer();
         finalBuffer = Buffer.from(wavData);
         
