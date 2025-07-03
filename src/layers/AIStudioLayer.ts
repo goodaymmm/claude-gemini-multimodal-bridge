@@ -575,30 +575,12 @@ export class AIStudioLayer implements LayerInterface {
     });
 
     const startTime = Date.now();
-    let processedPrompt = prompt;
-    
-    // Auto-detect language and translate if needed (only for image generation per user specification)
-    const detectedLang = detectLanguage(prompt);
-    if (detectedLang && detectedLang !== 'en') {
-      const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
-      logger.info(`Non-English prompt detected (${languageName}), translating to English...`, {
-        originalPrompt: prompt,
-        detectedLanguage: detectedLang
-      });
-
-      processedPrompt = await this.translatePromptToEnglish(prompt, detectedLang);
-      
-      logger.info('Prompt translation completed', {
-        originalPrompt: prompt,
-        translatedPrompt: processedPrompt,
-        language: `${languageName} → English`
-      });
-    }
     
     try {
       // Use MCP command (matches working timeout pattern from image/PDF analysis)
+      // Translation is now handled inside the MCP server
       const mcpResult = await this.executeMCPCommand('generate_image', {
-        prompt: processedPrompt,
+        prompt: prompt,
         numberOfImages: options.numberOfImages || 1,
         aspectRatio: options.aspectRatio || '1:1',
         personGeneration: options.personGeneration || 'ALLOW',
@@ -629,13 +611,7 @@ export class AIStudioLayer implements LayerInterface {
           settings: options,
           cost: this.calculateGenerationCost('image', options),
           responseText: mcpResult.metadata?.responseText || '',
-          translation: detectedLang !== 'en' ? {
-            detectedLanguage: detectedLang,
-            languageName: SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang,
-            originalPrompt: prompt,
-            translatedPrompt: processedPrompt,
-            wasTranslated: true
-          } : {
+          translation: mcpResult.metadata?.translation || {
             detectedLanguage: 'en',
             languageName: 'English',
             wasTranslated: false
@@ -1290,14 +1266,14 @@ export class AIStudioLayer implements LayerInterface {
     // Addresses AI Studio timeout issues from Error4.md analysis
     let timeout = this.DEFAULT_TIMEOUT; // Base: 180 seconds
     
-    // Image generation requires significantly longer timeout (per Gemini analysis in Error4.md)
+    // Image generation with optimized timeout (immediate response on success)
     if (command === 'generate_image' || this.isImageGenerationCommand(command, params)) {
-      timeout = Math.max(240000, this.DEFAULT_TIMEOUT * 1.5); // Minimum 4 minutes for image generation
-      logger.debug('Extended timeout for image generation', {
+      timeout = Math.max(120000, this.DEFAULT_TIMEOUT * 0.8); // Optimized to 2 minutes for image generation
+      logger.debug('Optimized timeout for image generation', {
         command,
         timeoutMs: timeout,
         timeoutMinutes: Math.round(timeout / 60000),
-        reason: 'AI Studio image generation requires extended processing time (Error4.md analysis)'
+        reason: 'Immediate timeout clear on success reduces actual wait time'
       });
     }
     
@@ -1523,11 +1499,11 @@ export class AIStudioLayer implements LayerInterface {
           status: 'ready'
         });
         
-        // Use direct Google AI Studio API instead of MCP server
-        logger.info('AI Studio layer using direct API integration', {
+        // Force MCP server usage for unified timeout handling
+        logger.info('AI Studio layer enforcing MCP server usage', {
           apiKeyAvailable: true,
-          integrationMode: 'direct_api',
-          note: 'Bypassing MCP server for better reliability'
+          integrationMode: 'mcp_only',
+          note: 'Using MCP server for consistent timeout patterns and proper translation support'
         });
         
       } catch (binaryError) {

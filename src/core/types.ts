@@ -379,6 +379,8 @@ export const ImageGenOptionsSchema = z.object({
   seed: z.number().optional(),
   guidance: z.number().min(1).max(20).optional(),
   steps: z.number().min(10).max(100).optional(),
+  numberOfImages: z.number().min(1).max(4).optional(),
+  personGeneration: z.enum(['ALLOW', 'BLOCK']).optional(),
 });
 export type ImageGenOptions = z.infer<typeof ImageGenOptionsSchema>;
 
@@ -397,7 +399,7 @@ export type VideoGenOptions = z.infer<typeof VideoGenOptionsSchema>;
 
 // Audio Generation Options
 export const AudioGenOptionsSchema = z.object({
-  voice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']).optional(),
+  voice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer', 'Kore', 'Puck']).optional(),
   language: z.string().optional(),
   speed: z.number().min(0.25).max(4).optional(),
   format: z.enum(['mp3', 'wav', 'flac']).default('mp3'),
@@ -423,7 +425,21 @@ export const MediaGenResultSchema = z.object({
     model: z.string(),
     settings: z.record(z.any()),
     cost: z.number().optional(),
+    voice: z.string().optional(),
+    responseText: z.string().optional(),
+    translation: z.object({
+      detectedLanguage: z.string(),
+      languageName: z.string(),
+      originalPrompt: z.string().optional(),
+      translatedPrompt: z.string().optional(),
+      wasTranslated: z.boolean(),
+    }).optional(),
   }),
+  media: z.object({
+    type: z.enum(['image', 'audio', 'video']),
+    data: z.string().optional(),
+    metadata: z.record(z.any()).optional(),
+  }).optional(),
   downloadUrl: z.string().optional(),
   error: z.string().optional(),
 });
