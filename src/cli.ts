@@ -1757,9 +1757,13 @@ program
   .option('-w, --workflow <type>', 'Workflow type (analysis, conversion, extraction)', 'analysis')
   .option('-o, --output <format>', 'Output format (text, json, markdown)', 'text')
   .action(async (files, options) => {
-    let timeoutId: NodeJS.Timeout | undefined;
+    // Set CLI mode environment variable FIRST before any imports or logger initialization
+    process.env.CGMB_CLI_MODE = 'true';
     
     try {
+      // Set quiet log level for CLI commands to avoid Error: display in Bash tool  
+      process.env.LOG_LEVEL = 'warn';
+      
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
       
@@ -1787,34 +1791,20 @@ program
       
       console.log('📊 Detected file types:', fileRefs.map((f: any) => `${f.path} (${f.type})`).join(', '));
       
-      // Execute with immediate response on completion (GeminiCLI pattern)
-      const multimodalPromise = layerManager.executeWithOptimalLayer({
-        prompt: options.prompt,
-        files: fileRefs,
-        options: {
-          workflow: options.workflow,
-          outputFormat: options.output,
-          execution_mode: 'adaptive'
-        }
-      });
-      
-      // Set timeout but allow immediate resolution on success
-      timeoutId = setTimeout(() => {
-        console.error('⚠️ Multimodal processing is taking longer than expected (5 minutes)...');
-        console.log('💡 This might be due to large files or API quota limits.');
-      }, 300000); // 5 minutes warning, not rejection
-      
-      const result = await multimodalPromise;
-      
-      // Clear timeout immediately on success
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
-      // Clear timeout immediately upon completion
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      // Execute with unified timeout management for consistent behavior
+      const result = await withCLITimeout(
+        () => layerManager.executeWithOptimalLayer({
+          prompt: options.prompt,
+          files: fileRefs,
+          options: {
+            workflow: options.workflow,
+            outputFormat: options.output,
+            execution_mode: 'adaptive'
+          }
+        }),
+        'multimodal-process',
+        300000 // 5 minutes base, automatically adjusted for environment and file count
+      );
       
       if (result.success) {
         console.log('\n✅ Processing complete!');
@@ -1840,11 +1830,6 @@ program
         process.exit(1);
       }
     } catch (error) {
-      // Clear timeout on error
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
       logger.error('Multimodal processing failed', error as Error);
       console.error('❌ Failed to process files:', (error as Error).message);
       console.log('\n💡 Tips:');
