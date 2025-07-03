@@ -1675,8 +1675,10 @@ program
           console.log(`   Layer used: ${result.metadata.layer || 'Unknown'}`);
           console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
         }
+        process.exit(0);
       } else {
         console.error('❌ Analysis failed:', result.error || 'Unknown error');
+        process.exit(1);
       }
     } catch (error) {
       logger.error('Document analysis failed', error as Error);
@@ -1774,8 +1776,10 @@ program
           console.log(`   Files processed: ${files.length}`);
           console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
         }
+        process.exit(0);
       } else {
         console.error('❌ Multimodal processing failed:', result.error || 'Unknown error');
+        process.exit(1);
       }
     } catch (error) {
       // Clear timeout on error

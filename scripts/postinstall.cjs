@@ -223,21 +223,33 @@ async function setupMCPIntegration() {
   }
   
   try {
-    // Try to run cgmb setup-mcp
-    const cgmbPath = path.join(process.cwd(), 'dist', 'cli.js');
-    
-    if (fs.existsSync(cgmbPath)) {
+    // Try to run cgmb setup-mcp using the cgmb command
+    try {
       // Set environment variable to prevent nested Claude Code execution
       process.env.CGMB_NO_CLAUDE_EXEC = 'true';
-      execSync(`node ${cgmbPath} setup-mcp`, { 
+      execSync('cgmb setup-mcp', { 
         stdio: 'inherit',
         env: { ...process.env, CGMB_NO_CLAUDE_EXEC: 'true' }
       });
-      log('✅ MCP integration configured', 'success');
+      log('✅ MCP integration configured with cgmb command', 'success');
       return true;
-    } else {
-      log('⚠️ CGMB not built yet. Run "npm run build" then "cgmb setup-mcp"', 'warning');
-      return false;
+    } catch (cgmbError) {
+      // Fallback to direct node execution if cgmb command not available
+      log('⚠️ cgmb command not available, trying direct execution...', 'warning');
+      
+      const cgmbPath = path.join(process.cwd(), 'dist', 'cli.js');
+      if (fs.existsSync(cgmbPath)) {
+        process.env.CGMB_NO_CLAUDE_EXEC = 'true';
+        execSync(`node ${cgmbPath} setup-mcp`, { 
+          stdio: 'inherit',
+          env: { ...process.env, CGMB_NO_CLAUDE_EXEC: 'true' }
+        });
+        log('✅ MCP integration configured with fallback method', 'success');
+        return true;
+      } else {
+        log('⚠️ CGMB not built yet. Run "npm run build" then "cgmb setup-mcp"', 'warning');
+        return false;
+      }
     }
   } catch (error) {
     log('⚠️ MCP integration setup failed. You can set it up later with: cgmb setup-mcp', 'warning');

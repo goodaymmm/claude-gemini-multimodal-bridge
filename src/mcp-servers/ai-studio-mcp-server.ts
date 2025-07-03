@@ -25,6 +25,7 @@ import { promises as fsPromises } from 'fs';
 import { AI_MODELS } from '../core/types.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
+const pdfParse = require('pdf-parse');
 
 
 // Input validation schemas
@@ -667,8 +668,14 @@ To retrieve this file, use:
               mimeType
             }
           });
+        } else if (mimeType === 'application/pdf') {
+          // Extract text from PDF instead of treating as binary
+          const extractedText = await this.extractPDFText(file.path);
+          parts.push({
+            text: `File: ${file.path}\n${extractedText}`
+          });
         } else {
-          // For text files, add as text content
+          // For other text files, add as text content
           parts.push({
             text: `File: ${file.path}\nContent: ${fileData.toString('utf-8')}`
           });
@@ -770,6 +777,44 @@ To retrieve this file, use:
       '.json': 'application/json'
     };
     return mimeTypes[ext] || 'application/octet-stream';
+  }
+
+  /**
+   * Extract text from PDF using pdf-parse
+   */
+  private async extractPDFText(filePath: string): Promise<string> {
+    try {
+      console.log(`[MCP Server] Extracting text from PDF: ${filePath}`);
+      
+      const buffer = fs.readFileSync(filePath);
+      const data = await pdfParse(buffer, {
+        max: 0, // Process all pages
+        version: 'v1.10.100',
+      });
+
+      const extractedText = data.text.trim();
+      
+      console.log(`[MCP Server] PDF extraction completed`, {
+        filePath,
+        textLength: extractedText.length,
+        pageCount: data.numpages,
+        hasText: extractedText.length > 0,
+        textPreview: extractedText.substring(0, 200) + (extractedText.length > 200 ? '...' : '')
+      });
+
+      if (extractedText.length === 0) {
+        return `[PDF Document: ${path.basename(filePath)}]\nNo text content could be extracted. This may be an image-based PDF that requires OCR processing.`;
+      }
+
+      // Add metadata header
+      const metadata = `[PDF Document: ${path.basename(filePath)} - ${data.numpages} pages]\n\n`;
+      return metadata + extractedText;
+      
+    } catch (error) {
+      console.error(`[MCP Server] Failed to extract PDF text from ${filePath}:`, error);
+      
+      return `[PDF Document: ${path.basename(filePath)}]\nText extraction failed: ${error instanceof Error ? error.message : String(error)}\nNote: This PDF may require specialized OCR processing.`;
+    }
   }
 
   private async getGeneratedFile(args: any) {
