@@ -71,8 +71,11 @@ CGMB integrates seamlessly with Claude Code. Use the "CGMB" keyword for optimal 
 # Image generation
 "CGMB generate an image of a futuristic city"
 
-# Document analysis
-"CGMB analyze this document @report.pdf"
+# Document analysis (local files - use absolute paths)
+"CGMB analyze this document at /full/path/to/report.pdf"
+
+# URL analysis (direct web content processing)
+"CGMB analyze the PDF at https://example.com/document.pdf"
 
 # Web search (current information)
 "CGMB search for latest AI developments"
@@ -81,7 +84,7 @@ CGMB integrates seamlessly with Claude Code. Use the "CGMB" keyword for optimal 
 "CGMB create audio saying 'Welcome to our podcast'"
 
 # Multi-file processing
-"CGMB process @image.png @document.pdf together"
+"CGMB process the image at /path/to/image.png and document at /path/to/document.pdf together"
 ```
 
 ### How It Works
@@ -91,6 +94,78 @@ CGMB integrates seamlessly with Claude Code. Use the "CGMB" keyword for optimal 
    - **Gemini CLI**: Web search, current information
    - **AI Studio**: Images, audio, file processing
    - **Claude Code**: Complex reasoning, code analysis
+
+## ⚠️ Claude Code使用時の重要事項
+
+### 🌐 URL処理の注意点
+
+Claude CodeでURLを含むドキュメント分析を行う場合は、以下の点にご注意ください：
+
+#### ✅ 推奨方法
+```bash
+# CGMBを使ってURL先を直接分析
+"CGMB analyze the document at https://example.com/document.pdf"
+"Use CGMB to process the PDF at https://website.com/report.pdf"
+```
+
+#### ❌ 避けるべきパターン
+```bash
+# ❌ 事前にダウンロードしてからCGMBに渡す
+# Claude CodeがURLを自動ダウンロードしてから分析
+```
+
+**理由**: CGMBのGemini CLI層はWebコンテンツに直接アクセスでき、リアルタイム分析が可能です。事前ダウンロードは不要で、むしろCGMBの自動ルーティング機能が無効化されてしまいます。
+
+### 📁 ファイルパス指定のベストプラクティス
+
+#### ✅ 推奨: 絶対パスの使用
+```bash
+# 絶対パスで確実に指定
+"CGMB analyze /full/path/to/document.pdf"
+"Process the file at /Users/username/Documents/report.pdf with CGMB"
+```
+
+#### ⚠️ 相対パス使用時の注意
+```bash
+# 相対パスが認識されない場合は絶対パスに変換
+"CGMB analyze ../document.pdf"  # 失敗する可能性あり
+↓
+"CGMB analyze /full/absolute/path/to/document.pdf"  # 確実
+```
+
+**CGMBの自動パス解決機能**: 
+- 相対パス（`./file.pdf`, `../doc.pdf`）→ 絶対パスに自動変換
+- ファイル存在確認と読み取り権限チェック
+- 詳細なエラーメッセージで問題箇所を特定
+
+### 🎯 CGMB活用のコツ
+
+#### 1. キーワードトリガー
+Claude Codeの自動ツール選択を活用するため、必ず **"CGMB"** キーワードを含めてください：
+
+```bash
+✅ "CGMB analyze this document"
+✅ "Use CGMB to process these images" 
+❌ "Analyze this document"  # CGMBが選択されない可能性
+```
+
+#### 2. タスク別の最適な表現
+```bash
+# URL分析
+"CGMB analyze the content at [URL]"
+
+# ファイル処理  
+"CGMB process the file at [absolute_path]"
+
+# 複数ファイル
+"CGMB analyze these documents: [file1] [file2]"
+
+# 画像生成
+"CGMB generate an image of [description]"
+
+# 音声生成
+"CGMB create audio saying '[text]'"
+```
 
 ## 🖥️ CLI Commands
 
@@ -248,6 +323,39 @@ cgmb quota-status --detailed         # Check API usage
 ```bash
 nvm use 22.17                        # Use correct Node.js version
 nvm current                          # Verify version
+```
+
+**Claude Code Integration Issues:**
+
+*Problem: URLs are being downloaded instead of processed directly*
+```bash
+# ✅ Solution: Use CGMB keyword and specify direct URL processing
+"CGMB analyze the content at https://example.com/doc.pdf"
+# ❌ Avoid: Pre-downloading URLs before CGMB analysis
+```
+
+*Problem: Relative paths not recognized*  
+```bash
+# ✅ Solution: Convert to absolute path or use CGMB path resolution
+"CGMB analyze /full/absolute/path/to/document.pdf"
+# Check current directory and convert relative paths:
+pwd  # Get current working directory
+# Then use: /current/directory/relative/path/file.pdf
+```
+
+*Problem: CGMB tools not being selected*
+```bash
+# ✅ Solution: Include "CGMB" keyword explicitly
+"CGMB process this file"              # ✅ Will trigger CGMB
+"Process this file"                   # ❌ May not trigger CGMB
+```
+
+*Problem: File processing errors*
+```bash
+# Check file permissions and existence
+ls -la /path/to/file                  # Verify file exists and permissions
+file /path/to/file                    # Check file type
+cgmb analyze --debug /path/to/file    # Debug mode for detailed error info
 ```
 
 ### Debug Mode
