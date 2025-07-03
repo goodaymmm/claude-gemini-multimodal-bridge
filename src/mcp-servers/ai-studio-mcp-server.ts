@@ -25,76 +25,6 @@ import { promises as fsPromises } from 'fs';
 import { AI_MODELS } from '../core/types.js';
 import { WaveFile } from 'wavefile';
 
-// Language detection patterns for auto-translation
-const LANGUAGE_PATTERNS = {
-  ja: /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/,    // Hiragana, Katakana, CJK Unified Ideographs
-  ko: /[\uAC00-\uD7AF]/,                              // Hangul Syllables
-  zh: /[\u4E00-\u9FFF]/,                              // CJK Unified Ideographs Extended
-  fr: /[àâäéèêëïîôöùûüÿç]/,                          // French special characters
-  de: /[äöüßÄÖÜ]/,                                   // German special characters
-  es: /[ñáéíóúü¿¡]/,                                 // Spanish special characters
-  ru: /[\u0400-\u04FF]/,                             // Cyrillic
-  ar: /[\u0600-\u06FF]/,                             // Arabic
-  hi: /[\u0900-\u097F]/,                             // Devanagari
-  th: /[\u0E00-\u0E7F]/                              // Thai
-};
-
-const SUPPORTED_LANGUAGES = {
-  ja: 'Japanese',
-  ko: 'Korean', 
-  zh: 'Chinese',
-  fr: 'French',
-  de: 'German',
-  es: 'Spanish',
-  ru: 'Russian',
-  ar: 'Arabic',
-  hi: 'Hindi',
-  th: 'Thai'
-};
-
-// Function to detect language of prompt text
-function detectLanguage(text: string): string | null {
-  // Remove spaces and check for patterns
-  const cleanText = text.trim();
-  
-  // Check each language pattern
-  for (const [langCode, pattern] of Object.entries(LANGUAGE_PATTERNS)) {
-    if (pattern.test(cleanText)) {
-      return langCode;
-    }
-  }
-  
-  // Default to English if no pattern matches
-  return 'en';
-}
-
-// Function to translate non-English prompts to English using Gemini
-async function translatePromptToEnglish(prompt: string, detectedLang: string, genAI: GoogleGenAI): Promise<string> {
-  try {
-    const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
-    
-    const translationPrompt = `Translate the following ${languageName} text to English. Keep the meaning and descriptive details, but make it suitable for image generation. Only return the English translation, nothing else:\n\n${prompt}`;
-    
-    const response = await genAI.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
-      contents: [{ parts: [{ text: translationPrompt }] }],
-      config: {
-        responseModalities: ['TEXT']
-      }
-    });
-
-    const translatedText = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!translatedText) {
-      console.warn(`Translation failed for ${languageName}, using original prompt`);
-      return prompt;
-    }
-
-    return translatedText;
-  } catch (error) {
-    console.warn(`Translation error for ${detectedLang}:`, error);
-    return prompt; // Fallback to original prompt
-  }
-}
 
 // Input validation schemas
 const GenerateImageSchema = z.object({
@@ -510,26 +440,12 @@ class AIStudioMCPServer {
     const params = GenerateImageSchema.parse(args);
     
     try {
-      let processedPrompt = params.prompt;
-      
-      // Auto-detect language and translate if needed (only for image generation)
-      const detectedLang = detectLanguage(params.prompt);
-      if (detectedLang && detectedLang !== 'en') {
-        const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
-        console.log(`[AI Studio MCP] Non-English prompt detected (${languageName}), translating to English...`);
-        console.log(`[AI Studio MCP] Original: "${params.prompt}"`);
-
-        processedPrompt = await translatePromptToEnglish(params.prompt, detectedLang, this.genAI);
-        
-        console.log(`[AI Studio MCP] Translation completed: "${processedPrompt}"`);
-        console.log(`[AI Studio MCP] Language: ${languageName} → English`);
-      }
-      
-      // First sanitize the prompt to replace problematic words
-      let sanitizedPrompt = sanitizePrompt(processedPrompt);
+      // Sanitize the prompt to replace problematic words  
+      // Translation is now handled by GeminiCLI in AIStudioLayer
+      let sanitizedPrompt = sanitizePrompt(params.prompt);
       // Log sanitization for debugging if needed
-      if (processedPrompt !== sanitizedPrompt) {
-        console.error(`[AI Studio MCP] Prompt sanitized: "${processedPrompt}" → "${sanitizedPrompt}"`);
+      if (params.prompt !== sanitizedPrompt) {
+        console.error(`[AI Studio MCP] Prompt sanitized: "${params.prompt}" → "${sanitizedPrompt}"`);
       }
       
       // Add safety prefixes to avoid content policy issues
@@ -616,13 +532,12 @@ class AIStudioMCPServer {
 📁 File saved to: ${savedFilePath}
 📏 Size: ${(fileSize / 1024).toFixed(2)} KB
 🎨 Original prompt: ${params.prompt}
-${detectedLang !== 'en' ? `🌐 Translated from ${SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang}: ${processedPrompt}` : ''}
 ✨ Safe prompt: ${safePrompt}
 
 To retrieve this file, use:
 - Tool: get_generated_file
 - Parameter: {"filePath": "${savedFilePath}"}`
-              : `Image generation completed\nOriginal prompt: ${params.prompt}\n${detectedLang !== 'en' ? `Translated from ${SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang}: ${processedPrompt}\n` : ''}Safe prompt: ${safePrompt}\n${textContent || 'Processing complete'}`
+              : `Image generation completed\nOriginal prompt: ${params.prompt}\nSafe prompt: ${safePrompt}\n${textContent || 'Processing complete'}`
           }
         ],
         imageData,
@@ -641,18 +556,7 @@ To retrieve this file, use:
           numberOfImages: params.numberOfImages,
           aspectRatio: params.aspectRatio,
           personGeneration: params.personGeneration,
-          responseText: textContent,
-          translation: detectedLang !== 'en' ? {
-            detectedLanguage: detectedLang,
-            languageName: SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang,
-            originalPrompt: params.prompt,
-            translatedPrompt: processedPrompt,
-            wasTranslated: true
-          } : {
-            detectedLanguage: 'en',
-            languageName: 'English',
-            wasTranslated: false
-          }
+          responseText: textContent
         }
       };
 

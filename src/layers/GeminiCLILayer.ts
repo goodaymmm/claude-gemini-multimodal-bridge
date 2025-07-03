@@ -460,4 +460,70 @@ export class GeminiCLILayer implements LayerInterface {
   async clearCache(): Promise<void> {
     await this.searchCache.clear();
   }
+
+  /**
+   * Translate text to English for image generation
+   * Uses Gemini CLI for efficient token usage and cost optimization
+   */
+  async translateToEnglish(text: string, sourceLang: string): Promise<string> {
+    const languageNames: Record<string, string> = {
+      ja: 'Japanese',
+      ko: 'Korean', 
+      zh: 'Chinese',
+      fr: 'French',
+      de: 'German',
+      es: 'Spanish',
+      ru: 'Russian',
+      ar: 'Arabic',
+      hi: 'Hindi',
+      th: 'Thai'
+    };
+
+    const languageName = languageNames[sourceLang] || sourceLang;
+    
+    // Optimized translation prompt for image generation
+    const translationPrompt = `Translate the following ${languageName} text to English. Keep the meaning and descriptive details, but make it suitable for image generation. Only return the English translation, nothing else:
+
+${text}`;
+
+    logger.info(`Translating ${languageName} prompt to English using Gemini CLI`, {
+      originalText: text,
+      sourceLang,
+      languageName
+    });
+
+    try {
+      const result = await this.execute({
+        type: 'translation',
+        prompt: translationPrompt,
+        useSearch: false, // No web search needed for translation
+        model: 'gemini-2.0-flash-exp' // Fast model for translation
+      });
+
+      if (!result.success || !result.data) {
+        throw new Error('Translation failed: No result returned');
+      }
+
+      const translatedText = result.data.trim();
+      
+      logger.info('Translation completed successfully', {
+        originalText: text,
+        translatedText,
+        sourceLang,
+        duration: result.metadata?.duration || 0
+      });
+
+      return translatedText;
+
+    } catch (error) {
+      logger.error('Translation failed, using original text', {
+        error: error instanceof Error ? error.message : String(error),
+        originalText: text,
+        sourceLang
+      });
+      
+      // Fallback to original text if translation fails
+      return text;
+    }
+  }
 }

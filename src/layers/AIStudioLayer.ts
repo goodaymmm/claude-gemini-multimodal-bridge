@@ -568,19 +568,63 @@ export class AIStudioLayer implements LayerInterface {
    * Generate image using AI Studio with Gemini 2.0 Flash for cost efficiency
    */
   async generateImage(prompt: string, options: Partial<ImageGenOptions> = {}): Promise<MediaGenResult> {
-    logger.info('Generating image using MCP command (unified timeout pattern)', {
+    logger.info('Generating image using GeminiCLI translation + MCP pattern', {
       promptLength: prompt.length,
       model: AI_MODELS.IMAGE_GENERATION,
       quality: options.quality || 'standard'
     });
 
     const startTime = Date.now();
+    let processedPrompt = prompt;
+    let translationInfo: any = {
+      detectedLanguage: 'en',
+      languageName: 'English',
+      wasTranslated: false
+    };
+    
+    // Auto-detect language and translate using GeminiCLI for token optimization
+    const detectedLang = detectLanguage(prompt);
+    if (detectedLang && detectedLang !== 'en') {
+      const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
+      logger.info(`Non-English prompt detected (${languageName}), using GeminiCLI for translation...`, {
+        originalPrompt: prompt,
+        detectedLanguage: detectedLang
+      });
+
+      if (this.geminiLayer?.translateToEnglish) {
+        try {
+          processedPrompt = await this.geminiLayer.translateToEnglish(prompt, detectedLang);
+          
+          translationInfo = {
+            detectedLanguage: detectedLang,
+            languageName,
+            originalPrompt: prompt,
+            translatedPrompt: processedPrompt,
+            wasTranslated: true
+          };
+          
+          logger.info('GeminiCLI translation completed', {
+            originalPrompt: prompt,
+            translatedPrompt: processedPrompt,
+            language: `${languageName} → English`
+          });
+        } catch (translationError) {
+          logger.warn('GeminiCLI translation failed, using original prompt', {
+            error: translationError instanceof Error ? translationError.message : String(translationError),
+            originalPrompt: prompt
+          });
+          // processedPrompt remains as original prompt
+        }
+      } else {
+        logger.warn('GeminiCLILayer not available for translation, using original prompt');
+      }
+    }
     
     try {
       // Use MCP command (matches working timeout pattern from image/PDF analysis)
-      // Translation is now handled inside the MCP server
+      // Translation now handled by GeminiCLI for token distribution
       const mcpResult = await this.executeMCPCommand('generate_image', {
-        prompt: prompt,
+        prompt: processedPrompt,
         numberOfImages: options.numberOfImages || 1,
         aspectRatio: options.aspectRatio || '1:1',
         personGeneration: options.personGeneration || 'ALLOW',
@@ -611,11 +655,7 @@ export class AIStudioLayer implements LayerInterface {
           settings: options,
           cost: this.calculateGenerationCost('image', options),
           responseText: mcpResult.metadata?.responseText || '',
-          translation: mcpResult.metadata?.translation || {
-            detectedLanguage: 'en',
-            languageName: 'English',
-            wasTranslated: false
-          }
+          translation: translationInfo
         },
         media: {
           type: 'image',
