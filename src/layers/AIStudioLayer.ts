@@ -23,6 +23,7 @@ import {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
+import { TimeoutManager } from '../utils/TimeoutManager.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
 
@@ -1421,40 +1422,13 @@ export class AIStudioLayer implements LayerInterface {
       child.on('close', (code) => {
         clearTimeout(timeoutId);
         
-        // GeminiCLIパターン: 即座にPromise解決（パース処理前）
         if (code === 0) {
-          // 非同期でパース処理を実行し、即座にPromise解決
-          setImmediate(() => {
-            try {
-              const lines = output.trim().split('\n').filter(line => line.trim());
-              let result = {};
-              
-              for (const line of lines) {
-                try {
-                  const mcpResponse = JSON.parse(line);
-                  if (mcpResponse.result) {
-                    result = mcpResponse.result;
-                    break;
-                  }
-                } catch (parseError) {
-                  continue;
-                }
-              }
-              
-              logger.debug('MCP command completed successfully', {
-                command,
-                outputLength: output.length,
-                code,
-              });
-            } catch (parseError) {
-              logger.debug('MCP JSON parsing completed with fallback to raw output');
-            }
-          });
-          
-          // 即座にresolve（パース結果を待たない）
+          // Immediate resolution pattern for new installations
+          // Process results immediately without waiting for additional processing
           try {
             const lines = output.trim().split('\n').filter(line => line.trim());
             let result = {};
+            
             for (const line of lines) {
               try {
                 const mcpResponse = JSON.parse(line);
@@ -1466,13 +1440,32 @@ export class AIStudioLayer implements LayerInterface {
                 continue;
               }
             }
+            
+            logger.debug(`[${this.instanceId}] MCP command completed successfully - immediate resolution`, {
+              instanceId: this.instanceId,
+              command,
+              outputLength: output.length,
+              code,
+              resultType: typeof result,
+              hasResult: !!result
+            });
+            
             resolve(result);
           } catch (parseError) {
+            logger.debug(`[${this.instanceId}] MCP parsing failed, using raw output fallback`, {
+              instanceId: this.instanceId,
+              parseError: parseError instanceof Error ? parseError.message : String(parseError)
+            });
             resolve({ content: output.trim() });
           }
         } else {
           const error = `AI Studio MCP command failed with code ${code}: ${errorOutput}`;
-          logger.error('MCP command failed', { command, code, error: errorOutput });
+          logger.error(`[${this.instanceId}] MCP command failed`, { 
+            instanceId: this.instanceId,
+            command, 
+            code, 
+            error: errorOutput 
+          });
           reject(new Error(error));
         }
       });
