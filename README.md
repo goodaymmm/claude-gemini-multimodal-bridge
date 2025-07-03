@@ -19,6 +19,11 @@
 - 🛡️ **Enhanced Security**: Professional tool descriptions to prevent malicious detection
 - 📊 **Improved Responses**: Generated files now include paths, sizes, and retrieval instructions
 - 📦 **Latest Google AI Integration**: Migrated to `@google/genai` v1.8.0 for improved performance and features
+- 🌐 **Multi-Language Support**: Automatic translation for image generation prompts (Japanese, Korean, Chinese, French, German, Spanish, Russian, Hindi, Thai, Arabic)
+- 🎵 **Enhanced Audio Quality**: HIGH QUALITY LINEAR16 24kHz audio with speech enhancement
+- 📄 **Advanced PDF Processing**: Enhanced text extraction with pdf-parse integration
+- ⚡ **Improved Timeout Management**: Immediate response upon completion, no hanging timeouts
+- 🔍 **Web Search Priority**: Gemini CLI automatically prioritized for web search queries
 
 
 ### 🏗️ **Core Features**
@@ -990,7 +995,7 @@ cgmb multimodal data.* --output json                       # JSON output
 
 ## 📊 Performance & Optimization
 
-### 🚀 **Enhanced Performance Features (v1.0.1)**
+### 🚀 **Enhanced Performance Features (v1.1.0)**
 
 #### PromptOptimizer
 - **Automatic Simplification**: Reduces prompt complexity for faster processing

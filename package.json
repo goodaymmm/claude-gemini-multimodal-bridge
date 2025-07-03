@@ -1,7 +1,7 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.1.0",
-  "description": "Enterprise-grade multi-layer AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent caching, OAuth authentication, and optimal layer routing for superior performance",
+  "version": "1.0.0",
+  "description": "Stable multi-layer AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing, dynamic PDF processing, and enhanced multimodal capabilities",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -10,7 +10,7 @@
   "mcp": {
     "name": "cgmb",
     "description": "Claude-Gemini Multimodal Bridge - Enterprise-grade multi-layer AI integration with intelligent caching, OAuth authentication, and optimal layer routing",
-    "version": "1.1.0",
+    "version": "1.0.0",
     "command": "cgmb",
     "args": [
       "serve"
@@ -78,7 +78,12 @@
     "intelligent-routing",
     "mcp-gemini-cli",
     "authentication-cache",
-    "fallback-strategies"
+    "fallback-strategies",
+    "multi-language-support",
+    "pdf-processing",
+    "audio-enhancement",
+    "timeout-optimization",
+    "web-search-priority"
   ],
   "author": "goodaymmm",
   "license": "MIT",

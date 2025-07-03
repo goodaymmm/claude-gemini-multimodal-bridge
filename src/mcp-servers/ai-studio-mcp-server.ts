@@ -25,7 +25,7 @@ import { promises as fsPromises } from 'fs';
 import { AI_MODELS } from '../core/types.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
-const pdfParse = require('pdf-parse');
+// pdf-parse は extractPDFText() メソッド内で動的に読み込みます
 
 
 // Input validation schemas
@@ -780,11 +780,20 @@ To retrieve this file, use:
   }
 
   /**
-   * Extract text from PDF using pdf-parse
+   * Extract text from PDF using pdf-parse (動的読み込み)
    */
   private async extractPDFText(filePath: string): Promise<string> {
     try {
       console.log(`[MCP Server] Extracting text from PDF: ${filePath}`);
+      
+      // pdf-parseを動的に読み込み（PDFファイル処理時のみ）
+      let pdfParse;
+      try {
+        // ESモジュール環境でのCommonJS動的インポート（テストモード回避のため直接libを使用）
+        pdfParse = (await import('pdf-parse/lib/pdf-parse.js' as any)).default;
+      } catch (importError) {
+        throw new Error(`PDF processing library not available: ${importError instanceof Error ? importError.message : String(importError)}`);
+      }
       
       const buffer = fs.readFileSync(filePath);
       const data = await pdfParse(buffer, {

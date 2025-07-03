@@ -2,7 +2,7 @@
 
 ## 🚀 Overview
 
-This guide covers all CLI commands available in Claude-Gemini Multimodal Bridge v1.1.0, including genai package migration, file generation and retrieval, and NPM package-ready features.
+This guide covers all CLI commands available in Claude-Gemini Multimodal Bridge v1.0.0, featuring stable multi-layer AI integration, dynamic PDF processing, and enhanced multimodal capabilities.
 
 ## 📋 Quick Reference
 
@@ -15,7 +15,7 @@ This guide covers all CLI commands available in Claude-Gemini Multimodal Bridge 
 | `cgmb gemini` | Direct Gemini CLI access | `cgmb gemini "complex query"` |
 | `cgmb generate-image` | Generate images with AI Studio | `cgmb generate-image "cute robot" -o robot.png` |
 | `cgmb generate-audio` | Generate audio/speech | `cgmb generate-audio "Hello world" -v Puck` |
-| `cgmb analyze` | Analyze documents | `cgmb analyze document.pdf --prompt "summarize"` |
+| `cgmb analyze` | Analyze documents (dynamic PDF processing) | `cgmb analyze document.pdf --type summary` |
 | `cgmb multimodal` | Process multiple files | `cgmb multimodal *.png *.pdf --workflow analysis` |
 
 ### Authentication & Setup Commands

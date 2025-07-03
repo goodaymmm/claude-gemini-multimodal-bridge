@@ -65,7 +65,9 @@ export default [
       '*.js',
       '.cgmb-cache/**',
       'test-files/**',
-      'examples/output/**'
+      'examples/output/**',
+      'scripts/*.cjs',
+      'scripts/*.js'
     ]
   }
 ];

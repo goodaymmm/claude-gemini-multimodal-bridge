@@ -15,7 +15,7 @@ import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';
-const pdfParse = require('pdf-parse');
+// pdf-parse は extractPDFWithPdfParse() メソッド内で動的に読み込みます（フォールバック時のみ）
 
 /**
  * DocumentAnalysis tool provides advanced document analysis capabilities
@@ -272,6 +272,15 @@ Please extract the complete text content while maintaining readability and struc
   private async extractPDFWithPdfParse(pdfPath: string): Promise<string> {
     try {
       logger.info('Extracting PDF with pdf-parse (fallback)', { pdfPath });
+      
+      // pdf-parseを動的に読み込み（Gemini File APIフォールバック時のみ）
+      let pdfParse;
+      try {
+        // ESモジュール環境でのCommonJS動的インポート（テストモード回避のため直接libを使用）
+        pdfParse = (await import('pdf-parse/lib/pdf-parse.js' as any)).default;
+      } catch (importError) {
+        throw new Error(`PDF processing library not available: ${importError instanceof Error ? importError.message : String(importError)}`);
+      }
       
       const buffer = await fs.readFile(pdfPath);
       const data = await pdfParse(buffer, {
