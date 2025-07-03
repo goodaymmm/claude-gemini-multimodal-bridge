@@ -135,6 +135,15 @@ cgmb multimodal image.png doc.pdf --prompt "Create report"
 
 ## 🏗️ Architecture
 
+```mermaid
+flowchart TD
+    A[Claude Code] --> B[CGMB]
+    
+    B --> C[Gemini CLI]
+    B --> D[Claude Code]
+    B --> E[AI Studio]
+```
+
 ### 3-Layer System
 
 | Layer | Primary Functions | Best For | Timeout |
