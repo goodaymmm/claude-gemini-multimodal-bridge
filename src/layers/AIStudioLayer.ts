@@ -291,10 +291,12 @@ export class AIStudioLayer implements LayerInterface {
           }
         }
 
-        logger.info('Executing AI Studio task', {
+        logger.info('🔧 Executing AI Studio task - DEBUG', {
           taskType: task.type || 'general',
-          action: task.action || 'execute',
+          action: task.action || 'execute', 
           fileCount: task.files ? task.files.length : 0,
+          taskKeys: Object.keys(task),
+          taskStructure: JSON.stringify(task, null, 2).substring(0, 500)
         });
 
         let result: any;
@@ -307,6 +309,11 @@ export class AIStudioLayer implements LayerInterface {
             break;
           case 'document_analysis':
           case 'document':
+            logger.info('🔧 Processing document analysis in execute method', {
+              hasFiles: !!(task.files || task.documents),
+              fileCount: (task.files || task.documents || []).length,
+              hasInstructions: !!task.instructions
+            });
             result = await this.analyzeDocuments(task.files || task.documents, task.instructions);
             break;
           case 'image':
@@ -502,78 +509,6 @@ export class AIStudioLayer implements LayerInterface {
     );
   }
 
-  /**
-   * Translate prompt to English using GeminiCLILayer (for image generation only)
-   */
-  private async translatePromptToEnglish(prompt: string, detectedLang: string): Promise<string> {
-    if (!this.geminiLayer) {
-      logger.warn('GeminiCLILayer not available for translation - will use original prompt', {
-        hasGeminiLayer: !!this.geminiLayer,
-        originalPrompt: prompt
-      });
-      return prompt;
-    }
-
-    try {
-      const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
-      const translationPrompt = `Translate this ${languageName} text to English for image generation purposes. Keep it descriptive and suitable for image generation. Only return the English translation: "${prompt}"`;
-      
-      logger.info(`Translating ${languageName} prompt to English`, {
-        originalLength: prompt.length,
-        detectedLanguage: detectedLang,
-        geminiLayerAvailable: !!this.geminiLayer
-      });
-
-      // Verify geminiLayer has execute method
-      if (typeof this.geminiLayer.execute !== 'function') {
-        throw new Error(`GeminiCLILayer.execute is not a function. Available methods: ${Object.getOwnPropertyNames(this.geminiLayer).join(', ')}`);
-      }
-
-      const translationTask = {
-        type: 'text_processing',
-        prompt: translationPrompt,
-        useSearch: false
-      };
-      
-      logger.debug('Sending translation task to GeminiCLILayer', {
-        taskType: translationTask.type,
-        promptLength: translationTask.prompt.length,
-        useSearch: translationTask.useSearch
-      });
-      
-      const translationResult = await this.geminiLayer.execute(translationTask);
-      
-      logger.debug('Translation result received', {
-        success: translationResult?.success,
-        hasData: !!translationResult?.data,
-        dataType: typeof translationResult?.data,
-        dataLength: typeof translationResult?.data === 'string' ? translationResult.data.length : 0
-      });
-      
-      if (!translationResult || !translationResult.success || !translationResult.data) {
-        throw new Error(`Translation failed: ${!translationResult ? 'No result object' : !translationResult.success ? 'Execution failed' : 'No valid data received'}`);
-      }
-      
-      const translatedPrompt = String(translationResult.data).trim();
-
-      logger.info('Translation completed', {
-        original: prompt,
-        translated: translatedPrompt,
-        originalLanguage: languageName
-      });
-
-      return translatedPrompt;
-    } catch (error) {
-      logger.warn('Translation failed, using original prompt', {
-        error: (error as Error).message,
-        errorType: (error as Error).constructor.name,
-        originalPrompt: prompt,
-        geminiLayerType: this.geminiLayer ? this.geminiLayer.constructor.name : 'undefined'
-      });
-      // Fallback to original prompt if translation fails
-      return prompt;
-    }
-  }
 
   /**
    * Generate image using AI Studio with Gemini 2.0 Flash for cost efficiency
@@ -641,17 +576,22 @@ export class AIStudioLayer implements LayerInterface {
           hasTranslateMethod: typeof this.geminiLayer.translateToEnglish === 'function',
           layerType: this.geminiLayer.constructor.name,
           availableMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.geminiLayer)).slice(0, 10),
-          hasExecute: typeof this.geminiLayer.execute === 'function',
-          hasExecuteSimple: typeof this.geminiLayer.executeSimple === 'function'
+          hasExecute: typeof this.geminiLayer.execute === 'function'
         });
         
-        if (this.geminiLayer.translateToEnglish) {
+        if (typeof this.geminiLayer.translateToEnglish === 'function') {
           try {
             // Ensure GeminiCLI layer is initialized before translation
             if (!await this.geminiLayer.isAvailable()) {
               logger.warn('GeminiCLI layer not available, initializing...');
               await this.geminiLayer.initialize();
             }
+            
+            logger.info('🔧 About to call translateToEnglish method', {
+              hasMethod: typeof this.geminiLayer.translateToEnglish === 'function',
+              geminiLayerType: this.geminiLayer.constructor.name,
+              corePrompt: corePrompt.substring(0, 50)
+            });
             
             const translatedCore = await this.geminiLayer.translateToEnglish(corePrompt, detectedLang);
             // Reconstruct prompt with original prefix + translated core
@@ -672,9 +612,15 @@ export class AIStudioLayer implements LayerInterface {
               language: `${languageName} → English`
             });
           } catch (translationError) {
-            logger.warn('GeminiCLI translation failed, using original prompt', {
-              error: translationError instanceof Error ? translationError.message : String(translationError),
-              originalPrompt: prompt
+            logger.error('🔧 COMPLETE GeminiCLI translation error with full stack trace', {
+              errorMessage: translationError instanceof Error ? translationError.message : String(translationError),
+              errorType: translationError instanceof Error ? translationError.constructor.name : typeof translationError,
+              fullStack: translationError instanceof Error ? translationError.stack : 'No stack',
+              geminiLayerAvailable: !!this.geminiLayer,
+              hasTranslateMethod: this.geminiLayer ? typeof this.geminiLayer.translateToEnglish === 'function' : false,
+              geminiLayerMethods: this.geminiLayer ? Object.getOwnPropertyNames(Object.getPrototypeOf(this.geminiLayer)) : [],
+              originalPrompt: prompt.substring(0, 100),
+              corePrompt: corePrompt.substring(0, 100)
             });
             // processedPrompt remains as original prompt
           }
@@ -1079,9 +1025,11 @@ export class AIStudioLayer implements LayerInterface {
    * Analyze documents
    */
   private async analyzeDocuments(files: FileReference[], instructions: string): Promise<string> {
-    logger.debug('Analyzing documents', {
+    logger.info('🔧 analyzeDocuments method called - with timeout fix', {
       fileCount: files.length,
       instructionsLength: instructions.length,
+      timestamp: Date.now(),
+      version: 'v2025-07-03-document-fix'
     });
 
     const result = await this.executeMCPCommand('analyze_documents', {

@@ -12,6 +12,7 @@ import { OAuthManager } from './auth/OAuthManager.js';
 import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
 import { LayerManager } from './core/LayerManager.js';
+import { Logger } from './utils/logger.js';
 
 // ===================================
 // Helper Functions for CLI Commands
@@ -1433,9 +1434,15 @@ program
   .option('-o, --output <path>', 'Output file path')
   .option('--safe-mode', 'Use extra-safe prompt formatting', true)
   .action(async (prompt, options) => {
+    // Set CLI mode environment variable FIRST before any imports or logger initialization
+    process.env.CGMB_CLI_MODE = 'true';
+    
     let timeoutId: NodeJS.Timeout | undefined;
     
     try {
+      // Reset logger to quiet mode for CLI commands to avoid Error: display in Bash tool
+      Logger.resetForCLI();
+      
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
       
@@ -1534,9 +1541,15 @@ program
   .option('-o, --output <path>', 'Output audio file path')
   .option('--script', 'Generate script first then convert to audio')
   .action(async (text, options) => {
+    // Set CLI mode environment variable FIRST before any imports or logger initialization
+    process.env.CGMB_CLI_MODE = 'true';
+    
     let timeoutId: NodeJS.Timeout | undefined;
     
     try {
+      // Set quiet log level for CLI commands to avoid Error: display in Bash tool  
+      process.env.LOG_LEVEL = 'warn';
+      
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
       
@@ -1614,9 +1627,15 @@ program
   .option('-t, --type <type>', 'Analysis type (summary, extract, compare)', 'summary')
   .option('-p, --prompt <prompt>', 'Custom analysis prompt')
   .action(async (files, options) => {
+    // Set CLI mode environment variable FIRST before any imports or logger initialization
+    process.env.CGMB_CLI_MODE = 'true';
+    
     let timeoutId: NodeJS.Timeout | undefined;
     
     try {
+      // Reset logger to quiet mode for CLI commands to avoid Error: display in Bash tool
+      Logger.resetForCLI();
+      
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
       

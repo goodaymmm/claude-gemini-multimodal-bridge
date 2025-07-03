@@ -14,15 +14,17 @@ export interface LoggerConfig {
 
 class Logger {
   private logger: winston.Logger;
-  private static instance: Logger;
+  private static instance: Logger | null;
+  private static quietInstance: Logger | null;
 
   private constructor(config: LoggerConfig) {
     const transports: winston.transport[] = [];
 
-    // Console transport
+    // Console transport with stdout for CLI commands to avoid Error: display in Bash tool
     if (config.console) {
       transports.push(
         new winston.transports.Console({
+          stderrLevels: [], // Force all levels to stdout instead of stderr
           format: config.json
             ? winston.format.json()
             : winston.format.combine(
@@ -68,6 +70,26 @@ class Logger {
       Logger.instance = new Logger(config || defaultConfig);
     }
     return Logger.instance;
+  }
+
+  // Create a quieter logger for CLI commands to reduce noise
+  public static getQuietInstance(): Logger {
+    if (!Logger.quietInstance) {
+      const quietConfig: LoggerConfig = {
+        level: 'warn', // Only show warnings and errors for CLI
+        console: true,
+        json: false,
+      };
+      Logger.quietInstance = new Logger(quietConfig);
+    }
+    return Logger.quietInstance;
+  }
+
+  // Force reset logger instance for CLI commands
+  public static resetForCLI(): void {
+    Logger.instance = null;
+    Logger.quietInstance = null;
+    process.env.LOG_LEVEL = 'warn';
   }
 
   public info(message: string, meta?: Record<string, any>): void {
@@ -160,8 +182,10 @@ class Logger {
   }
 }
 
-// Export singleton instance
-export const logger = Logger.getInstance();
+// Export singleton instance - use CLI-friendly logger if in CLI mode
+export const logger = process.env.CGMB_CLI_MODE === 'true' 
+  ? Logger.getQuietInstance() 
+  : Logger.getInstance();
 
 // Export class for testing
 export { Logger };
