@@ -1636,50 +1636,99 @@ program
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
 
-      // URL Detection and Routing
+      // URL Detection and Auto-Routing to Gemini CLI
       const urlFiles = files.filter((file: string) => /^https?:\/\//.test(file));
       if (urlFiles.length > 0) {
         console.log('🌐 URL(s) detected in input:');
         urlFiles.forEach((url: string) => console.log(`   ${url}`));
         console.log('');
-        console.log('💡 For URL analysis, use Gemini CLI instead:');
+        console.log('🔍 Auto-routing to Gemini CLI for URL analysis...');
+        
+        // Construct analysis prompt based on input
+        let analysisPrompt: string;
         if (urlFiles.length === 1) {
-          const prompt = options.prompt 
-            ? `${options.prompt} for the content at ${urlFiles[0]}`
-            : `Analyze the PDF content at ${urlFiles[0]}`;
-          console.log(`   cgmb chat "${prompt}"`);
+          const basePrompt = options.prompt || `Please ${options.type} this document`;
+          analysisPrompt = `${basePrompt} for the content at ${urlFiles[0]}`;
         } else {
-          console.log(`   cgmb chat "Analyze the documents at these URLs: ${urlFiles.join(', ')}"`);
+          analysisPrompt = `Analyze and ${options.type} the documents at these URLs: ${urlFiles.join(', ')}`;
         }
+        
+        console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
         console.log('');
-        console.log('🔍 Gemini CLI can access web content directly and provide real-time analysis.');
+        
+        // Execute via Gemini CLI using the same function as chat command
+        const geminiOptions = {
+          prompt: analysisPrompt,
+          model: 'gemini-2.5-pro',
+          fast: false // Use CGMB layers for better URL processing
+        };
+        
+        await executeGeminiCommand(geminiOptions);
         process.exit(0);
       }
 
-      // File Path Resolution and Validation
+      // Enhanced File Path Resolution and Validation
       const resolvedFiles: string[] = [];
       const missingFiles: string[] = [];
+      const permissionIssues: string[] = [];
 
       for (const file of files) {
-        const resolvedPath = path.resolve(process.cwd(), file);
-        if (fs.existsSync(resolvedPath)) {
-          resolvedFiles.push(resolvedPath);
-        } else {
-          missingFiles.push(file);
+        try {
+          // Normalize and resolve path, handling both relative and absolute paths
+          const normalizedPath = path.normalize(file);
+          const resolvedPath = path.isAbsolute(normalizedPath) 
+            ? normalizedPath 
+            : path.resolve(process.cwd(), normalizedPath);
+          
+          // Check existence first
+          if (fs.existsSync(resolvedPath)) {
+            // Check if it's a file (not directory) and readable
+            const stats = fs.statSync(resolvedPath);
+            if (stats.isFile()) {
+              // Check read permissions
+              try {
+                fs.accessSync(resolvedPath, fs.constants.R_OK);
+                resolvedFiles.push(resolvedPath);
+              } catch (permError) {
+                permissionIssues.push(file);
+              }
+            } else {
+              missingFiles.push(file + ' (is a directory, not a file)');
+            }
+          } else {
+            missingFiles.push(file);
+          }
+        } catch (error) {
+          // Handle any other path resolution errors
+          missingFiles.push(file + ' (path resolution error)');
         }
       }
 
-      if (missingFiles.length > 0) {
-        console.log('❌ File(s) not found:');
-        missingFiles.forEach((file: string) => {
-          const resolvedPath = path.resolve(process.cwd(), file);
-          console.log(`   ${file} (resolved: ${resolvedPath})`);
-        });
+      // Handle missing files and permission issues
+      if (missingFiles.length > 0 || permissionIssues.length > 0) {
+        if (missingFiles.length > 0) {
+          console.log('❌ File(s) not found:');
+          missingFiles.forEach((file: string) => {
+            const baseName = file.includes(' (') ? (file.split(' (')[0] || file) : file;
+            const resolvedPath = path.resolve(process.cwd(), baseName);
+            console.log(`   ${file} (resolved: ${resolvedPath})`);
+          });
+        }
+        
+        if (permissionIssues.length > 0) {
+          console.log('❌ Permission denied:');
+          permissionIssues.forEach((file: string) => {
+            const resolvedPath = path.resolve(process.cwd(), file);
+            console.log(`   ${file} (resolved: ${resolvedPath})`);
+          });
+        }
+        
         console.log('');
-        console.log('💡 Tips:');
-        console.log('   • Check file paths and ensure files exist');
-        console.log('   • Use relative paths like ./document.pdf or ../files/doc.pdf');
-        console.log('   • Use absolute paths like /full/path/to/document.pdf');
+        console.log('💡 Tips for file path issues:');
+        console.log('   • Relative paths: ./document.pdf, ../files/doc.pdf');
+        console.log('   • Absolute paths: /full/path/to/document.pdf');
+        console.log('   • Check file exists and has read permissions');
+        console.log('   • Ensure paths don\'t contain special characters');
         process.exit(1);
       }
 
