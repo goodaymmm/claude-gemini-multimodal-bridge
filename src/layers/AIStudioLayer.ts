@@ -1076,28 +1076,20 @@ export class AIStudioLayer implements LayerInterface {
 
   /**
    * Check if we can use direct API call instead of MCP
+   * REMOVED: Enforcing MCP-only architecture for consistency
    */
   private canUseDirectAPI(params: any): boolean {
-    // Use direct API for simple text processing without files
-    return !params.files || params.files.length === 0;
+    // Always use MCP server to enforce architectural consistency
+    return false;
   }
 
   /**
    * Execute direct API call for simple operations
+   * DEPRECATED: Direct API bypass removed to enforce MCP-only architecture
    */
   private async executeDirectAPI(command: string, params: any): Promise<any> {
-    if (command === 'multimodal_process') {
-      logger.debug('Using direct API for simple text processing');
-      
-      // Simple text processing without MCP overhead
-      return {
-        content: `Processed: ${params.instructions || params.prompt}`,
-        processing_time: Date.now(),
-        method: 'direct_api',
-      };
-    }
-    
-    throw new Error(`Direct API not supported for command: ${command}`);
+    // Direct API bypass removed to enforce architectural consistency
+    throw new Error(`Direct API integration disabled. All operations must use MCP server for architectural consistency. Command: ${command}`);
   }
 
   /**

@@ -332,11 +332,11 @@ export class GeminiCLILayer implements LayerInterface {
         
         // Early quota error detection
         if (chunk.includes('429') || chunk.includes('quota') || chunk.includes('Quota exceeded')) {
-          logger.warn('Quota limit detected in Gemini CLI', { 
+          logger.warn('Quota limit detected in Gemini CLI service', { 
             error: chunk.substring(0, 200) 
           });
           child.kill();
-          reject(new Error(`Gemini API quota exceeded. Please wait or try a different model. Details: ${chunk.substring(0, 300)}`));
+          reject(new Error(`Gemini CLI quota exceeded (different from Gemini API quota). This is a Gemini CLI service limitation. Please wait or try using AI Studio layer instead. Details: ${chunk.substring(0, 300)}`));
           return;
         }
       });

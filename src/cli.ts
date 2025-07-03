@@ -13,6 +13,7 @@ import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
 import { LayerManager } from './core/LayerManager.js';
 import { Logger } from './utils/logger.js';
+import { TimeoutManager, withCLITimeout } from './utils/TimeoutManager.js';
 
 // ===================================
 // Helper Functions for CLI Commands
@@ -1097,6 +1098,13 @@ program
         logger.info('🔧 Fix authentication:');
         logger.info('   • OAuth (recommended): gemini auth');
         logger.info('   • Check status: cgmb auth-status');
+      } else if (errorMessage.includes('quota exceeded') || errorMessage.includes('Quota exceeded') || errorMessage.includes('Resource exhausted')) {
+        logger.error('❌ Gemini CLI Service Quota Exceeded', error as Error);
+        logger.info('🔧 This is a Gemini CLI service limitation (separate from Gemini API):');
+        logger.info('   • Wait a few minutes for quota reset');
+        logger.info('   • Try AI Studio layer: cgmb aistudio -p "your question"');
+        logger.info('   • Check AI Studio quota: cgmb quota-status');
+        logger.info('   💡 Note: Gemini CLI quota ≠ Gemini API quota (different services)');
       } else if (errorMessage.includes('not found') || errorMessage.includes('command not found')) {
         logger.error('❌ Gemini CLI Not Found', error as Error);
         logger.info('🔧 Install Gemini CLI:');
@@ -1324,6 +1332,28 @@ program
       await aiStudioLayer.initialize();
       
       const files = options.files || [];
+      
+      // Enforce multimodal architecture: AI Studio requires files
+      if (files.length === 0) {
+        console.log('\n❌ ERROR: AI Studio layer requires multimodal content (files)');
+        console.log('');
+        console.log('📋 AI Studio is designed for multimodal processing with files.');
+        console.log('   For text-only queries, use the appropriate layer:');
+        console.log('');
+        console.log('✅ For web search & current information:');
+        console.log(`   cgmb chat "${options.prompt}"`);
+        console.log(`   cgmb gemini -p "${options.prompt}"`);
+        console.log('');
+        console.log('✅ For complex reasoning & analysis:');
+        console.log(`   cgmb process -p "${options.prompt}"`);
+        console.log('');
+        console.log('✅ For AI Studio with files:');
+        console.log(`   cgmb aistudio -p "${options.prompt}" -f file1.pdf file2.jpg`);
+        console.log('');
+        console.log('💡 This enforces CGMB\'s architectural separation of concerns.');
+        process.exit(1);
+      }
+      
       logger.info(`Processing ${files.length} files with AI Studio`);
       
       const result = await aiStudioLayer.execute({
@@ -1437,8 +1467,6 @@ program
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
     
-    let timeoutId: NodeJS.Timeout | undefined;
-    
     try {
       // Reset logger to quiet mode for CLI commands to avoid Error: display in Bash tool
       Logger.resetForCLI();
@@ -1473,30 +1501,16 @@ program
       const aiStudioLayer = new LayerManager(defaultConfig).getAIStudioLayer();
       await aiStudioLayer.initialize();
       
-      // Execute with immediate response on completion (GeminiCLI pattern)
-      const generatePromise = aiStudioLayer.generateImage(safePrompt, {
-        style: options.style,
-        quality: 'high',
-        aspectRatio: '1:1'
-      });
-      
-      // Set timeout but allow immediate resolution on success
-      timeoutId = setTimeout(() => {
-        console.error('⚠️ Image generation is taking longer than expected (3 minutes)...');
-        console.log('💡 This might be due to API quota limits or network issues.');
-      }, 180000); // 3 minutes warning, not rejection
-      
-      const result = await generatePromise;
-      
-      // Clear timeout immediately on success
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
-      // Clear timeout immediately upon completion
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      // Execute with unified timeout management for consistent behavior
+      const result = await withCLITimeout(
+        () => aiStudioLayer.generateImage(safePrompt, {
+          style: options.style,
+          quality: 'high',
+          aspectRatio: '1:1'
+        }),
+        'generate-image',
+        120000 // 2 minutes base, automatically adjusted for environment
+      );
       
       if (result.success && result.outputPath) {
         if (options.output) {
@@ -1518,17 +1532,15 @@ program
         }
       }
     } catch (error) {
-      // Clear timeout on error
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
       logger.error('Image generation failed', error as Error);
       console.error('❌ Failed to generate image:', (error as Error).message);
       console.log('\n💡 Troubleshooting tips:');
       console.log('   1. Check your AI Studio API key: cgmb auth-status');
       console.log('   2. Try a simpler prompt');
       console.log('   3. Use --safe-mode flag (enabled by default)');
+      if ((error as Error).message.includes('timed out')) {
+        console.log('   4. If timeout occurred in fresh installation, this is normal for first run');
+      }
       process.exit(1);
     }
   });
@@ -1543,8 +1555,6 @@ program
   .action(async (text, options) => {
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
-    
-    let timeoutId: NodeJS.Timeout | undefined;
     
     try {
       // Set quiet log level for CLI commands to avoid Error: display in Bash tool  
@@ -1566,32 +1576,18 @@ program
       await aiStudioLayer.initialize();
       
       // Execute with immediate response timeout mechanism
-      // Execute with immediate response on completion (GeminiCLI pattern)
-      const generatePromise = options.script ? 
-        aiStudioLayer.generateAudioWithScript(text) :
-        aiStudioLayer.generateAudio(text, {
-          voice: options.voice,
-          format: 'wav',
-          quality: 'hd'
-        });
-      
-      // Set timeout but allow immediate resolution on success
-      timeoutId = setTimeout(() => {
-        console.error('⚠️ Audio generation is taking longer than expected (2 minutes)...');
-        console.log('💡 This might be due to API quota limits or network issues.');
-      }, 120000); // 2 minutes warning, not rejection
-      
-      const result = await generatePromise;
-      
-      // Clear timeout immediately on success
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
-      // Clear timeout immediately upon completion
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      // Execute with unified timeout management for consistent behavior
+      const result = await withCLITimeout(
+        () => options.script ? 
+          aiStudioLayer.generateAudioWithScript(text) :
+          aiStudioLayer.generateAudio(text, {
+            voice: options.voice,
+            format: 'wav',
+            quality: 'hd'
+          }),
+        'generate-audio',
+        90000 // 1.5 minutes base, automatically adjusted for environment
+      );
       
       if (result.success && result.outputPath) {
         if (options.output) {
@@ -1609,13 +1605,12 @@ program
         console.error('❌ Audio generation failed:', result.error || 'Unknown error');
       }
     } catch (error) {
-      // Clear timeout on error
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
       logger.error('Audio generation failed', error as Error);
       console.error('❌ Failed to generate audio:', (error as Error).message);
+      if ((error as Error).message.includes('timed out')) {
+        console.log('💡 If timeout occurred in fresh installation, this is normal for first run');
+        console.log('    MCP server startup may take longer initially');
+      }
       process.exit(1);
     }
   });
@@ -1629,8 +1624,6 @@ program
   .action(async (files, options) => {
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
-    
-    let timeoutId: NodeJS.Timeout | undefined;
     
     try {
       // Reset logger to quiet mode for CLI commands to avoid Error: display in Bash tool
@@ -1653,33 +1646,19 @@ program
       const analysisPrompt = options.prompt || `Please ${options.type} these documents`;
       
       // Execute with immediate response timeout mechanism
-      // Execute with immediate response on completion (GeminiCLI pattern)
-      const analysisPromise = layerManager.executeWithOptimalLayer({
-        prompt: analysisPrompt,
-        files: files.map((f: string) => ({ path: f, type: 'document' as const })),
-        options: {
-          analysisType: options.type,
-          depth: 'deep'
-        }
-      });
-      
-      // Set timeout but allow immediate resolution on success
-      timeoutId = setTimeout(() => {
-        console.error('⚠️ Document analysis is taking longer than expected (5 minutes)...');
-        console.log('💡 This might be due to large files or API quota limits.');
-      }, 300000); // 5 minutes warning, not rejection
-      
-      const result = await analysisPromise;
-      
-      // Clear timeout immediately on success
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
-      // Clear timeout immediately upon completion
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      // Execute with unified timeout management for consistent behavior
+      const result = await withCLITimeout(
+        () => layerManager.executeWithOptimalLayer({
+          prompt: analysisPrompt,
+          files: files.map((f: string) => ({ path: f, type: 'document' as const })),
+          options: {
+            analysisType: options.type,
+            depth: 'deep'
+          }
+        }),
+        'analyze-documents',
+        240000 // 4 minutes base, automatically adjusted for environment and file count
+      );
       
       if (result.success) {
         console.log('\n✅ Analysis complete!');
@@ -1696,13 +1675,12 @@ program
         console.error('❌ Analysis failed:', result.error || 'Unknown error');
       }
     } catch (error) {
-      // Clear timeout on error
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
       logger.error('Document analysis failed', error as Error);
       console.error('❌ Failed to analyze documents:', (error as Error).message);
+      if ((error as Error).message.includes('timed out')) {
+        console.log('💡 Large files may require more time in fresh installations');
+        console.log('    Consider breaking large documents into smaller parts');
+      }
       process.exit(1);
     }
   });
