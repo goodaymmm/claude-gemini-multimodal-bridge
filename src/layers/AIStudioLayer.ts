@@ -568,314 +568,150 @@ export class AIStudioLayer implements LayerInterface {
    * Generate image using AI Studio with Gemini 2.0 Flash for cost efficiency
    */
   async generateImage(prompt: string, options: Partial<ImageGenOptions> = {}): Promise<MediaGenResult> {
-    return retry(
-      async () => {
-        logger.info('Generating image with Gemini 2.0 Flash', {
-          promptLength: prompt.length,
+    logger.info('Generating image using MCP command (unified timeout pattern)', {
+      promptLength: prompt.length,
+      model: AI_MODELS.IMAGE_GENERATION,
+      quality: options.quality || 'standard'
+    });
+
+    const startTime = Date.now();
+    let processedPrompt = prompt;
+    
+    // Auto-detect language and translate if needed (only for image generation per user specification)
+    const detectedLang = detectLanguage(prompt);
+    if (detectedLang && detectedLang !== 'en') {
+      const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
+      logger.info(`Non-English prompt detected (${languageName}), translating to English...`, {
+        originalPrompt: prompt,
+        detectedLanguage: detectedLang
+      });
+
+      processedPrompt = await this.translatePromptToEnglish(prompt, detectedLang);
+      
+      logger.info('Prompt translation completed', {
+        originalPrompt: prompt,
+        translatedPrompt: processedPrompt,
+        language: `${languageName} → English`
+      });
+    }
+    
+    try {
+      // Use MCP command (matches working timeout pattern from image/PDF analysis)
+      const mcpResult = await this.executeMCPCommand('generate_image', {
+        prompt: processedPrompt,
+        numberOfImages: options.numberOfImages || 1,
+        aspectRatio: options.aspectRatio || '1:1',
+        personGeneration: options.personGeneration || 'ALLOW',
+        model: AI_MODELS.IMAGE_GENERATION
+      });
+
+      const duration = Date.now() - startTime;
+
+      // Extract data from MCP response
+      const outputPath = mcpResult.file?.path || '';
+      const fileSize = mcpResult.file?.size || 0;
+      const imageData = mcpResult.imageData || null;
+
+      return {
+        success: true,
+        generationType: 'image' as GenerationType,
+        outputPath,
+        originalPrompt: prompt,
+        metadata: {
+          duration,
+          fileSize,
+          format: 'png',
+          dimensions: {
+            width: options.width || 1024,
+            height: options.height || 1024,
+          },
           model: AI_MODELS.IMAGE_GENERATION,
-          quality: options.quality || 'standard'
-        });
-
-        const startTime = Date.now();
-        let processedPrompt = prompt;
-        
-        // Auto-detect language and translate if needed
-        const detectedLang = detectLanguage(prompt);
-        if (detectedLang && detectedLang !== 'en') {
-          const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
-          logger.info(`Non-English prompt detected (${languageName}), translating to English...`, {
-            originalPrompt: prompt,
-            detectedLanguage: detectedLang
-          });
-
-          processedPrompt = await this.translatePromptToEnglish(prompt, detectedLang);
-          
-          logger.info('Prompt translation completed', {
+          settings: options,
+          cost: this.calculateGenerationCost('image', options),
+          responseText: mcpResult.metadata?.responseText || '',
+          translation: detectedLang !== 'en' ? {
+            detectedLanguage: detectedLang,
+            languageName: SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang,
             originalPrompt: prompt,
             translatedPrompt: processedPrompt,
-            language: `${languageName} → English`
-          });
-        }
-        
-        // Sanitize the prompt to replace problematic words
-        let sanitizedPrompt = sanitizePrompt(processedPrompt);
-        logger.debug('Prompt sanitization', { 
-          original: processedPrompt, 
-          sanitized: sanitizedPrompt,
-          changed: processedPrompt !== sanitizedPrompt
-        });
-        
-        // Add safety prefix to prompt if needed
-        let safePrompt = sanitizedPrompt;
-        const safetyPrefixes = [
-          'educational illustration of',
-          'reference image showing',
-          'technical visualization of',
-          'professional photograph of',
-          'scientific diagram of',
-          'instructional image depicting',
-          'documentary-style image of'
-        ];
-        
-        const hasPrefix = safetyPrefixes.some(prefix => 
-          sanitizedPrompt.toLowerCase().startsWith(prefix)
-        );
-        
-        if (!hasPrefix) {
-          const prefix = safetyPrefixes[Math.floor(Math.random() * safetyPrefixes.length)];
-          safePrompt = `${prefix} ${sanitizedPrompt}`;
-          logger.info('Added safety prefix to prompt', { 
-            original: sanitizedPrompt, 
-            safe: safePrompt 
-          });
-        }
-        
-        // Direct Google AI Studio image generation API call
-        if (!this.genAI) {
-          throw new Error('Google AI Studio API client not initialized. Please set AI_STUDIO_API_KEY environment variable.');
-        }
-        
-        const response = await this.genAI.models.generateContent({
-          model: AI_MODELS.IMAGE_GENERATION,
-          contents: [{ parts: [{ text: safePrompt }] }],
-          config: {
-            responseModalities: [Modality.TEXT, Modality.IMAGE],
-          },
-        });
-
-        let imageData = null;
-        let textContent = '';
-        
-        // Extract image data from response according to official docs
-        if (response.candidates?.[0]?.content?.parts) {
-          for (const part of response.candidates[0].content.parts) {
-            if (part.text) {
-              textContent = part.text;
-            } else if (part.inlineData) {
-              imageData = part.inlineData.data;
-            }
+            wasTranslated: true
+          } : {
+            detectedLanguage: 'en',
+            languageName: 'English',
+            wasTranslated: false
           }
-        }
-
-        if (!imageData) {
-          throw new Error('Image generation completed but no image data received from API');
-        }
-
-        // Save the generated image
-        const outputDir = path.join(process.cwd(), 'output', 'images');
-        await fsPromises.mkdir(outputDir, { recursive: true });
-        
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const filename = `generated-image-${timestamp}.png`;
-        const savedFilePath = path.join('output', 'images', filename);
-        const absolutePath = path.join(outputDir, filename);
-        
-        const buffer = Buffer.from(imageData, 'base64');
-        await fsPromises.writeFile(absolutePath, buffer);
-        const fileSize = buffer.length;
-        
-        logger.info('Saved generated image', {
-          outputPath: absolutePath,
-          size: fileSize
-        });
-
-        const duration = Date.now() - startTime;
-
-        return {
-          success: true,
-          generationType: 'image' as GenerationType,
-          outputPath: savedFilePath,
-          originalPrompt: prompt,
+        },
+        media: {
+          type: 'image',
+          data: imageData,
           metadata: {
-            duration,
-            fileSize,
             format: 'png',
-            dimensions: {
-              width: options.width || 1024,
-              height: options.height || 1024,
-            },
-            model: AI_MODELS.IMAGE_GENERATION,
-            settings: options,
-            cost: this.calculateGenerationCost('image', options),
-            responseText: textContent,
-            translation: detectedLang !== 'en' ? {
-              detectedLanguage: detectedLang,
-              languageName: SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang,
-              originalPrompt: prompt,
-              translatedPrompt: processedPrompt,
-              wasTranslated: true
-            } : {
-              detectedLanguage: 'en',
-              languageName: 'English',
-              wasTranslated: false
-            }
-          },
-          media: {
-            type: 'image',
-            data: imageData,
-            metadata: {
-              format: 'png',
-              dimensions: `${options.width || 1024}x${options.height || 1024}`
-            }
+            dimensions: `${options.width || 1024}x${options.height || 1024}`
           }
-        };
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 5000,
-        operationName: 'generate-image'
-      }
-    );
+        }
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Image generation failed: ${errorMessage}`);
+    }
   }
 
 
   /**
-   * Generate audio using AI Studio
+   * Generate audio using AI Studio MCP command (unified timeout pattern)
    */
   async generateAudio(text: string, options: Partial<AudioGenOptions> = {}): Promise<MediaGenResult> {
-    return retry(
-      async () => {
-        logger.info('Generating audio with Gemini TTS (direct API)', {
-          textLength: text.length,
-          voice: options.voice || 'Kore',
-          format: options.format || 'mp3',
-          model: AI_MODELS.AUDIO_GENERATION
-        });
+    logger.info('Generating audio using MCP command (unified timeout pattern)', {
+      textLength: text.length,
+      voice: options.voice || 'Kore',
+      format: 'wav',
+      model: AI_MODELS.AUDIO_GENERATION
+    });
 
-        const startTime = Date.now();
-        
-        // Ensure genAI client is available
-        if (!this.genAI) {
-          throw new Error('Google AI Studio API client not initialized. Please set AI_STUDIO_API_KEY environment variable.');
-        }
-        
-        // Direct Google AI Studio TTS API call (official documentation compliant)
-        try {
-          const response = await this.genAI.models.generateContent({
-            model: AI_MODELS.AUDIO_GENERATION,
-            contents: [{ parts: [{ text }] }],
-            config: {
-              responseModalities: ['AUDIO'],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: { voiceName: options.voice || 'Kore' }
-                }
-              }
-            },
-          });
+    const startTime = Date.now();
+    
+    try {
+      // Use MCP command (matches working timeout pattern from image/PDF analysis)
+      const mcpResult = await this.executeMCPCommand('generate_audio', {
+        text,
+        voice: options.voice || 'Kore',
+        model: AI_MODELS.AUDIO_GENERATION
+      });
 
-          // Extract audio data from response (official documentation format)
-          const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      const duration = Date.now() - startTime;
 
-          // Save the generated audio if we have data
-          if (!audioData) {
-            throw new Error('Audio generation failed: No audio data received from API');
+      // Extract data from MCP response
+      const outputPath = mcpResult.file?.path || '';
+      const fileSize = mcpResult.file?.size || 0;
+      const audioData = mcpResult.audioData || null;
+
+      return {
+        success: true,
+        generationType: 'audio' as GenerationType,
+        outputPath,
+        originalPrompt: text,
+        metadata: {
+          duration,
+          fileSize,
+          format: 'wav',
+          model: AI_MODELS.AUDIO_GENERATION,
+          settings: options,
+          cost: this.calculateGenerationCost('audio', options),
+          voice: options.voice || 'Kore'
+        },
+        media: {
+          type: 'audio',
+          data: audioData,
+          metadata: {
+            format: 'wav',
+            voice: options.voice || 'Kore'
           }
-
-          const outputDir = path.join(process.cwd(), 'output', 'audio');
-          await fsPromises.mkdir(outputDir, { recursive: true });
-          
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const format = 'wav'; // Google TTS returns WAV format
-          const filename = `generated-audio-${timestamp}.${format}`;
-          const relativePath = path.join('output', 'audio', filename);
-          const absolutePath = path.join(outputDir, filename);
-          
-          // Create proper WAV file with headers using wavefile library
-          const rawAudioBuffer = Buffer.from(audioData, 'base64');
-          
-          logger.debug('Processing raw audio data for WAV conversion', {
-            rawDataSize: rawAudioBuffer.length,
-            first16Bytes: Array.from(rawAudioBuffer.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')
-          });
-          
-          let wavBuffer: Buffer;
-          
-          try {
-            // Create WAV file with proper headers
-            // Gemini TTS outputs LINEAR16 PCM at 24kHz, mono audio
-            const wav = new WaveFile();
-            
-            // Use the correct method for LINEAR16 PCM data
-            // fromScratch expects: channels, sampleRate, bitDepthString, samples
-            wav.fromScratch(1, 24000, '16', rawAudioBuffer);
-            
-            // Get complete WAV file buffer with headers
-            const wavData = wav.toBuffer();
-            wavBuffer = Buffer.from(wavData);
-            
-            // Additional validation - check WAV header
-            const riffHeader = wavBuffer.toString('ascii', 0, 4);
-            const waveHeader = wavBuffer.toString('ascii', 8, 12);
-            
-            if (riffHeader !== 'RIFF' || waveHeader !== 'WAVE') {
-              throw new Error(`Invalid WAV header: RIFF=${riffHeader}, WAVE=${waveHeader}`);
-            }
-            
-            logger.info('Generated valid WAV file with proper headers', {
-              riffHeader,
-              waveHeader,
-              originalDataSize: rawAudioBuffer.length,
-              finalWavSize: wavBuffer.length,
-              sampleRate: 24000,
-              bitDepth: 16,
-              channels: 1,
-              estimatedDuration: `${(rawAudioBuffer.length / (24000 * 2)).toFixed(2)}s`
-            });
-            
-          } catch (wavError) {
-            logger.error('WAV file creation with WaveFile library failed, using manual header', {
-              error: (wavError as Error).message,
-              rawDataSize: rawAudioBuffer.length
-            });
-            
-            // Fallback: save raw data with a basic WAV header manually
-            wavBuffer = this.createManualWavHeader(rawAudioBuffer, 24000, 16, 1);
-            
-            logger.warn('Used manual WAV header as fallback', {
-              finalWavSize: wavBuffer.length
-            });
-          }
-          
-          await fsPromises.writeFile(absolutePath, wavBuffer);
-          const fileSize = wavBuffer.length;
-          
-          logger.info('WAV file written to disk', {
-            outputPath: absolutePath,
-            size: fileSize,
-            originalDataSize: rawAudioBuffer.length
-          });
-          const outputPath = relativePath;
-
-          const duration = Date.now() - startTime;
-
-          return {
-            success: true,
-            generationType: 'audio' as GenerationType,
-            outputPath,
-            originalPrompt: text,
-            metadata: {
-              duration,
-              fileSize,
-              format: 'wav',
-              model: AI_MODELS.AUDIO_GENERATION,
-              settings: options,
-              cost: this.calculateGenerationCost('audio', options),
-              voice: options.voice || 'Kore'
-            },
-            downloadUrl: undefined,
-          };
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          throw new Error(`Audio generation failed: ${errorMessage}`);
         }
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 5000,
-        operationName: 'generate-audio',
-      }
-    );
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Audio generation failed: ${errorMessage}`);
+    }
   }
 
   /**
@@ -1414,12 +1250,12 @@ export class AIStudioLayer implements LayerInterface {
             try {
               const mcpResponse = JSON.parse(line);
               if (mcpResponse.result || mcpResponse.error) {
-                cleanup();
+                cleanup(); // 即座にクリーンアップとタイムアウトクリア
                 
                 if (mcpResponse.error) {
                   reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
                 } else {
-                  resolve(mcpResponse.result);
+                  resolve(mcpResponse.result); // 即座にresolve（タイムアウト問題の修正）
                 }
                 return;
               }
@@ -1528,7 +1364,7 @@ export class AIStudioLayer implements LayerInterface {
       });
 
       child.on('close', (code) => {
-        clearTimeout(timeoutId);
+        clearTimeout(timeoutId); // 即座にタイムアウトをクリア（GeminiCLIパターン適用）
         
         if (code === 0) {
           try {
@@ -1554,7 +1390,7 @@ export class AIStudioLayer implements LayerInterface {
               outputLength: output.length,
               code,
             });
-            resolve(result);
+            resolve(result); // 即座にresolve（タイムアウト問題の修正）
           } catch (parseError) {
             // If JSON parsing fails, return raw output
             resolve({ content: output.trim() });
@@ -1567,7 +1403,7 @@ export class AIStudioLayer implements LayerInterface {
       });
 
       child.on('error', (error) => {
-        clearTimeout(timeoutId);
+        clearTimeout(timeoutId); // エラー時も即座にクリア
         logger.error('MCP command process error', { command, error: error.message });
         reject(error);
       });
@@ -2012,8 +1848,10 @@ export class AIStudioLayer implements LayerInterface {
       });
       
       try {
-        // Create WAV file with proper headers using WaveFile library
+        // Create WAV file with proper headers using WaveFile library (google_docs.md specification)
         const wav = new WaveFile();
+        
+        // fromScratch expects: channels, sampleRate, bitDepth, raw audio buffer
         wav.fromScratch(1, 24000, '16', rawAudioBuffer);
         const wavData = wav.toBuffer();
         finalBuffer = Buffer.from(wavData);

@@ -193,24 +193,39 @@ export class DocumentAnalysis {
       
       const buffer = await fs.readFile(pdfPath);
       const data = await pdfParse(buffer, {
-        // PDF parsing options for better text extraction
+        // PDF parsing options optimized for Japanese content
         max: 0, // Process all pages
+        version: 'v1.10.100', // Use specific version for compatibility
         pagerender: (pageData: any) => {
-          // Custom page rendering to preserve structure
+          // Enhanced page rendering for Japanese text and better structure
           let renderOptions = {
             normalizeWhitespace: false,
-            disableCombineTextItems: false
+            disableCombineTextItems: false,
+            includeMarkedContent: true, // Include tagged content for better structure
+            textFilter: undefined // No text filtering to preserve all content
           };
           return pageData.getTextContent(renderOptions)
             .then((textContent: any) => {
               let lastY, text = '';
+              let lineSpacing = 0;
+              
               for (let item of textContent.items) {
-                if (lastY == item.transform[5] || !lastY) {
-                  text += item.str;
-                } else {
+                // Improved line break detection for Japanese text
+                if (lastY && Math.abs(lastY - item.transform[5]) > lineSpacing) {
+                  // Add line break for significant Y position changes
                   text += '\n' + item.str;
+                } else {
+                  // Add space for horizontal text flow (but not for Japanese characters)
+                  const needsSpace = lastY && lastY === item.transform[5] && 
+                    !/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(item.str) &&
+                    !/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(text.slice(-1));
+                  text += (needsSpace ? ' ' : '') + item.str;
                 }
                 lastY = item.transform[5];
+                // Update line spacing based on font size if available
+                if (item.height) {
+                  lineSpacing = Math.max(lineSpacing, item.height * 0.3);
+                }
               }
               return text;
             });
@@ -219,16 +234,79 @@ export class DocumentAnalysis {
 
       const extractedText = data.text.trim();
       
+      // Enhanced debugging and diagnostic information
+      logger.debug('PDF parsing details', {
+        pdfPath,
+        pageCount: data.numpages,
+        hasMetadata: !!data.metadata,
+        metadataKeys: data.metadata ? Object.keys(data.metadata) : [],
+        textLength: data.text.length,
+        extractedSample: data.text.substring(0, 200),
+        hasInfo: !!data.info,
+        infoKeys: data.info ? Object.keys(data.info) : [],
+        version: data.version || 'unknown'
+      });
+      
       logger.info('PDF text extraction completed', {
         pdfPath,
         textLength: extractedText.length,
         pageCount: data.numpages,
-        hasText: extractedText.length > 0
+        hasText: extractedText.length > 0,
+        textPreview: extractedText.substring(0, 100) + (extractedText.length > 100 ? '...' : '')
       });
 
-      if (extractedText.length === 0) {
-        logger.warn('No text extracted from PDF, may be image-based or encrypted', { pdfPath });
-        return `[PDF Document: ${path.basename(pdfPath)}]\nNo text content could be extracted. This may be an image-based PDF or contain special formatting that requires OCR processing.`;
+      // Check if extracted text is too short or likely incomplete
+      const isTextExtractionPoor = extractedText.length < 100 || 
+        (extractedText.length < data.numpages * 50); // Less than 50 chars per page average
+      
+      if (extractedText.length === 0 || isTextExtractionPoor) {
+        logger.warn('Poor text extraction from PDF, attempting AI Studio OCR fallback', { 
+          pdfPath, 
+          textLength: extractedText.length,
+          expectedMinLength: data.numpages * 50
+        });
+        
+        // Try AI Studio OCR as fallback
+        try {
+          await this.aiStudioLayer.initialize();
+          const ocrResult = await this.aiStudioLayer.execute({
+            action: 'multimodal_processing',
+            files: [{ 
+              path: pdfPath, 
+              type: 'document',
+              encoding: 'binary'
+            }],
+            instructions: 'Extract all text content from this PDF document. Preserve the structure and formatting as much as possible. Focus on extracting the actual readable text content.',
+          });
+          
+          if (ocrResult.success && ocrResult.data) {
+            const ocrText = typeof ocrResult.data === 'string' ? ocrResult.data : 
+              (ocrResult.data.content && typeof ocrResult.data.content === 'string') ? ocrResult.data.content :
+              JSON.stringify(ocrResult.data);
+            
+            logger.info('AI Studio OCR fallback successful', {
+              pdfPath,
+              originalTextLength: extractedText.length,
+              ocrTextLength: ocrText.length,
+              improvement: ocrText.length > extractedText.length
+            });
+            
+            // Use OCR result if it's significantly better
+            if (ocrText.length > extractedText.length * 2) {
+              const metadata = `[PDF Document: ${path.basename(pdfPath)} - ${data.numpages} pages - Processed with AI OCR]\n\n`;
+              return metadata + ocrText.trim();
+            }
+          }
+        } catch (ocrError) {
+          logger.warn('AI Studio OCR fallback failed', {
+            pdfPath,
+            error: ocrError instanceof Error ? ocrError.message : String(ocrError)
+          });
+        }
+        
+        if (extractedText.length === 0) {
+          return `[PDF Document: ${path.basename(pdfPath)}]\nNo text content could be extracted. This may be an image-based PDF or contain special formatting that requires OCR processing.`;
+        }
       }
 
       // Add metadata header

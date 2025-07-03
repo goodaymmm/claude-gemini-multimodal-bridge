@@ -23,6 +23,7 @@ import * as path from 'path';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
 import { AI_MODELS } from '../core/types.js';
+import { WaveFile } from 'wavefile';
 
 // Input validation schemas
 const GenerateImageSchema = z.object({
@@ -61,6 +62,12 @@ const ListGeneratedFilesSchema = z.object({
 
 const GetFileInfoSchema = z.object({
   filePath: z.string()
+});
+
+const GenerateAudioSchema = z.object({
+  text: z.string().min(1).max(5000), // Reasonable text limit for TTS
+  voice: z.enum(['Kore', 'Puck']).optional().default('Kore'),
+  model: z.string().optional()
 });
 
 // Problematic words to safe alternatives mapping
@@ -303,6 +310,32 @@ class AIStudioMCPServer {
               },
               required: ['filePath']
             }
+          },
+          {
+            name: 'generate_audio',
+            description: 'Generate high-quality audio using Google AI Studio\'s Gemini 2.5 Flash TTS model. Produces clear, natural-sounding speech with multiple voice options. All audio is generated in WAV format with proper headers for universal compatibility.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                text: {
+                  type: 'string',
+                  description: 'Text to convert to speech (max 5000 characters)',
+                  maxLength: 5000
+                },
+                voice: {
+                  type: 'string',
+                  enum: ['Kore', 'Puck'],
+                  description: 'Voice to use for audio generation',
+                  default: 'Kore'
+                },
+                model: {
+                  type: 'string',
+                  description: 'AI Studio model to use for generation',
+                  default: AI_MODELS.AUDIO_GENERATION
+                }
+              },
+              required: ['text']
+            }
           }
         ]
       };
@@ -328,6 +361,8 @@ class AIStudioMCPServer {
             return await this.listGeneratedFiles(args);
           case 'get_file_info':
             return await this.getFileInfo(args);
+          case 'generate_audio':
+            return await this.generateAudio(args);
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
@@ -930,6 +965,95 @@ To retrieve this file, use:
       throw new McpError(
         ErrorCode.InternalError,
         `Failed to get file info: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private async generateAudio(args: any) {
+    const params = GenerateAudioSchema.parse(args);
+    
+    try {
+      // Generate audio with official API approach
+      const response = await this.genAI.models.generateContent({
+        model: params.model || AI_MODELS.AUDIO_GENERATION,
+        contents: [{ parts: [{ text: params.text }] }],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: params.voice || 'Kore' }
+            }
+          }
+        },
+      });
+
+      // Extract audio data from response
+      const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+      if (!audioData) {
+        throw new Error('Audio generation failed: No audio data received from API');
+      }
+
+      // Save the generated audio
+      const outputDir = path.join(process.cwd(), 'output', 'audio');
+      await fsPromises.mkdir(outputDir, { recursive: true });
+      
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `generated-audio-${timestamp}.wav`;
+      const savedFilePath = path.join('output', 'audio', filename);
+      const absolutePath = path.join(outputDir, filename);
+      
+      // Create proper WAV file with headers using WaveFile library
+      const rawAudioBuffer = Buffer.from(audioData, 'base64');
+      
+      // Create WAV file with proper headers per google_docs.md specification
+      const wav = new WaveFile();
+      wav.fromScratch(1, 24000, '16', rawAudioBuffer);
+      
+      // Get complete WAV file buffer with headers
+      const wavBuffer = wav.toBuffer();
+      
+      // Write to disk
+      await fsPromises.writeFile(absolutePath, wavBuffer);
+      const fileSize = wavBuffer.length;
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `✅ Successfully generated audio using Gemini 2.5 Flash TTS
+
+📁 File saved to: ${savedFilePath}
+📏 Size: ${(fileSize / 1024).toFixed(2)} KB
+🎤 Voice: ${params.voice}
+📝 Original text: ${params.text.substring(0, 100)}${params.text.length > 100 ? '...' : ''}
+
+To retrieve this file, use:
+- Tool: get_generated_file
+- Parameter: {"filePath": "${savedFilePath}"}`
+          }
+        ],
+        audioData,
+        file: {
+          path: savedFilePath,
+          absolutePath: path.resolve(savedFilePath),
+          size: fileSize,
+          format: 'wav',
+          createdAt: new Date().toISOString()
+        },
+        metadata: {
+          model: params.model || AI_MODELS.AUDIO_GENERATION,
+          voice: params.voice,
+          textLength: params.text.length,
+          originalText: params.text
+        }
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Audio generation failed: ${errorMessage}`
       );
     }
   }
