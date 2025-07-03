@@ -1466,19 +1466,25 @@ program
       const aiStudioLayer = new LayerManager(defaultConfig).getAIStudioLayer();
       await aiStudioLayer.initialize();
       
-      // Execute with immediate response timeout mechanism
-      const result = await Promise.race([
-        aiStudioLayer.generateImage(safePrompt, {
-          style: options.style,
-          quality: 'high',
-          aspectRatio: '1:1'
-        }),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new Error('Image generation timeout after 3 minutes'));
-          }, 180000); // 3 minutes timeout
-        })
-      ]) as any;
+      // Execute with immediate response on completion (GeminiCLI pattern)
+      const generatePromise = aiStudioLayer.generateImage(safePrompt, {
+        style: options.style,
+        quality: 'high',
+        aspectRatio: '1:1'
+      });
+      
+      // Set timeout but allow immediate resolution on success
+      timeoutId = setTimeout(() => {
+        console.error('⚠️ Image generation is taking longer than expected (3 minutes)...');
+        console.log('💡 This might be due to API quota limits or network issues.');
+      }, 180000); // 3 minutes warning, not rejection
+      
+      const result = await generatePromise;
+      
+      // Clear timeout immediately on success
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       
       // Clear timeout immediately upon completion
       if (timeoutId) {
@@ -1547,20 +1553,27 @@ program
       await aiStudioLayer.initialize();
       
       // Execute with immediate response timeout mechanism
-      const result = await Promise.race([
-        options.script ? 
-          aiStudioLayer.generateAudioWithScript(text) :
-          aiStudioLayer.generateAudio(text, {
-            voice: options.voice,
-            format: 'wav',
-            quality: 'hd'
-          }),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new Error('Audio generation timeout after 2 minutes'));
-          }, 120000); // 2 minutes timeout
-        })
-      ]) as any;
+      // Execute with immediate response on completion (GeminiCLI pattern)
+      const generatePromise = options.script ? 
+        aiStudioLayer.generateAudioWithScript(text) :
+        aiStudioLayer.generateAudio(text, {
+          voice: options.voice,
+          format: 'wav',
+          quality: 'hd'
+        });
+      
+      // Set timeout but allow immediate resolution on success
+      timeoutId = setTimeout(() => {
+        console.error('⚠️ Audio generation is taking longer than expected (2 minutes)...');
+        console.log('💡 This might be due to API quota limits or network issues.');
+      }, 120000); // 2 minutes warning, not rejection
+      
+      const result = await generatePromise;
+      
+      // Clear timeout immediately on success
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       
       // Clear timeout immediately upon completion
       if (timeoutId) {
@@ -1621,21 +1634,28 @@ program
       const analysisPrompt = options.prompt || `Please ${options.type} these documents`;
       
       // Execute with immediate response timeout mechanism
-      const result = await Promise.race([
-        layerManager.executeWithOptimalLayer({
-          prompt: analysisPrompt,
-          files: files.map((f: string) => ({ path: f, type: 'document' as const })),
-          options: {
-            analysisType: options.type,
-            depth: 'deep'
-          }
-        }),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new Error('Document analysis timeout after 5 minutes'));
-          }, 300000); // 5 minutes timeout for document analysis
-        })
-      ]) as any;
+      // Execute with immediate response on completion (GeminiCLI pattern)
+      const analysisPromise = layerManager.executeWithOptimalLayer({
+        prompt: analysisPrompt,
+        files: files.map((f: string) => ({ path: f, type: 'document' as const })),
+        options: {
+          analysisType: options.type,
+          depth: 'deep'
+        }
+      });
+      
+      // Set timeout but allow immediate resolution on success
+      timeoutId = setTimeout(() => {
+        console.error('⚠️ Document analysis is taking longer than expected (5 minutes)...');
+        console.log('💡 This might be due to large files or API quota limits.');
+      }, 300000); // 5 minutes warning, not rejection
+      
+      const result = await analysisPromise;
+      
+      // Clear timeout immediately on success
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       
       // Clear timeout immediately upon completion
       if (timeoutId) {
@@ -1706,23 +1726,29 @@ program
       
       console.log('📊 Detected file types:', fileRefs.map((f: any) => `${f.path} (${f.type})`).join(', '));
       
-      // Execute with immediate response timeout mechanism
-      const result = await Promise.race([
-        layerManager.executeWithOptimalLayer({
-          prompt: options.prompt,
-          files: fileRefs,
-          options: {
-            workflow: options.workflow,
-            outputFormat: options.output,
-            execution_mode: 'adaptive'
-          }
-        }),
-        new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new Error('Multimodal processing timeout after 5 minutes'));
-          }, 300000); // 5 minutes timeout for multimodal processing
-        })
-      ]) as any;
+      // Execute with immediate response on completion (GeminiCLI pattern)
+      const multimodalPromise = layerManager.executeWithOptimalLayer({
+        prompt: options.prompt,
+        files: fileRefs,
+        options: {
+          workflow: options.workflow,
+          outputFormat: options.output,
+          execution_mode: 'adaptive'
+        }
+      });
+      
+      // Set timeout but allow immediate resolution on success
+      timeoutId = setTimeout(() => {
+        console.error('⚠️ Multimodal processing is taking longer than expected (5 minutes)...');
+        console.log('💡 This might be due to large files or API quota limits.');
+      }, 300000); // 5 minutes warning, not rejection
+      
+      const result = await multimodalPromise;
+      
+      // Clear timeout immediately on success
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       
       // Clear timeout immediately upon completion
       if (timeoutId) {

@@ -124,6 +124,12 @@ export class AIStudioLayer implements LayerInterface {
   };
 
   constructor(geminiLayer?: any) {
+    logger.info('🔧 AIStudioLayer constructor called - with latest translation fixes', {
+      timestamp: Date.now(),
+      hasGeminiLayer: !!geminiLayer,
+      version: 'v2025-07-03-final-debug'
+    });
+    
     this.authVerifier = new AuthVerifier();
     this.geminiLayer = geminiLayer;
     
@@ -308,6 +314,11 @@ export class AIStudioLayer implements LayerInterface {
             break;
           case 'image_generation':
           case 'generate_image':
+            logger.info('🔧 Calling generateImage from execute method', {
+              taskType: task.type,
+              prompt: task.prompt || task.text,
+              hasOptions: !!task.options
+            });
             result = await this.generateImage(task.prompt || task.text, task.options || {});
             break;
           case 'video_generation':
@@ -568,6 +579,11 @@ export class AIStudioLayer implements LayerInterface {
    * Generate image using AI Studio with Gemini 2.0 Flash for cost efficiency
    */
   async generateImage(prompt: string, options: Partial<ImageGenOptions> = {}): Promise<MediaGenResult> {
+    logger.info('🔧 UPDATED generateImage method called - with translation fix', {
+      timestamp: Date.now(),
+      version: 'v2025-07-03-translation-fix'
+    });
+    
     logger.info('Generating image using GeminiCLI translation + MCP pattern', {
       promptLength: prompt.length,
       model: AI_MODELS.IMAGE_GENERATION,
@@ -582,8 +598,37 @@ export class AIStudioLayer implements LayerInterface {
       wasTranslated: false
     };
     
+    // Extract core prompt by removing common English safety prefixes for accurate language detection
+    const safetyPrefixes = [
+      'digital illustration of',
+      'artistic rendering of', 
+      'professional diagram showing',
+      'creative visualization of',
+      'stylized representation of',
+      'reference image showing',
+      'technical visualization of',
+      'scientific diagram of',
+      'educational illustration of',
+      'documentary-style image of'
+    ];
+    
+    let corePrompt = prompt;
+    for (const prefix of safetyPrefixes) {
+      if (prompt.toLowerCase().startsWith(prefix.toLowerCase())) {
+        corePrompt = prompt.substring(prefix.length).trim();
+        break;
+      }
+    }
+    
+    logger.info('Language detection analysis', {
+      originalPrompt: prompt,
+      corePrompt,
+      promptLength: prompt.length,
+      corePromptLength: corePrompt.length
+    });
+    
     // Auto-detect language and translate using GeminiCLI for token optimization
-    const detectedLang = detectLanguage(prompt);
+    const detectedLang = detectLanguage(corePrompt);
     if (detectedLang && detectedLang !== 'en') {
       const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
       logger.info(`Non-English prompt detected (${languageName}), using GeminiCLI for translation...`, {
@@ -591,32 +636,53 @@ export class AIStudioLayer implements LayerInterface {
         detectedLanguage: detectedLang
       });
 
-      if (this.geminiLayer?.translateToEnglish) {
-        try {
-          processedPrompt = await this.geminiLayer.translateToEnglish(prompt, detectedLang);
-          
-          translationInfo = {
-            detectedLanguage: detectedLang,
-            languageName,
-            originalPrompt: prompt,
-            translatedPrompt: processedPrompt,
-            wasTranslated: true
-          };
-          
-          logger.info('GeminiCLI translation completed', {
-            originalPrompt: prompt,
-            translatedPrompt: processedPrompt,
-            language: `${languageName} → English`
-          });
-        } catch (translationError) {
-          logger.warn('GeminiCLI translation failed, using original prompt', {
-            error: translationError instanceof Error ? translationError.message : String(translationError),
-            originalPrompt: prompt
-          });
-          // processedPrompt remains as original prompt
+      if (this.geminiLayer) {
+        logger.info('GeminiCLI layer available, checking translateToEnglish method', {
+          hasTranslateMethod: typeof this.geminiLayer.translateToEnglish === 'function',
+          layerType: this.geminiLayer.constructor.name,
+          availableMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.geminiLayer)).slice(0, 10),
+          hasExecute: typeof this.geminiLayer.execute === 'function',
+          hasExecuteSimple: typeof this.geminiLayer.executeSimple === 'function'
+        });
+        
+        if (this.geminiLayer.translateToEnglish) {
+          try {
+            // Ensure GeminiCLI layer is initialized before translation
+            if (!await this.geminiLayer.isAvailable()) {
+              logger.warn('GeminiCLI layer not available, initializing...');
+              await this.geminiLayer.initialize();
+            }
+            
+            const translatedCore = await this.geminiLayer.translateToEnglish(corePrompt, detectedLang);
+            // Reconstruct prompt with original prefix + translated core
+            const originalPrefix = prompt.substring(0, prompt.length - corePrompt.length);
+            processedPrompt = originalPrefix + translatedCore;
+            
+            translationInfo = {
+              detectedLanguage: detectedLang,
+              languageName,
+              originalPrompt: prompt,
+              translatedPrompt: processedPrompt,
+              wasTranslated: true
+            };
+            
+            logger.info('GeminiCLI translation completed', {
+              originalPrompt: prompt,
+              translatedPrompt: processedPrompt,
+              language: `${languageName} → English`
+            });
+          } catch (translationError) {
+            logger.warn('GeminiCLI translation failed, using original prompt', {
+              error: translationError instanceof Error ? translationError.message : String(translationError),
+              originalPrompt: prompt
+            });
+            // processedPrompt remains as original prompt
+          }
+        } else {
+          logger.warn('GeminiCLI translateToEnglish method not available, using original prompt');
         }
       } else {
-        logger.warn('GeminiCLILayer not available for translation, using original prompt');
+        logger.warn('GeminiCLI layer not available for translation, using original prompt');
       }
     }
     
@@ -1380,14 +1446,42 @@ export class AIStudioLayer implements LayerInterface {
       });
 
       child.on('close', (code) => {
-        clearTimeout(timeoutId); // 即座にタイムアウトをクリア（GeminiCLIパターン適用）
+        clearTimeout(timeoutId);
         
+        // GeminiCLIパターン: 即座にPromise解決（パース処理前）
         if (code === 0) {
+          // 非同期でパース処理を実行し、即座にPromise解決
+          setImmediate(() => {
+            try {
+              const lines = output.trim().split('\n').filter(line => line.trim());
+              let result = {};
+              
+              for (const line of lines) {
+                try {
+                  const mcpResponse = JSON.parse(line);
+                  if (mcpResponse.result) {
+                    result = mcpResponse.result;
+                    break;
+                  }
+                } catch (parseError) {
+                  continue;
+                }
+              }
+              
+              logger.debug('MCP command completed successfully', {
+                command,
+                outputLength: output.length,
+                code,
+              });
+            } catch (parseError) {
+              logger.debug('MCP JSON parsing completed with fallback to raw output');
+            }
+          });
+          
+          // 即座にresolve（パース結果を待たない）
           try {
-            // Parse MCP response
             const lines = output.trim().split('\n').filter(line => line.trim());
             let result = {};
-            
             for (const line of lines) {
               try {
                 const mcpResponse = JSON.parse(line);
@@ -1396,19 +1490,11 @@ export class AIStudioLayer implements LayerInterface {
                   break;
                 }
               } catch (parseError) {
-                // Skip non-JSON lines (like server startup messages)
                 continue;
               }
             }
-            
-            logger.debug('MCP command completed successfully', {
-              command,
-              outputLength: output.length,
-              code,
-            });
-            resolve(result); // 即座にresolve（タイムアウト問題の修正）
+            resolve(result);
           } catch (parseError) {
-            // If JSON parsing fails, return raw output
             resolve({ content: output.trim() });
           }
         } else {
