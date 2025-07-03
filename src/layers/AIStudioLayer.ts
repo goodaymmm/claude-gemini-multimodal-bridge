@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
+import * as fs from 'fs';
 import { dirname, join } from 'path';
 import * as path from 'path';
 import { GoogleGenAI, Modality } from '@google/genai';
@@ -1173,6 +1174,18 @@ export class AIStudioLayer implements LayerInterface {
       });
       return await this.generateAudio(prompt, task.options || {});
     }
+
+    // Special handling for multiple PDFs using Gemini File API
+    if (task.options?.multiplePDFs && task.files && task.files.length > 1) {
+      const pdfFiles = task.files.filter((file: any) => file.path.toLowerCase().endsWith('.pdf'));
+      if (pdfFiles.length > 1) {
+        logger.info('Processing multiple PDFs with Gemini File API', {
+          pdfCount: pdfFiles.length,
+          totalFiles: task.files.length
+        });
+        return await this.processMultiplePDFs(pdfFiles, prompt);
+      }
+    }
     
     return await this.executeMCPCommandOptimized('multimodal_process', {
       files: task.files || [],
@@ -2218,5 +2231,51 @@ export class AIStudioLayer implements LayerInterface {
     }
     
     return config;
+  }
+
+  /**
+   * Process multiple PDFs using Gemini File API batch processing
+   * Based on Google official documentation: https://ai.google.dev/gemini-api/docs/document-processing
+   */
+  private async processMultiplePDFs(pdfFiles: any[], prompt: string): Promise<any> {
+    logger.info('Starting multiple PDF processing with Gemini File API', {
+      pdfCount: pdfFiles.length,
+      promptLength: prompt.length
+    });
+
+    // Validate file sizes - Google AI Studio supports up to 50MB per PDF
+    for (const file of pdfFiles) {
+      const stats = await fs.promises.stat(file.path);
+      const fileSizeMB = stats.size / (1024 * 1024);
+      
+      if (fileSizeMB > 50) {
+        throw new Error(`PDF file ${file.path} is ${fileSizeMB.toFixed(1)}MB, which exceeds the 50MB limit for Gemini File API`);
+      }
+      
+      logger.debug('PDF file validation passed', {
+        path: file.path,
+        sizeMB: fileSizeMB.toFixed(1)
+      });
+    }
+
+    // Use MCP server for multiple PDF processing
+    const result = await this.executeMCPCommandOptimized('multimodal_process', {
+      files: pdfFiles,
+      instructions: `${prompt}\n\nProcess these ${pdfFiles.length} PDF documents using Gemini File API batch processing. Compare and analyze content across all documents.`,
+      model: 'gemini-2.5-flash',
+      options: {
+        batchProcessing: true,
+        multiplePDFs: true,
+        extractStructure: true,
+        compareDocuments: pdfFiles.length > 1
+      }
+    });
+
+    logger.info('Multiple PDF processing completed', {
+      pdfCount: pdfFiles.length,
+      success: !!result
+    });
+
+    return result;
   }
 }

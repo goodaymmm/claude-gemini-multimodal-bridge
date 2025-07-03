@@ -1635,10 +1635,67 @@ program
       
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
-      
+
+      // URL Detection and Routing
+      const urlFiles = files.filter((file: string) => /^https?:\/\//.test(file));
+      if (urlFiles.length > 0) {
+        console.log('🌐 URL(s) detected in input:');
+        urlFiles.forEach((url: string) => console.log(`   ${url}`));
+        console.log('');
+        console.log('💡 For URL analysis, use Gemini CLI instead:');
+        if (urlFiles.length === 1) {
+          const prompt = options.prompt 
+            ? `${options.prompt} for the content at ${urlFiles[0]}`
+            : `Analyze the PDF content at ${urlFiles[0]}`;
+          console.log(`   cgmb chat "${prompt}"`);
+        } else {
+          console.log(`   cgmb chat "Analyze the documents at these URLs: ${urlFiles.join(', ')}"`);
+        }
+        console.log('');
+        console.log('🔍 Gemini CLI can access web content directly and provide real-time analysis.');
+        process.exit(0);
+      }
+
+      // File Path Resolution and Validation
+      const resolvedFiles: string[] = [];
+      const missingFiles: string[] = [];
+
+      for (const file of files) {
+        const resolvedPath = path.resolve(process.cwd(), file);
+        if (fs.existsSync(resolvedPath)) {
+          resolvedFiles.push(resolvedPath);
+        } else {
+          missingFiles.push(file);
+        }
+      }
+
+      if (missingFiles.length > 0) {
+        console.log('❌ File(s) not found:');
+        missingFiles.forEach((file: string) => {
+          const resolvedPath = path.resolve(process.cwd(), file);
+          console.log(`   ${file} (resolved: ${resolvedPath})`);
+        });
+        console.log('');
+        console.log('💡 Tips:');
+        console.log('   • Check file paths and ensure files exist');
+        console.log('   • Use relative paths like ./document.pdf or ../files/doc.pdf');
+        console.log('   • Use absolute paths like /full/path/to/document.pdf');
+        process.exit(1);
+      }
+
       console.log('📄 Analyzing documents with AI Studio...');
-      console.log(`📁 Files: ${files.join(', ')}`);
+      console.log(`📁 Files (${resolvedFiles.length}):`);
+      resolvedFiles.forEach((file: string) => {
+        const relativePath = path.relative(process.cwd(), file);
+        console.log(`   ${relativePath} (${file})`);
+      });
       
+      // Multiple PDF Detection for Special Handling
+      const pdfFiles = resolvedFiles.filter((file: string) => path.extname(file).toLowerCase() === '.pdf');
+      if (pdfFiles.length > 1) {
+        console.log(`\n📚 Multiple PDFs detected (${pdfFiles.length}). Using Gemini File API batch processing...`);
+      }
+
       const defaultConfig = {
         claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
         gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
@@ -1654,10 +1711,11 @@ program
       const result = await withCLITimeout(
         () => layerManager.executeWithOptimalLayer({
           prompt: analysisPrompt,
-          files: files.map((f: string) => ({ path: f, type: 'document' as const })),
+          files: resolvedFiles.map((f: string) => ({ path: f, type: 'document' as const })),
           options: {
             analysisType: options.type,
-            depth: 'deep'
+            depth: 'deep',
+            multiplePDFs: pdfFiles.length > 1
           }
         }),
         'analyze-documents',
