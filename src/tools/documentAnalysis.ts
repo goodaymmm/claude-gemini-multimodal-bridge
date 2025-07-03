@@ -185,11 +185,93 @@ export class DocumentAnalysis {
   }
 
   /**
-   * Extract text from PDF using pdf-parse for better analysis
+   * Extract text from PDF using Gemini API File API (recommended by Google)
+   * Falls back to pdf-parse for compatibility
    */
   private async extractPDFText(pdfPath: string): Promise<string> {
+    // Try Gemini API File API first (recommended approach)
     try {
-      logger.info('Extracting text from PDF', { pdfPath });
+      const geminiResult = await this.extractPDFWithGeminiFileAPI(pdfPath);
+      if (geminiResult && geminiResult.length > 0) {
+        logger.info('PDF extraction completed using Gemini File API', {
+          pdfPath,
+          textLength: geminiResult.length,
+          textPreview: geminiResult.substring(0, 100) + (geminiResult.length > 100 ? '...' : '')
+        });
+        return geminiResult;
+      }
+    } catch (geminiError) {
+      logger.warn('Gemini File API extraction failed, falling back to pdf-parse', {
+        pdfPath,
+        error: geminiError instanceof Error ? geminiError.message : String(geminiError)
+      });
+    }
+
+    // Fallback to traditional pdf-parse extraction
+    return this.extractPDFWithPdfParse(pdfPath);
+  }
+
+  /**
+   * Extract PDF using Gemini API File API (Official recommendation)
+   * Supports up to 50MB files and 1,000 pages with native vision processing
+   */
+  private async extractPDFWithGeminiFileAPI(pdfPath: string): Promise<string> {
+    try {
+      logger.info('Extracting PDF with Gemini File API', { pdfPath });
+      
+      // Check file size - Gemini API supports up to 50MB
+      const stats = await fs.stat(pdfPath);
+      if (stats.size > 50 * 1024 * 1024) {
+        throw new Error(`PDF file too large for Gemini File API: ${Math.round(stats.size / 1024 / 1024)}MB (max 50MB)`);
+      }
+
+      await this.aiStudioLayer.initialize();
+      
+      // Use AI Studio layer for direct Gemini API access
+      const result = await this.aiStudioLayer.execute({
+        action: 'multimodal_processing',
+        files: [{
+          path: pdfPath,
+          type: 'document',
+          encoding: 'binary'
+        }],
+        instructions: `Extract all text content from this PDF document using native vision processing. 
+Follow these guidelines:
+1. Process all pages (up to 1,000 pages supported)
+2. Each page equals approximately 258 tokens
+3. Preserve document structure and formatting
+4. Extract both text and analyze any images within the PDF
+5. Provide comprehensive content understanding
+6. Focus on accuracy and completeness
+
+Please extract the complete text content while maintaining readability and structure.`
+      });
+
+      if (result.success && result.data) {
+        const extractedText = typeof result.data === 'string' ? result.data : 
+          (result.data.content && typeof result.data.content === 'string') ? result.data.content :
+          JSON.stringify(result.data);
+
+        const metadata = `[PDF Document: ${path.basename(pdfPath)} - Processed with Gemini File API]\n\n`;
+        return metadata + extractedText.trim();
+      } else {
+        throw new Error(result.error || 'Failed to extract PDF with Gemini File API');
+      }
+    } catch (error) {
+      logger.error('Gemini File API PDF extraction failed', {
+        pdfPath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Extract text from PDF using pdf-parse for better analysis (fallback method)
+   */
+  private async extractPDFWithPdfParse(pdfPath: string): Promise<string> {
+    try {
+      logger.info('Extracting PDF with pdf-parse (fallback)', { pdfPath });
       
       const buffer = await fs.readFile(pdfPath);
       const data = await pdfParse(buffer, {

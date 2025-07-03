@@ -1524,12 +1524,14 @@ program
           console.log(`🖼️  Format: ${result.metadata?.format || 'PNG'}`);
           console.log('\n💡 Use --output flag to save the image to a specific location.');
         }
+        process.exit(0);
       } else {
         console.error('❌ Image generation failed:', result.error || 'Unknown error');
         if (result.error?.includes('content policy')) {
           console.log('\n💡 Try modifying your prompt to be more specific or descriptive.');
           console.log('   Example: "professional illustration of a happy cat in a garden"');
         }
+        process.exit(1);
       }
     } catch (error) {
       logger.error('Image generation failed', error as Error);
@@ -1601,8 +1603,10 @@ program
           console.log(`📊 Format: ${result.metadata?.format || 'WAV'}`);
           console.log('\n💡 Use --output flag to save the audio to a specific location.');
         }
+        process.exit(0);
       } else {
         console.error('❌ Audio generation failed:', result.error || 'Unknown error');
+        process.exit(1);
       }
     } catch (error) {
       logger.error('Audio generation failed', error as Error);

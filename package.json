@@ -11,9 +11,9 @@
     "name": "cgmb",
     "description": "Claude-Gemini Multimodal Bridge - Enterprise-grade multi-layer AI integration with intelligent caching, OAuth authentication, and optimal layer routing",
     "version": "1.1.0",
-    "command": "node",
+    "command": "cgmb",
     "args": [
-      "./dist/index.js"
+      "serve"
     ],
     "env": {
       "NODE_ENV": "development",

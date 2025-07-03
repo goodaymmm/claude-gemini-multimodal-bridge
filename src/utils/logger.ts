@@ -61,11 +61,28 @@ class Logger {
 
   public static getInstance(config?: LoggerConfig): Logger {
     if (!Logger.instance) {
+      // Enhanced environment variable control for debugging
+      const debugMode = process.env.CGMB_DEBUG === 'true';
+      const cliMode = process.env.CGMB_CLI_MODE === 'true';
+      const productionMode = process.env.NODE_ENV === 'production';
+      
+      // Determine log level with priority: CGMB_DEBUG > LOG_LEVEL > defaults
+      let logLevel = 'info';
+      if (debugMode) {
+        logLevel = 'debug';
+      } else if (process.env.LOG_LEVEL) {
+        logLevel = process.env.LOG_LEVEL;
+      } else if (cliMode) {
+        logLevel = 'warn'; // Reduce noise for CLI commands
+      } else if (productionMode) {
+        logLevel = 'info';
+      }
+
       const defaultConfig: LoggerConfig = {
-        level: process.env.LOG_LEVEL || 'info',
+        level: logLevel,
         ...(process.env.LOG_FILE && { file: process.env.LOG_FILE }),
-        console: true,
-        json: process.env.NODE_ENV === 'production',
+        console: !productionMode || debugMode, // Always show console in debug mode
+        json: productionMode && !debugMode,
       };
       Logger.instance = new Logger(config || defaultConfig);
     }
@@ -179,6 +196,31 @@ class Logger {
       securityLevel: level,
       ...meta,
     });
+  }
+
+  // Debug helpers for development and troubleshooting
+  public debugConfig(): void {
+    if (process.env.CGMB_DEBUG === 'true') {
+      this.debug('CGMB Debug Configuration', {
+        NODE_ENV: process.env.NODE_ENV,
+        LOG_LEVEL: process.env.LOG_LEVEL,
+        CGMB_DEBUG: process.env.CGMB_DEBUG,
+        CGMB_CLI_MODE: process.env.CGMB_CLI_MODE,
+        hasAiStudioKey: !!process.env.AI_STUDIO_API_KEY,
+        hasGeminiKey: !!process.env.GEMINI_API_KEY,
+        currentLogLevel: this.logger.level,
+      });
+    }
+  }
+
+  public static getDebugStatus(): Record<string, any> {
+    return {
+      debugMode: process.env.CGMB_DEBUG === 'true',
+      cliMode: process.env.CGMB_CLI_MODE === 'true',
+      logLevel: process.env.LOG_LEVEL,
+      nodeEnv: process.env.NODE_ENV,
+      hasDebugEnv: process.env.CGMB_DEBUG !== undefined,
+    };
   }
 }
 
