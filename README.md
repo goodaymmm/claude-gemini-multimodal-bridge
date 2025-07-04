@@ -61,6 +61,13 @@ cgmb verify
 - **Claude Code CLI** installed and configured
 - **Gemini CLI** (auto-installed)
 
+### WSL Users
+
+```bash
+nvm use 22.17                        # Use correct Node.js version
+nvm current                          # Verify version
+```
+
 ## 🎯 Usage with Claude Code
 
 CGMB integrates seamlessly with Claude Code. Use the "CGMB" keyword for optimal tool selection:
@@ -317,12 +324,6 @@ cgmb verify --fix                    # Auto-fix common issues
 ```bash
 export CGMB_DEBUG=true               # Enable debug mode
 cgmb quota-status --detailed         # Check API usage
-```
-
-**WSL Users:**
-```bash
-nvm use 22.17                        # Use correct Node.js version
-nvm current                          # Verify version
 ```
 
 **Claude Code Integration Issues:**

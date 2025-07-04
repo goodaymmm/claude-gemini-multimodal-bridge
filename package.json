@@ -9,7 +9,7 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "Claude-Gemini Multimodal Bridge - Enterprise-grade multi-layer AI integration with intelligent caching, OAuth authentication, and optimal layer routing",
+    "description": "CGMB MCP Server v1.0.0 - 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: URL auto-detection, path resolution (./file→/path/file), file validation. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
     "version": "1.0.0",
     "command": "cgmb",
     "args": [

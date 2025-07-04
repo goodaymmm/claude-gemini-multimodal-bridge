@@ -27,7 +27,22 @@ async function main() {
     // Start the MCP server (stdio transport for Claude Code)
     await server.start();
     
-    logger.info('CGMB MCP Server ready for Claude Code connections');
+    logger.info('CGMB MCP Server ready', {
+      version: '1.0.0',
+      mainTool: 'cgmb - handles all CGMB requests',
+      capabilities: {
+        'Commands': 'chat, search, analyze, generate, process, extract, translate',
+        'Files': 'PDF, images, audio, documents (relative/absolute paths)',
+        'URLs': 'Direct processing without download',
+        'Generation': 'Images (Imagen 3), Audio (TTS)',
+        'Routing': 'Automatic optimal AI layer selection'
+      },
+      tips: [
+        'Always use "CGMB" keyword in prompts',
+        'Relative paths like ./file.pdf are auto-resolved',
+        'URLs are processed directly by Gemini CLI'
+      ]
+    });
 
     // Handle graceful shutdown
     process.on('SIGINT', async () => {

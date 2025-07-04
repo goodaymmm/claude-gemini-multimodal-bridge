@@ -138,7 +138,12 @@ export class CGMBServer {
         tools: [
           {
             name: 'cgmb_get_layer_requirements',
-            description: '📋 Get formatting requirements and capabilities for each AI layer. Use this to understand how to format data for optimal processing by Gemini CLI or AI Studio.',
+            description: '📋 **Layer Info Tool** - Get AI layer capabilities:\n' +
+              '• Returns detailed JSON with each layer\'s:\n' +
+              '  - Input formats and requirements\n' +
+              '  - Capabilities and features\n' +
+              '  - Limitations and quotas\n' +
+              '• Layers: gemini (text/search), aistudio (multimodal), adaptive',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -147,15 +152,40 @@ export class CGMBServer {
           },
           {
             name: 'cgmb',
-            description: '🎯 **CGMB Multi-layer AI** - Say what you want, CGMB routes it intelligently:\n' +
-              '• Image: "generate an image of [description]" → AI Studio\n' +
-              '• Audio: "generate audio saying [text]" → AI Studio\n' +
-              '• Search: "search for [topic]" → Gemini CLI\n' +
-              '• Analyze: "analyze [file/text]" → Best layer selected\n' +
-              'Examples:\n' +
-              '- "generate an image of a cute cat"\n' +
-              '- "search for latest AI developments"\n' +
-              '- "analyze @document.pdf and summarize key points"',
+            description: '🎯 **CGMB Universal AI Handler** - Processes all CGMB requests:\n' +
+              '\n' +
+              '📋 **Supported Commands** (auto-detected from prompt):\n' +
+              '• chat/ask/tell → Interactive conversation\n' +
+              '• search/find/look up → Web search via Gemini CLI\n' +
+              '• analyze/review/examine → Document/file analysis\n' +
+              '• generate/create image → Image generation via AI Studio\n' +
+              '• generate/create audio/speech → Audio generation via AI Studio\n' +
+              '• process/handle files → Multimodal file processing\n' +
+              '• compare/diff → Document comparison\n' +
+              '• extract/get → Information extraction\n' +
+              '• translate/convert → Translation/conversion\n' +
+              '\n' +
+              '🔧 **Features**:\n' +
+              '• URL Detection: https:// links processed directly by Gemini CLI\n' +
+              '• Path Resolution: ./relative → /absolute using workingDirectory\n' +
+              '• File Validation: Checks existence and read permissions\n' +
+              '• Smart Routing: Auto-selects optimal AI layer\n' +
+              '• Error Context: Shows original + resolved paths\n' +
+              '\n' +
+              '📁 **File Support**:\n' +
+              '• Documents: PDF (max 1000 pages), TXT, MD, HTML\n' +
+              '• Images: PNG, JPG, GIF (analysis + generation)\n' +
+              '• Audio: WAV, MP3 (analysis + generation)\n' +
+              '• Code: JS, PY, TS, etc.\n' +
+              '\n' +
+              '💡 **Usage Examples**:\n' +
+              '• "CGMB search for latest AI news"\n' +
+              '• "CGMB analyze document.pdf"\n' +
+              '• "CGMB generate image of sunset"\n' +
+              '• "CGMB create audio saying welcome"\n' +
+              '• "CGMB process image.png and doc.pdf"\n' +
+              '\n' +
+              '⚠️ **Important**: Always include "CGMB" keyword to trigger this tool',
             inputSchema: {
               type: 'object',
               properties: {
@@ -233,12 +263,13 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_multimodal_process',
-            description: '🎨 **File Processing** - When you have files to process:\n' +
-              '• Images: Analysis, captioning, comparison\n' +
-              '• Documents: PDFs, text extraction, summarization\n' +
-              '• Audio: Transcription, analysis\n' +
-              '• Mixed: Process multiple file types together\n' +
-              'Use this when you say "process these files" or "@file1 @file2"',
+            description: '🎨 **Multimodal File Processor** - Specialized file handling:\n' +
+              '• File Types: image, audio, pdf, document, text, video\n' +
+              '• Workflows: analysis, conversion, extraction, generation\n' +
+              '• Batch Mode: Process multiple files together\n' +
+              '• Path Support: Relative (./file) and absolute (/path/file)\n' +
+              '• Options: layer_priority, execution_mode, quality_level\n' +
+              'Auto-selected when multiple files specified or @file mentions',
             inputSchema: {
               type: 'object',
               properties: {
@@ -298,12 +329,12 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_document_analysis',
-            description: '📄 **Document Specialist** - Deep document analysis:\n' +
-              '• PDFs: Extract text, tables, summaries\n' +
-              '• Contracts: Find clauses, terms, obligations\n' +
-              '• Code: Analyze structure, dependencies\n' +
-              '• Comparison: Compare multiple documents\n' +
-              'Use when you need document-specific analysis',
+            description: '📄 **Document Analysis Expert** - Deep document processing:\n' +
+              '• Supported: PDF (via Gemini File API, max 1000 pages), TXT, MD, DOCX\n' +
+              '• Analysis Types: summary, comparison, extraction, translation\n' +
+              '• Batch PDFs: Automatic detection for multiple PDF processing\n' +
+              '• Path Handling: Relative paths resolved with workingDirectory\n' +
+              'Auto-selected for document-specific analysis requests',
             inputSchema: {
               type: 'object',
               properties: {
@@ -331,11 +362,12 @@ export class CGMBServer {
           },
           {
             name: 'cgmb_workflow_orchestration',
-            description: '🔄 **Complex Tasks** - Multi-step workflows:\n' +
-              '• Research: Search → Analyze → Summarize\n' +
-              '• Reports: Gather data → Process → Generate\n' +
-              '• Comparisons: Collect → Analyze → Compare\n' +
-              'Use for tasks requiring multiple AI capabilities',
+            description: '🔄 **Workflow Orchestrator** - Complex multi-step tasks:\n' +
+              '• Modes: sequential, parallel, adaptive execution\n' +
+              '• Multi-Layer: Combines all 3 AI layers as needed\n' +
+              '• Dependencies: Define step relationships\n' +
+              '• Use Cases: Research workflows, report generation, data pipelines\n' +
+              'Auto-selected for complex multi-step requests',
             inputSchema: {
               type: 'object',
               properties: {
@@ -779,15 +811,32 @@ export class CGMBServer {
                   : { ...file, path: resolvedPath, type: file.type || 'document' });
               } catch (permError) {
                 logger.warn(`File permission denied: ${filePath} -> ${resolvedPath}`);
-                throw new Error(`Permission denied for file: ${filePath}`);
+                throw new Error(`Permission denied: ${filePath}
+Resolved to: ${resolvedPath}
+File exists but cannot be read.
+
+Fix: chmod +r "${resolvedPath}"`);
               }
             } else {
               logger.warn(`Path is not a file: ${filePath} -> ${resolvedPath}`);
-              throw new Error(`Path is not a file: ${filePath}`);
+              throw new Error(`Not a file: ${filePath}
+Resolved to: ${resolvedPath}
+This path points to a directory or special file.
+
+Use a specific file path instead.`);
             }
           } else {
             logger.warn(`File not found: ${filePath} -> ${resolvedPath}`);
-            throw new Error(`File not found: ${filePath}. Resolved path: ${resolvedPath}`);
+            throw new Error(`File not found: ${filePath}
+Resolved path: ${resolvedPath}
+Working directory: ${workingDirectory || 'not provided'}
+Current directory: ${process.cwd()}
+
+Solutions:
+1. Check file exists: ls -la "${resolvedPath}"
+2. Use relative path: "./filename.pdf" (from current dir)
+3. Use absolute path: "/full/path/to/file.pdf"
+4. Verify working directory matches file location`);
           }
         } catch (error) {
           if (error instanceof Error && error.message.includes('not found')) {
@@ -881,19 +930,43 @@ export class CGMBServer {
         ? result.results[0] 
         : Object.values(result.results || {})[0];
       
+      let responseText = prefix + (mainResult?.data || 'Processing completed');
+      
+      // Add usage hints for new users when CGMB keyword is missing
+      if (!hasCGMB) {
+        responseText += '\n\n💡 CGMB Commands:\n' +
+          '• Chat: "CGMB tell me about..."\n' +
+          '• Search: "CGMB search for latest..."\n' +
+          '• Analyze: "CGMB analyze file.pdf"\n' +
+          '• Generate: "CGMB create image/audio..."\n' +
+          '• Process: "CGMB process files..."';
+      }
+      
       return {
         content: [{
           type: 'text',
-          text: prefix + (mainResult?.data || 'Processing completed')
+          text: responseText
         }]
       };
     }
 
     // Handle full processing
+    let responseText = prefix + (result.summary || result.content || 'Processing completed');
+    
+    // Add usage hints for new users when CGMB keyword is missing
+    if (!hasCGMB) {
+      responseText += '\n\n💡 CGMB Commands:\n' +
+        '• Chat: "CGMB tell me about..."\n' +
+        '• Search: "CGMB search for latest..."\n' +
+        '• Analyze: "CGMB analyze file.pdf"\n' +
+        '• Generate: "CGMB create image/audio..."\n' +
+        '• Process: "CGMB process files..."';
+    }
+    
     return {
       content: [{
         type: 'text',
-        text: prefix + (result.summary || result.content || 'Processing completed')
+        text: responseText
       }]
     };
   }
