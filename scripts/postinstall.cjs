@@ -209,7 +209,26 @@ GEMINI_MODEL=gemini-2.0-flash-exp
   }
 }
 
-// Setup MCP integration
+// Detect Node.js environment
+async function detectNodeEnvironment() {
+  try {
+    const cgmbPath = execSync('which cgmb', { encoding: 'utf8' }).trim();
+    const nodePath = process.execPath; // Current Node.js path
+    
+    return {
+      cgmbPath,
+      nodePath,
+      isNvm: cgmbPath.includes('.nvm'),
+      isNodebrew: cgmbPath.includes('.nodebrew'),
+      isVolta: cgmbPath.includes('.volta'),
+      detected: true
+    };
+  } catch (error) {
+    return { detected: false };
+  }
+}
+
+// Setup MCP integration with environment detection
 async function setupMCPIntegration() {
   log('🔧 Setting up Claude Code MCP integration...');
   
@@ -222,16 +241,39 @@ async function setupMCPIntegration() {
     return true;
   }
   
+  // Detect Node.js environment
+  const env = await detectNodeEnvironment();
+  
+  if (env.detected && (env.isNvm || env.isNodebrew || env.isVolta)) {
+    log('🔍 Detected Node.js version manager environment', 'info');
+    log(`   Node.js path: ${env.nodePath}`, 'info');
+    log(`   CGMB path: ${env.cgmbPath}`, 'info');
+    
+    // Set environment variables for MCP configuration
+    process.env.CGMB_DETECTED_PATH = env.cgmbPath;
+    process.env.CGMB_DETECTED_NODE_PATH = env.nodePath;
+  }
+  
   try {
     // Try to run cgmb setup-mcp using the cgmb command
     try {
       // Set environment variable to prevent nested Claude Code execution
       process.env.CGMB_NO_CLAUDE_EXEC = 'true';
-      execSync('cgmb setup-mcp', { 
+      execSync('cgmb setup-mcp --force', { 
         stdio: 'inherit',
-        env: { ...process.env, CGMB_NO_CLAUDE_EXEC: 'true' }
+        env: { 
+          ...process.env, 
+          CGMB_NO_CLAUDE_EXEC: 'true',
+          CGMB_DETECTED_PATH: env.cgmbPath || '',
+          CGMB_DETECTED_NODE_PATH: env.nodePath || ''
+        }
       });
       log('✅ MCP integration configured with cgmb command', 'success');
+      
+      if (env.detected && (env.isNvm || env.isNodebrew || env.isVolta)) {
+        log('✅ MCP configuration updated for your Node.js environment', 'success');
+      }
+      
       return true;
     } catch (cgmbError) {
       // Fallback to direct node execution if cgmb command not available
@@ -240,9 +282,14 @@ async function setupMCPIntegration() {
       const cgmbPath = path.join(process.cwd(), 'dist', 'cli.js');
       if (fs.existsSync(cgmbPath)) {
         process.env.CGMB_NO_CLAUDE_EXEC = 'true';
-        execSync(`node ${cgmbPath} setup-mcp`, { 
+        execSync(`node ${cgmbPath} setup-mcp --force`, { 
           stdio: 'inherit',
-          env: { ...process.env, CGMB_NO_CLAUDE_EXEC: 'true' }
+          env: { 
+            ...process.env, 
+            CGMB_NO_CLAUDE_EXEC: 'true',
+            CGMB_DETECTED_PATH: env.cgmbPath || '',
+            CGMB_DETECTED_NODE_PATH: env.nodePath || ''
+          }
         });
         log('✅ MCP integration configured with fallback method', 'success');
         return true;
@@ -252,7 +299,7 @@ async function setupMCPIntegration() {
       }
     }
   } catch (error) {
-    log('⚠️ MCP integration setup failed. You can set it up later with: cgmb setup-mcp', 'warning');
+    log('⚠️ MCP integration setup failed. You can set it up later with: cgmb setup-mcp --force', 'warning');
     return false;
   }
 }

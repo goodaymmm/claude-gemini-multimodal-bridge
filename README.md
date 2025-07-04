@@ -51,6 +51,34 @@ npm install -g claude-gemini-multimodal-bridge
 # ✅ Verifies system requirements
 ```
 
+### NPM Global Installation Setup
+
+After installing with `npm install -g claude-gemini-multimodal-bridge`, create a `.env` file in your working directory:
+
+```bash
+# Create .env file in current directory
+cat > .env << 'EOF'
+# Claude-Gemini Multimodal Bridge Configuration
+AI_STUDIO_API_KEY=your_api_key_here
+EOF
+
+# Edit the file to add your actual API key
+nano .env  # or use your preferred editor
+```
+
+Note: The `.env` file should be created in the directory where you'll run CGMB commands.
+
+#### Troubleshooting MCP Integration
+
+If Claude Code cannot find the CGMB tools, run:
+
+```bash
+# Reconfigure MCP with environment detection
+cgmb setup-mcp --force
+
+# Restart Claude Code to apply changes
+```
+
 ### Authentication Setup
 
 ```bash

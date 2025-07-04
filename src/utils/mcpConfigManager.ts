@@ -118,9 +118,31 @@ export class MCPConfigManager {
 
   /**
    * Generate CGMB server configuration
-   * Always uses the cgmb command for consistency with npm package distribution
+   * Detects Node.js environment and uses appropriate paths
    */
   private generateCGMBConfig(): MCPServerConfig {
+    // Check for environment-detected paths from postinstall script
+    const detectedCgmbPath = process.env.CGMB_DETECTED_PATH;
+    const detectedNodePath = process.env.CGMB_DETECTED_NODE_PATH;
+    
+    if (detectedCgmbPath && detectedNodePath) {
+      // nvm/nodebrew/volta environment detected - use absolute paths
+      logger.info('Using environment-specific MCP configuration', {
+        nodePath: detectedNodePath,
+        cgmbPath: detectedCgmbPath
+      });
+      
+      return {
+        command: detectedNodePath,
+        args: [detectedCgmbPath, 'serve'],
+        env: {
+          NODE_ENV: 'production',
+          PATH: process.env.PATH || ''
+        }
+      };
+    }
+    
+    // Default configuration for standard environments
     return {
       command: 'cgmb',
       args: ['serve'],
