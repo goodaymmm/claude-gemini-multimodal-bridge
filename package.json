@@ -128,10 +128,12 @@
   },
   "files": [
     "dist",
-    "README.md",
-    "LICENSE",
-    "docs",
     "scripts/postinstall.cjs",
+    "scripts/setup.sh",
+    "scripts/verify-dependencies.sh",
+    "README.md",
+    "README_JP.md",
+    "LICENSE",
     ".env.example"
   ]
 }
