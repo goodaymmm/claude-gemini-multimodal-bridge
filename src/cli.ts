@@ -69,7 +69,7 @@ const program = new Command();
 program
   .name('cgmb')
   .description('Claude-Gemini Multimodal Bridge - Multi-layer AI integration tool')
-  .version('1.0.0');
+  .version('1.1.0');
 
 // Server command
 program

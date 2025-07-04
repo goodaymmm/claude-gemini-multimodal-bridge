@@ -8,7 +8,8 @@
 
 ## ✨ Key Features
 
-### 🎯 **Version 1.0.0 - Stable Release**
+### 🎯 **Version 1.1.0 - Enhanced URL Routing**
+- 🌐 **Intelligent URL Routing**: PDF URLs route to Claude Code, web pages to Gemini CLI
 - 🔧 **PDF Processing Fix**: Dynamic library loading prevents audio generation errors
 - ⚡ **Timeout Optimization**: Immediate response upon task completion
 - 🗄️ **Memory Efficiency**: Eliminated unnecessary library initialization

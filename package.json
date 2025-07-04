@@ -1,6 +1,6 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Stable multi-layer AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing, dynamic PDF processing, and enhanced multimodal capabilities",
   "type": "module",
   "main": "dist/index.js",
@@ -9,8 +9,8 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "CGMB MCP Server v1.0.0 - 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: URL auto-detection, path resolution (./file→/path/file), file validation. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
-    "version": "1.0.0",
+    "description": "CGMB MCP Server v1.1.0 - 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: URL auto-detection, path resolution (./file→/path/file), file validation. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
+    "version": "1.1.0",
     "command": "cgmb",
     "args": [
       "serve"
