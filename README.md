@@ -57,25 +57,12 @@ npm install -g claude-gemini-multimodal-bridge
 # Get API key from: https://aistudio.google.com/app/apikey
 # Add to .env file:
 AI_STUDIO_API_KEY=your_api_key_here
-
-# Authenticate services
-gemini auth              # OAuth for Gemini (recommended)
-claude auth              # Claude authentication
-
-# Interactive setup wizard
-cgmb auth --interactive
-
-# Verify installation
-cgmb verify
 ```
 
 ### ⚠️ Important: API Costs
 
 **CGMB uses pay-per-use APIs:**
-- **Google AI Studio API**: Free tier available (15 requests/min, 1,500/day). [Pricing details](https://ai.google.dev/pricing)
-- **Claude API**: Subscription-based usage through Claude Code
-- **Monitor usage**: Use `cgmb quota-status` to get links for checking quota in Google Cloud Console
-- **Cost optimization**: CGMB automatically selects the most cost-effective layer
+- **Google AI Studio API**: Gemini API (Generative Language API) [Pricing details](https://ai.google.dev/pricing)
 
 ### Prerequisites
 
@@ -94,19 +81,19 @@ CGMB integrates seamlessly with Claude Code. Use the "CGMB" keyword for optimal 
 "CGMB generate an image of a futuristic city"
 
 # Document analysis (local files - use absolute paths)
-"CGMB analyze this document at /full/path/to/report.pdf"
+"CGMB analyze the document at /full/path/to/report.pdf"
 
 # URL analysis (direct web content processing)
-"CGMB analyze the PDF at https://example.com/document.pdf"
+"CGMB analyze https://example.com/document.pdf"
 
 # Web search (current information)
-"CGMB search for latest AI developments"
+"CGMB search for the latest AI developments"
 
 # Audio generation
 "CGMB create audio saying 'Welcome to our podcast'"
 
 # Multi-file processing
-"CGMB process the image at /path/to/image.png and document at /path/to/document.pdf together"
+"CGMB analyze the image at /path/to/image.png and the document at /path/to/document.pdf together"
 ```
 
 ### How It Works
@@ -116,47 +103,6 @@ CGMB integrates seamlessly with Claude Code. Use the "CGMB" keyword for optimal 
    - **Gemini CLI**: Web search, current information
    - **AI Studio**: Images, audio, file processing
    - **Claude Code**: Complex reasoning, code analysis
-
-## 🖥️ CLI Commands
-
-### Core Commands
-
-```bash
-# Start MCP server (for testing)
-cgmb serve
-
-# User-friendly chat interface
-cgmb chat "What are the latest AI trends?"
-cgmb c "Quick question"              # Short alias
-
-# Direct AI layer access
-cgmb gemini "search query"           # Auto-detection, no -p needed
-cgmb aistudio -f document.pdf -p "analyze this"
-
-# System verification
-cgmb verify                          # Check installation
-cgmb auth-status                     # Check authentication
-cgmb quota-status                    # Get links to check quota in Google Cloud Console
-```
-
-### Content Generation
-
-```bash
-# Image generation with content policy safety
-cgmb generate-image "professional robot assistant"
-cgmb generate-image "landscape" --output scene.png
-
-# Audio generation with TTS
-cgmb generate-audio "Welcome message" --voice Puck
-cgmb generate-audio "Announcement" --output audio.wav
-
-# Document analysis
-cgmb analyze document.pdf --type summary
-cgmb analyze doc1.pdf doc2.pdf --type compare
-
-# Multimodal processing
-cgmb multimodal image.png doc.pdf --prompt "Create report"
-```
 
 ## 🏗️ Architecture
 
@@ -224,83 +170,7 @@ CGMB automatically configures Claude Code MCP integration:
 - Direct Node.js execution for 100% compatibility
 - Safe merge without overwriting existing servers
 
-## 🔍 Important Implementation Details
-
-### Image Generation
-- Uses `gemini-2.0-flash-preview-image-generation` model
-- Automatic prompt sanitization (cute → friendly-looking)
-- Safety prefixes added automatically
-- Files saved to `output/images/`
-
-### Audio Generation
-- Uses `gemini-2.5-flash-preview-tts` model
-- Multiple voice options (Kore, Puck)
-- High-quality LINEAR16 24kHz output
-
-### PDF Processing Fix
-- Dynamic pdf-parse loading only when needed
-- Prevents audio generation interference
-- Maintains full PDF analysis capability
-
-### Web Search Priority
-- Gemini CLI has highest priority for web search
-- Auto-detection based on keywords: weather, news, stock, today, latest, current
-- Built-in grounding capabilities
-
 ## 🐛 Troubleshooting
-
-### Common Issues
-
-**Authentication Problems:**
-```bash
-cgmb auth-status --verbose           # Check detailed status
-cgmb auth --interactive              # Run setup wizard
-```
-
-**Path Detection Issues:**
-```bash
-cgmb detect-paths                    # Auto-detect CLI tools
-cgmb verify --fix                    # Auto-fix common issues
-```
-
-**Performance Issues:**
-```bash
-export CGMB_DEBUG=true               # Enable debug mode
-cgmb quota-status --detailed         # Check API usage
-```
-
-**Claude Code Integration Issues:**
-
-*Problem: URLs are being downloaded instead of processed directly*
-```bash
-# ✅ Solution: Use CGMB keyword and specify direct URL processing
-"CGMB analyze the content at https://example.com/doc.pdf"
-# ❌ Avoid: Pre-downloading URLs before CGMB analysis
-```
-
-*Problem: Relative paths not recognized*  
-```bash
-# ✅ Solution: Convert to absolute path or use CGMB path resolution
-"CGMB analyze /full/absolute/path/to/document.pdf"
-# Check current directory and convert relative paths:
-pwd  # Get current working directory
-# Then use: /current/directory/relative/path/file.pdf
-```
-
-*Problem: CGMB tools not being selected*
-```bash
-# ✅ Solution: Include "CGMB" keyword explicitly
-"CGMB process this file"              # ✅ Will trigger CGMB
-"Process this file"                   # ❌ May not trigger CGMB
-```
-
-*Problem: File processing errors*
-```bash
-# Check file permissions and existence
-ls -la /path/to/file                  # Verify file exists and permissions
-file /path/to/file                    # Check file type
-cgmb analyze --debug /path/to/file    # Debug mode for detailed error info
-```
 
 ### Debug Mode
 
@@ -310,38 +180,6 @@ export CGMB_DEBUG=true
 export LOG_LEVEL=debug
 cgmb serve --debug
 ```
-
-## 📊 Performance Monitoring
-
-### Quota Management
-
-```bash
-# Check current usage
-cgmb quota-status
-
-# Detailed breakdown
-cgmb quota-status --detailed
-```
-
-### Free Tier Limits (Google AI Studio)
-- **Requests**: 15/minute, 1,500/day
-- **Tokens**: 32,000/minute, 50,000/day
-
-⚠️ **Usage Monitoring**: Exceeding free tier limits will result in API charges. Use `cgmb quota-status` to get links for monitoring your usage in Google Cloud Console and avoid unexpected costs.
-
-## 🤝 Contributing
-
-### Development Setup
-
-```bash
-git clone https://github.com/goodaymmm/claude-gemini-multimodal-bridge.git
-cd claude-gemini-multimodal-bridge
-npm install
-npm run build
-npm run dev
-```
-
-**Note**: `package-lock.json` is excluded to prevent merge conflicts. Each environment generates its own lock file.
 
 ### Project Structure
 
@@ -383,9 +221,3 @@ src/
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **Anthropic** for Claude and MCP protocol
-- **Google** for Gemini models and AI Studio
-- **Community contributors** for feedback and improvements
