@@ -24,6 +24,13 @@
 
 ## 🚀 Quick Start
 
+### WSL Users
+
+```bash
+nvm use 22.17                        # Use correct Node.js version
+nvm current                          # Verify version
+```
+
 ### Installation
 
 ```bash
@@ -55,18 +62,19 @@ cgmb auth --interactive
 cgmb verify
 ```
 
+### ⚠️ Important: API Costs
+
+**CGMB uses pay-per-use APIs:**
+- **Google AI Studio API**: Free tier available (15 requests/min, 1,500/day). [Pricing details](https://ai.google.dev/pricing)
+- **Claude API**: Subscription-based usage through Claude Code
+- **Monitor usage**: Use `cgmb quota-status` to check your API consumption
+- **Cost optimization**: CGMB automatically selects the most cost-effective layer
+
 ### Prerequisites
 
 - **Node.js** ≥ 22.0.0
 - **Claude Code CLI** installed and configured
 - **Gemini CLI** (auto-installed)
-
-### WSL Users
-
-```bash
-nvm use 22.17                        # Use correct Node.js version
-nvm current                          # Verify version
-```
 
 ## 🎯 Usage with Claude Code
 
@@ -101,78 +109,6 @@ CGMB integrates seamlessly with Claude Code. Use the "CGMB" keyword for optimal 
    - **Gemini CLI**: Web search, current information
    - **AI Studio**: Images, audio, file processing
    - **Claude Code**: Complex reasoning, code analysis
-
-## ⚠️ Claude Code使用時の重要事項
-
-### 🌐 URL処理の注意点
-
-Claude CodeでURLを含むドキュメント分析を行う場合は、以下の点にご注意ください：
-
-#### ✅ 推奨方法
-```bash
-# CGMBを使ってURL先を直接分析
-"CGMB analyze the document at https://example.com/document.pdf"
-"Use CGMB to process the PDF at https://website.com/report.pdf"
-```
-
-#### ❌ 避けるべきパターン
-```bash
-# ❌ 事前にダウンロードしてからCGMBに渡す
-# Claude CodeがURLを自動ダウンロードしてから分析
-```
-
-**理由**: CGMBのGemini CLI層はWebコンテンツに直接アクセスでき、リアルタイム分析が可能です。事前ダウンロードは不要で、むしろCGMBの自動ルーティング機能が無効化されてしまいます。
-
-### 📁 ファイルパス指定のベストプラクティス
-
-#### ✅ 推奨: 絶対パスの使用
-```bash
-# 絶対パスで確実に指定
-"CGMB analyze /full/path/to/document.pdf"
-"Process the file at /Users/username/Documents/report.pdf with CGMB"
-```
-
-#### ⚠️ 相対パス使用時の注意
-```bash
-# 相対パスが認識されない場合は絶対パスに変換
-"CGMB analyze ../document.pdf"  # 失敗する可能性あり
-↓
-"CGMB analyze /full/absolute/path/to/document.pdf"  # 確実
-```
-
-**CGMBの自動パス解決機能**: 
-- 相対パス（`./file.pdf`, `../doc.pdf`）→ 絶対パスに自動変換
-- ファイル存在確認と読み取り権限チェック
-- 詳細なエラーメッセージで問題箇所を特定
-
-### 🎯 CGMB活用のコツ
-
-#### 1. キーワードトリガー
-Claude Codeの自動ツール選択を活用するため、必ず **"CGMB"** キーワードを含めてください：
-
-```bash
-✅ "CGMB analyze this document"
-✅ "Use CGMB to process these images" 
-❌ "Analyze this document"  # CGMBが選択されない可能性
-```
-
-#### 2. タスク別の最適な表現
-```bash
-# URL分析
-"CGMB analyze the content at [URL]"
-
-# ファイル処理  
-"CGMB process the file at [absolute_path]"
-
-# 複数ファイル
-"CGMB analyze these documents: [file1] [file2]"
-
-# 画像生成
-"CGMB generate an image of [description]"
-
-# 音声生成
-"CGMB create audio saying '[text]'"
-```
 
 ## 🖥️ CLI Commands
 
@@ -384,6 +320,8 @@ cgmb quota-status --detailed
 - **Requests**: 15/minute, 1,500/day
 - **Tokens**: 32,000/minute, 50,000/day
 
+⚠️ **Usage Monitoring**: Exceeding free tier limits will result in API charges. Always monitor your usage with `cgmb quota-status --detailed` to avoid unexpected costs.
+
 ## 🤝 Contributing
 
 ### Development Setup
@@ -419,9 +357,21 @@ src/
 
 ## 🔗 Links
 
+### Project Links
 - **GitHub Repository**: [claude-gemini-multimodal-bridge](https://github.com/goodaymmm/claude-gemini-multimodal-bridge)
 - **NPM Package**: [claude-gemini-multimodal-bridge](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 - **Issues**: [GitHub Issues](https://github.com/goodaymmm/claude-gemini-multimodal-bridge/issues)
+
+### Related Tools & APIs
+- **Claude Code**: [Documentation](https://docs.anthropic.com/en/docs/claude-code) | [Download](https://claude.ai/code)
+- **Gemini CLI**: [GitHub](https://github.com/google-gemini/gemini-cli) | [Documentation](https://ai.google.dev/gemini-api/docs/cli)
+- **Google AI Studio**: [Console](https://aistudio.google.com/) | [API Documentation](https://ai.google.dev/gemini-api/docs)
+- **MCP Protocol**: [Specification](https://modelcontextprotocol.io/) | [SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+
+### Terms & Policies
+- **Google AI Studio**: [Terms of Service](https://ai.google.dev/gemini-api/terms) | [Privacy Policy](https://policies.google.com/privacy)
+- **Claude**: [Terms of Service](https://www.anthropic.com/terms) | [Privacy Policy](https://www.anthropic.com/privacy)
+- **Gemini API**: [Usage Guidelines](https://ai.google.dev/gemini-api/docs/safety-guidance)
 
 ## 📄 License
 
@@ -432,7 +382,3 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - **Anthropic** for Claude and MCP protocol
 - **Google** for Gemini models and AI Studio
 - **Community contributors** for feedback and improvements
-
----
-
-**Version 1.0.0** - Stable release with PDF processing fix and enhanced performance optimizations.
