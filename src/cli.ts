@@ -308,62 +308,33 @@ program
 // Quota status command
 program
   .command('quota-status')
-  .description('Check Google AI Studio API quota usage')
-  .option('--detailed', 'Show detailed quota breakdown')
+  .description('Check Gemini API quota usage')
+  .option('--detailed', 'Show detailed information')
   .action(async (options) => {
-    try {
-      const { getQuotaMonitor } = await import('./utils/quotaMonitor.js');
-      
-      const quotaMonitor = getQuotaMonitor();
-      const stats = quotaMonitor.getUsageStats();
-      const status = quotaMonitor.getQuotaStatus();
-      
-      console.log('📊 Google AI Studio API Quota Status');
-      console.log('=====================================');
-      console.log(`Tier: ${stats.tier.toUpperCase()}`);
-      console.log();
-      
-      // Requests status
-      const reqStatusIcon = status.requests_daily_percent >= 90 ? '🚨' : 
-                          status.requests_daily_percent >= 80 ? '⚠️' : '✅';
-      console.log(`${reqStatusIcon} Requests (Daily): ${stats.requests.today}/${stats.requests.daily_limit} (${Math.round(status.requests_daily_percent)}%)`);
-      console.log(`   Remaining: ${stats.requests.daily_remaining}`);
-      console.log(`   Reset in: ${Math.ceil(stats.reset_times.daily_reset_in / 1000 / 60 / 60)}h`);
-      console.log();
-      
-      // Tokens status
-      const tokenStatusIcon = status.tokens_daily_percent >= 90 ? '🚨' : 
-                            status.tokens_daily_percent >= 80 ? '⚠️' : '✅';
-      console.log(`${tokenStatusIcon} Tokens (Daily): ${stats.tokens.today}/${stats.tokens.daily_limit} (${Math.round(status.tokens_daily_percent)}%)`);
-      console.log(`   Remaining: ${stats.tokens.daily_remaining}`);
-      console.log();
-      
-      // Per-minute limits
-      if (options.detailed) {
-        console.log('Per-Minute Limits:');
-        console.log(`   Requests: ${stats.requests.this_minute}/${stats.requests.minute_limit}`);
-        console.log(`   Tokens: ${stats.tokens.this_minute}/${stats.tokens.minute_limit}`);
-        console.log(`   Reset in: ${Math.ceil(stats.reset_times.minute_reset_in / 1000)}s`);
-        console.log();
-      }
-      
-      // Overall status
-      const overallIcon = status.overall_status === 'critical' ? '🚨' : 
-                         status.overall_status === 'warning' ? '⚠️' : '✅';
-      console.log(`${overallIcon} Overall Status: ${status.overall_status.toUpperCase()}`);
-      
-      if (status.overall_status === 'critical') {
-        console.log('\n⚠️  WARNING: You are near or at your quota limits.');
-        console.log('   Consider waiting or upgrading to a paid plan.');
-      } else if (status.overall_status === 'warning') {
-        console.log('\n💡 TIP: Monitor your usage to avoid hitting limits.');
-      }
-      
-    } catch (error) {
-      logger.error('Failed to get quota status', error as Error);
-      console.error('❌ Failed to get quota status:', (error as Error).message);
-      process.exit(1);
-    }
+    // Set CLI mode environment variable FIRST
+    process.env.CGMB_CLI_MODE = 'true';
+    
+    console.log('📊 Gemini API (Generative Language API) Quota Status');
+    console.log('====================================================');
+    console.log();
+    console.log('To check your actual API usage and quota:');
+    console.log();
+    console.log('1. Visit Google Cloud Console:');
+    console.log('   🔗 https://console.cloud.google.com');
+    console.log();
+    console.log('2. Navigate to:');
+    console.log('   APIs & Services → Dashboard → Generative Language API');
+    console.log();
+    console.log('3. View your real-time quota and usage metrics there.');
+    console.log();
+    console.log('📚 Official Documentation:');
+    console.log('   • Rate Limits: https://ai.google.dev/gemini-api/docs/rate-limits');
+    console.log('   • Pricing: https://ai.google.dev/gemini-api/docs/pricing');
+    console.log();
+    console.log('💡 For current free tier limits and pricing details,');
+    console.log('   please refer to the official documentation above.');
+    
+    process.exit(0);
   });
 
 // Path detection command

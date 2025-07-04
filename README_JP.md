@@ -74,7 +74,7 @@ cgmb verify
 **CGMBは従量課金制APIを使用します:**
 - **Google AI Studio API**: 無料枠あり（15リクエスト/分、1,500/日）。[料金詳細](https://ai.google.dev/pricing)
 - **Claude API**: Claude Code経由のサブスクリプションベース使用
-- **使用量監視**: `cgmb quota-status`でAPI消費を確認
+- **使用量監視**: `cgmb quota-status`でGoogle Cloud Consoleでクォータを確認するためのリンクを取得
 - **コスト最適化**: CGMBは最もコスト効率の良いレイヤーを自動選択
 
 ### 前提条件
@@ -136,7 +136,7 @@ cgmb aistudio -f document.pdf -p "これを分析"
 # システム検証
 cgmb verify                          # インストールチェック
 cgmb auth-status                     # 認証チェック
-cgmb quota-status                    # API使用量チェック
+cgmb quota-status                    # Google Cloud Consoleでクォータを確認するためのリンクを取得
 ```
 
 ### コンテンツ生成
@@ -327,7 +327,7 @@ cgmb quota-status --detailed
 - **リクエスト**: 15/分、1,500/日
 - **トークン**: 32,000/分、50,000/日
 
-⚠️ **使用量モニタリング**: 無料枠制限を超えるとAPI料金が発生します。予期しないコストを避けるため、常に`cgmb quota-status --detailed`で使用量を監視してください。
+⚠️ **使用量モニタリング**: 無料枠制限を超えるとAPI料金が発生します。`cgmb quota-status`を使用してGoogle Cloud Consoleで使用量を監視するためのリンクを取得し、予期しないコストを避けてください。
 
 ## 🤝 貢献
 

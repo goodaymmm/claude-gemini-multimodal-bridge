@@ -74,7 +74,7 @@ cgmb verify
 **CGMB uses pay-per-use APIs:**
 - **Google AI Studio API**: Free tier available (15 requests/min, 1,500/day). [Pricing details](https://ai.google.dev/pricing)
 - **Claude API**: Subscription-based usage through Claude Code
-- **Monitor usage**: Use `cgmb quota-status` to check your API consumption
+- **Monitor usage**: Use `cgmb quota-status` to get links for checking quota in Google Cloud Console
 - **Cost optimization**: CGMB automatically selects the most cost-effective layer
 
 ### Prerequisites
@@ -136,7 +136,7 @@ cgmb aistudio -f document.pdf -p "analyze this"
 # System verification
 cgmb verify                          # Check installation
 cgmb auth-status                     # Check authentication
-cgmb quota-status                    # Check API usage
+cgmb quota-status                    # Get links to check quota in Google Cloud Console
 ```
 
 ### Content Generation
@@ -327,7 +327,7 @@ cgmb quota-status --detailed
 - **Requests**: 15/minute, 1,500/day
 - **Tokens**: 32,000/minute, 50,000/day
 
-⚠️ **Usage Monitoring**: Exceeding free tier limits will result in API charges. Always monitor your usage with `cgmb quota-status --detailed` to avoid unexpected costs.
+⚠️ **Usage Monitoring**: Exceeding free tier limits will result in API charges. Use `cgmb quota-status` to get links for monitoring your usage in Google Cloud Console and avoid unexpected costs.
 
 ## 🤝 Contributing
 

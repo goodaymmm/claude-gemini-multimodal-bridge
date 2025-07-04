@@ -5,18 +5,23 @@ import { logger } from './logger.js';
  * Tracks API usage and warns when approaching limits
  */
 export class QuotaMonitor {
+  // Based on official documentation:
+  // https://ai.google.dev/gemini-api/docs/rate-limits
+  // https://ai.google.dev/gemini-api/docs/pricing
   private readonly FREE_TIER_LIMITS = {
-    requests_per_minute: 15,
-    requests_per_day: 1500,
-    tokens_per_minute: 32000,
-    tokens_per_day: 50000,
+    requests_per_minute: 15,      // Gemini Flash/Pro models
+    requests_per_day: 1500,        // Daily limit for free tier
+    tokens_per_minute: 1000000,    // 1M TPM for Gemini Flash models
+    tokens_per_day: 1500000000,    // 1.5B TPD for free tier
   };
 
+  // Pay-as-you-go tier limits vary by model
+  // These are example limits for Gemini Flash models
   private readonly PAID_TIER_LIMITS = {
-    requests_per_minute: 360,
-    requests_per_day: 30000,
-    tokens_per_minute: 120000,
-    tokens_per_day: 5000000,
+    requests_per_minute: 2000,     // Higher RPM for paid tier
+    requests_per_day: -1,          // No daily limit on paid tier
+    tokens_per_minute: 10000000,   // 10M TPM for paid tier
+    tokens_per_day: -1,            // No daily token limit on paid tier
   };
 
   private usage = {
@@ -70,8 +75,8 @@ export class QuotaMonitor {
     
     const limits = this.isPaidTier ? this.PAID_TIER_LIMITS : this.FREE_TIER_LIMITS;
     
-    // Check daily limits
-    if (this.usage.requests_today >= limits.requests_per_day) {
+    // Check daily limits (skip if -1 which means unlimited)
+    if (limits.requests_per_day > 0 && this.usage.requests_today >= limits.requests_per_day) {
       return {
         allowed: false,
         reason: 'Daily request limit exceeded',
@@ -79,7 +84,7 @@ export class QuotaMonitor {
       };
     }
     
-    if (this.usage.tokens_today + estimatedTokens > limits.tokens_per_day) {
+    if (limits.tokens_per_day > 0 && this.usage.tokens_today + estimatedTokens > limits.tokens_per_day) {
       return {
         allowed: false,
         reason: 'Daily token limit would be exceeded',
@@ -144,7 +149,7 @@ export class QuotaMonitor {
         this_minute: this.usage.requests_this_minute,
         daily_limit: limits.requests_per_day,
         minute_limit: limits.requests_per_minute,
-        daily_remaining: Math.max(0, limits.requests_per_day - this.usage.requests_today),
+        daily_remaining: limits.requests_per_day < 0 ? -1 : Math.max(0, limits.requests_per_day - this.usage.requests_today),
         minute_remaining: Math.max(0, limits.requests_per_minute - this.usage.requests_this_minute),
       },
       tokens: {
@@ -152,7 +157,7 @@ export class QuotaMonitor {
         this_minute: this.usage.tokens_this_minute,
         daily_limit: limits.tokens_per_day,
         minute_limit: limits.tokens_per_minute,
-        daily_remaining: Math.max(0, limits.tokens_per_day - this.usage.tokens_today),
+        daily_remaining: limits.tokens_per_day < 0 ? -1 : Math.max(0, limits.tokens_per_day - this.usage.tokens_today),
         minute_remaining: Math.max(0, limits.tokens_per_minute - this.usage.tokens_this_minute),
       },
       reset_times: {
@@ -176,9 +181,9 @@ export class QuotaMonitor {
     
     const limits = this.isPaidTier ? this.PAID_TIER_LIMITS : this.FREE_TIER_LIMITS;
     
-    const requests_daily_percent = (this.usage.requests_today / limits.requests_per_day) * 100;
+    const requests_daily_percent = limits.requests_per_day < 0 ? 0 : (this.usage.requests_today / limits.requests_per_day) * 100;
     const requests_minute_percent = (this.usage.requests_this_minute / limits.requests_per_minute) * 100;
-    const tokens_daily_percent = (this.usage.tokens_today / limits.tokens_per_day) * 100;
+    const tokens_daily_percent = limits.tokens_per_day < 0 ? 0 : (this.usage.tokens_today / limits.tokens_per_day) * 100;
     const tokens_minute_percent = (this.usage.tokens_this_minute / limits.tokens_per_minute) * 100;
     
     let overall_status: 'healthy' | 'warning' | 'critical' = 'healthy';
@@ -330,9 +335,12 @@ export class QuotaMonitor {
    */
   private setupPeriodicReset(): void {
     // Check every 30 seconds for resets
-    setInterval(() => {
+    const interval = setInterval(() => {
       this.resetCountersIfNeeded();
     }, 30000);
+    
+    // Allow Node.js to exit if this is the only timer
+    interval.unref();
   }
 
   /**
