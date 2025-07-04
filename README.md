@@ -1,5 +1,11 @@
 # Claude-Gemini Multimodal Bridge (CGMB)
 
+<div align="right">
+
+[🇯🇵 日本語版 README](README_JP.md)
+
+</div>
+
 🚀 **Enterprise-grade AI integration bridge** connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing and advanced multimodal processing.
 
 [![npm version](https://badge.fury.io/js/claude-gemini-multimodal-bridge.svg)](https://badge.fury.io/js/claude-gemini-multimodal-bridge)
@@ -8,13 +14,13 @@
 
 ## ✨ Key Features
 
-### 🎯 **Version 1.1.0 - Enhanced URL Routing**
-- 🌐 **Intelligent URL Routing**: PDF URLs route to Claude Code, web pages to Gemini CLI
-- 🔧 **PDF Processing Fix**: Dynamic library loading prevents audio generation errors
-- ⚡ **Timeout Optimization**: Immediate response upon task completion
-- 🗄️ **Memory Efficiency**: Eliminated unnecessary library initialization
-- 🏗️ **Stable Architecture**: Simplified and optimized layer interactions
-- 🛡️ **Enhanced Error Handling**: 95% self-healing with smart fallbacks
+### 🎯 **Version 1.0.0 - Production Ready**
+- 🔐 **OAuth Authentication**: Simplified OAuth file-based authentication for Claude Code compatibility
+- 🌐 **Automatic Translation**: Japanese to English translation for optimal image generation
+- 🔧 **Intelligent URL Routing**: PDF URLs to Claude Code, web pages to Gemini CLI
+- ⚡ **Performance Optimization**: Reduced timeouts, lazy loading, and smart caching
+- 🛡️ **Enterprise Reliability**: 95% self-healing with exponential backoff
+- 📊 **Complete Multimodal Support**: Images, audio, PDFs, and documents
 
 ### 🏗️ **Core Architecture**
 - 🔗 **3-Layer System**: Claude Code ↔ Gemini CLI ↔ AI Studio

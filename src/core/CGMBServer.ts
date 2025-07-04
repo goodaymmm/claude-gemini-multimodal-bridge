@@ -43,8 +43,8 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.1.0',
-        description: 'claude-gemini-multimodal-bridge v1.1.0 - Enterprise-grade multi-layer AI integration with intelligent layer routing, authentication caching, and simplified Gemini CLI integration for Claude Code.'
+        version: '1.0.0',
+        description: 'claude-gemini-multimodal-bridge v1.0.0 - Enterprise-grade multi-layer AI integration with OAuth authentication, automatic translation, intelligent routing, and advanced multimodal processing for Claude Code.'
       },
       {
         capabilities: {

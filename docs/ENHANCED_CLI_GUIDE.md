@@ -96,7 +96,7 @@ CGMB automatically converts problematic words:
 - Professional context: "reference photo", "educational illustration"
 
 **Important Notes**:
-- English prompts required (translate if needed)
+- **Automatic Translation**: Japanese prompts are automatically translated to English for optimal results
 - Files saved to `output/images/` by default
 - Automatic safety prefixes prevent content policy issues
 - If generation fails, try more specific descriptions
@@ -407,6 +407,9 @@ cgmb analyze docs/*.pdf --type compare --output comparison.json
 for prompt in "cat" "dog" "bird"; do
   cgmb generate-image "$prompt" -o "animal-$prompt.png"
 done
+
+# Japanese prompts are automatically translated to English
+cgmb generate-image "かわいい猫" -o neko.png  # → Translates to English for optimal results
 ```
 
 ---
@@ -440,4 +443,4 @@ npm run dev
 
 ---
 
-Last updated: 2025-07-02 | Version: 1.1.0 | genai migration complete
+Last updated: 2025-01-04 | Version: 1.0.0 | Production ready with OAuth improvements
