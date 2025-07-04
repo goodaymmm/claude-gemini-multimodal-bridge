@@ -1639,34 +1639,93 @@ program
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
 
-      // URL Detection and Auto-Routing to Gemini CLI
+      // URL Detection and Intelligent Routing
       const urlFiles = files.filter((file: string) => /^https?:\/\//.test(file));
       if (urlFiles.length > 0) {
         console.log('🌐 URL(s) detected in input:');
         urlFiles.forEach((url: string) => console.log(`   ${url}`));
         console.log('');
-        console.log('🔍 Auto-routing to Gemini CLI for URL analysis...');
         
-        // Construct analysis prompt based on input
-        let analysisPrompt: string;
-        if (urlFiles.length === 1) {
-          const basePrompt = options.prompt || `Please ${options.type} this document`;
-          analysisPrompt = `${basePrompt} for the content at ${urlFiles[0]}`;
-        } else {
-          analysisPrompt = `Analyze and ${options.type} the documents at these URLs: ${urlFiles.join(', ')}`;
+        // Separate PDF URLs from regular web URLs
+        const pdfUrls = urlFiles.filter((url: string) => url.toLowerCase().endsWith('.pdf'));
+        const webUrls = urlFiles.filter((url: string) => !url.toLowerCase().endsWith('.pdf'));
+        
+        // Handle PDF URLs with Claude Code layer
+        if (pdfUrls.length > 0) {
+          console.log('📄 PDF URL(s) detected - routing to Claude Code for optimal processing...');
+          
+          // Construct analysis prompt for PDF URLs
+          let analysisPrompt: string;
+          if (pdfUrls.length === 1) {
+            const basePrompt = options.prompt || `Please ${options.type} this PDF document`;
+            analysisPrompt = `${basePrompt} from ${pdfUrls[0]}`;
+          } else {
+            analysisPrompt = `Analyze and ${options.type} the PDF documents from these URLs: ${pdfUrls.join(', ')}`;
+          }
+          
+          console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
+          console.log('');
+          
+          // Use LayerManager with Claude Code layer for PDF processing
+          const layerManager = new LayerManager({
+            gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
+            claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
+            aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+            cache: { enabled: true, ttl: 3600 },
+            logging: { level: 'info' as const }
+          });
+          
+          try {
+            await layerManager.initializeLayers();
+            const result = await layerManager.executeWithLayer('claude', {
+              type: 'document_analysis',
+              prompt: analysisPrompt,
+              analysis_type: options.type || 'summary'
+            });
+            
+            console.log('\n📋 Result:');
+            console.log('═'.repeat(50));
+            console.log(result.data || 'Processing completed');
+            
+            if (result.metadata) {
+              console.log('\n📊 Metadata:');
+              console.log(`Processing time: ${result.metadata.duration || 'N/A'}ms`);
+              console.log(`Layer: Claude Code (PDF URL processing)`);
+            }
+          } catch (error) {
+            logger.error('PDF URL processing failed', error as Error);
+            console.log('❌ Failed to process PDF URL(s)');
+            console.log('💡 Try downloading the PDF manually and using: cgmb analyze local-file.pdf');
+            process.exit(1);
+          }
         }
         
-        console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
-        console.log('');
+        // Handle regular web URLs with Gemini CLI
+        if (webUrls.length > 0) {
+          console.log('🔍 Web URL(s) detected - routing to Gemini CLI for current information...');
+          
+          // Construct analysis prompt for web URLs
+          let analysisPrompt: string;
+          if (webUrls.length === 1) {
+            const basePrompt = options.prompt || `Please ${options.type} this webpage`;
+            analysisPrompt = `${basePrompt} at ${webUrls[0]}`;
+          } else {
+            analysisPrompt = `Analyze and ${options.type} the webpages at these URLs: ${webUrls.join(', ')}`;
+          }
+          
+          console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
+          console.log('');
+          
+          // Execute via Gemini CLI for web content
+          const geminiOptions = {
+            prompt: analysisPrompt,
+            model: 'gemini-2.5-pro',
+            fast: false
+          };
+          
+          await executeGeminiCommand(geminiOptions);
+        }
         
-        // Execute via Gemini CLI using the same function as chat command
-        const geminiOptions = {
-          prompt: analysisPrompt,
-          model: 'gemini-2.5-pro',
-          fast: false // Use CGMB layers for better URL processing
-        };
-        
-        await executeGeminiCommand(geminiOptions);
         process.exit(0);
       }
 
