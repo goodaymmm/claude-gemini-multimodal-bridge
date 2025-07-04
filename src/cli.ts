@@ -280,6 +280,9 @@ program
       
       console.log('');
       
+      // Exit immediately after displaying results (matching image/audio generation pattern)
+      process.exit(0);
+      
     } catch (error) {
       logger.error('Failed to check authentication status', error as Error);
       process.exit(1);

@@ -163,6 +163,10 @@ export class CGMBServer {
                   type: 'string',
                   description: 'User prompt for AI processing (web search, analysis, multimodal tasks)',
                 },
+                workingDirectory: {
+                  type: 'string',
+                  description: 'Working directory context for relative path resolution (optional)',
+                },
                 targetLayer: {
                   type: 'string',
                   enum: ['gemini', 'aistudio', 'adaptive'],
@@ -242,6 +246,10 @@ export class CGMBServer {
                   type: 'string',
                   description: 'Processing instructions for the multimodal content',
                 },
+                workingDirectory: {
+                  type: 'string',
+                  description: 'Working directory context for relative path resolution (optional)',
+                },
                 files: {
                   type: 'array',
                   description: 'Array of files to process',
@@ -303,6 +311,10 @@ export class CGMBServer {
                   type: 'array',
                   items: { type: 'string' },
                   description: 'List of document paths to analyze',
+                },
+                workingDirectory: {
+                  type: 'string',
+                  description: 'Working directory context for relative path resolution (optional)',
                 },
                 analysis_type: {
                   type: 'string',
@@ -709,7 +721,7 @@ export class CGMBServer {
       throw new Error('Invalid arguments: prompt is required');
     }
     
-    const { prompt, files = [], options = {} } = args as any;
+    const { prompt, files = [], options = {}, workingDirectory } = args as any;
     
     if (typeof prompt !== 'string' || !prompt.trim()) {
       throw new Error('Invalid prompt: must be a non-empty string');
@@ -739,9 +751,21 @@ export class CGMBServer {
         // File path resolution for local files
         try {
           const normalizedPath = path.normalize(filePath);
+          // Use provided working directory or fall back to process.cwd()
+          const baseDir = workingDirectory || process.cwd();
           const resolvedPath = path.isAbsolute(normalizedPath) 
             ? normalizedPath 
-            : path.resolve(process.cwd(), normalizedPath);
+            : path.resolve(baseDir, normalizedPath);
+          
+          // Log path resolution for debugging
+          if (workingDirectory && !path.isAbsolute(normalizedPath)) {
+            logger.info(`Relative path resolution using provided working directory`, {
+              originalPath: filePath,
+              normalizedPath,
+              workingDirectory,
+              resolvedPath
+            });
+          }
           
           // Check file existence and permissions
           if (fs.existsSync(resolvedPath)) {

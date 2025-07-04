@@ -63,6 +63,7 @@ export type ProcessingOptions = z.infer<typeof ProcessingOptionsSchema>;
 // Tool Input Schemas
 export const MultimodalProcessArgsSchema = z.object({
   prompt: z.string().min(1),
+  workingDirectory: z.string().optional(),
   files: z.array(FileReferenceSchema),
   workflow: z.enum(['analysis', 'conversion', 'extraction', 'generation']),
   options: ProcessingOptionsSchema.optional(),
@@ -71,6 +72,7 @@ export type MultimodalProcessArgs = z.infer<typeof MultimodalProcessArgsSchema>;
 
 export const DocumentAnalysisArgsSchema = z.object({
   documents: z.array(z.string().min(1)),
+  workingDirectory: z.string().optional(),
   analysis_type: z.enum(['summary', 'comparison', 'extraction', 'translation']),
   output_requirements: z.string().optional(),
   options: ProcessingOptionsSchema.optional(),
@@ -352,6 +354,7 @@ export type FormattedLayerData = z.infer<typeof FormattedLayerDataSchema>;
 // Enhanced CGMB request with preformatting support
 export const EnhancedCGMBRequestSchema = z.object({
   prompt: z.string(),
+  workingDirectory: z.string().optional(),
   targetLayer: TargetLayerSchema.optional(),
   preformatted: z.boolean().optional(),
   formattedData: FormattedLayerDataSchema.optional(),
