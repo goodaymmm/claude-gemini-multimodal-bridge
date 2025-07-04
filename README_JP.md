@@ -79,6 +79,25 @@ cgmb setup-mcp --force
 # 変更を適用するためClaude Codeを再起動
 ```
 
+#### Claude Codeでの初回セットアップ
+
+NPMインストール後、Claude Codeに以下の初回プロンプトでCGMBを認識させてください：
+
+```
+NPMでCGMBをインストールしたので、今の環境からcgmbコマンドを探してください。使い方も教えてください。
+```
+
+Claude Codeは以下を実行します：
+1. PATHから`cgmb`コマンドを検出
+2. `cgmb --help`で利用可能なコマンドを表示
+3. `cgmb chat`などの機能の使い方を説明
+
+検出後の使用例：
+```bash
+cgmb chat "今日のニュースを検索して"
+cgmb generate-image "美しい夕日"
+```
+
 ### 認証セットアップ
 
 ```bash
