@@ -185,6 +185,14 @@ export class CGMBServer {
               '• "CGMB create audio saying welcome"\n' +
               '• "CGMB process image.png and doc.pdf"\n' +
               '\n' +
+              '⚠️ **Usage Guidelines**:\n' +
+              '• ✅ **Recommended Commands** (for normal use):\n' +
+              '  - chat/search/analyze/generate-image/generate-audio\n' +
+              '  - Example: "cgmb chat \'latest AI news\'"\n' +
+              '• ⚠️ **Internal Commands** (usually not needed):\n' +
+              '  - gemini/aistudio → Debug/test specific layers\n' +
+              '  - Use recommended commands instead\n' +
+              '\n' +
               '⚠️ **Important**: Always include "CGMB" keyword to trigger this tool',
             inputSchema: {
               type: 'object',

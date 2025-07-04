@@ -481,10 +481,8 @@ export class GeminiCLILayer implements LayerInterface {
 
     const languageName = languageNames[sourceLang] || sourceLang;
     
-    // Optimized translation prompt for image generation
-    const translationPrompt = `Translate the following ${languageName} text to English. Keep the meaning and descriptive details, but make it suitable for image generation. Only return the English translation, nothing else:
-
-${text}`;
+    // Simplified translation prompt for image generation
+    const translationPrompt = `Translate to English for image generation: ${text}`;
 
     logger.info(`Translating ${languageName} prompt to English using Gemini CLI`, {
       originalText: text,
@@ -497,7 +495,7 @@ ${text}`;
         type: 'translation',
         prompt: translationPrompt,
         useSearch: false, // No web search needed for translation
-        model: 'gemini-2.0-flash-exp' // Fast model for translation
+        model: 'gemini-2.5-pro' // Default Gemini CLI model
       });
 
       if (!result.success || !result.data) {

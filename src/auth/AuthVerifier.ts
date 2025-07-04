@@ -16,7 +16,7 @@ export class AuthVerifier {
 
   constructor() {
     this.oauthManager = new OAuthManager();
-    this.authCache = new AuthCache();
+    this.authCache = AuthCache.getInstance();
     
     // Setup periodic cache cleanup (every 30 minutes)
     setInterval(() => {
@@ -132,8 +132,15 @@ export class AuthVerifier {
             actionInstructions: 'Run "gemini auth" for OAuth (recommended) or set GEMINI_API_KEY environment variable',
           };
           
-          // Cache failed authentication briefly to avoid spam
+          // Cache failed authentication with exponential backoff
           this.authCache.set('gemini', result);
+          
+          // Add failure info to error message
+          const failureInfo = this.authCache.getFailureInfo('gemini');
+          if (failureInfo && failureInfo.nextRetryTime) {
+            result.error += ` (Failure #${failureInfo.count}, retry after ${failureInfo.nextRetryTime.toLocaleTimeString()})`;
+          }
+          
           return result;
           
         } catch (error) {
@@ -232,8 +239,15 @@ export class AuthVerifier {
             actionInstructions: 'Set AI_STUDIO_API_KEY environment variable with your AI Studio API key. Get it from: https://aistudio.google.com/app/apikey',
           };
           
-          // Cache failed authentication to avoid repeated checks
+          // Cache failed authentication with exponential backoff
           this.authCache.set('aistudio', result);
+          
+          // Add failure info to error message
+          const failureInfo = this.authCache.getFailureInfo('aistudio');
+          if (failureInfo && failureInfo.nextRetryTime) {
+            result.error += ` (Failure #${failureInfo.count}, retry after ${failureInfo.nextRetryTime.toLocaleTimeString()})`;
+          }
+          
           return result;
         }
 

@@ -11,6 +11,7 @@ import fs from 'fs';
 import { OAuthManager } from './auth/OAuthManager.js';
 import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
+import { AuthCache } from './auth/AuthCache.js';
 import { LayerManager } from './core/LayerManager.js';
 import { Logger } from './utils/logger.js';
 import { TimeoutManager, withCLITimeout } from './utils/TimeoutManager.js';
@@ -202,6 +203,7 @@ program
   .option('--service <service>', 'Specific service to authenticate (gemini|aistudio|claude)')
   .option('--method <method>', 'Authentication method (oauth|apikey)')
   .option('--interactive', 'Interactive authentication setup')
+  .option('--reset-cache', 'Reset authentication cache')
   .action(async (options) => {
     try {
       // Load environment variables
@@ -211,6 +213,20 @@ program
       const interactiveSetup = new InteractiveSetup();
       
       logger.info('CGMB Authentication Manager');
+      
+      // Handle cache reset
+      if (options.resetCache) {
+        const authCache = AuthCache.getInstance();
+        if (options.service) {
+          authCache.forceRefresh(options.service as keyof typeof authCache['TTL_SETTINGS']);
+          console.log(`✅ Authentication cache cleared for ${options.service}`);
+        } else {
+          authCache.clear();
+          console.log('✅ All authentication cache cleared');
+        }
+        console.log('💡 Next authentication check will verify fresh credentials');
+        process.exit(0);
+      }
       
       if (options.interactive) {
         await interactiveSetup.runAuthSetupWizard();
@@ -1796,9 +1812,15 @@ program
 
       console.log('📄 Analyzing documents with AI Studio...');
       console.log(`📁 Files (${resolvedFiles.length}):`);
-      resolvedFiles.forEach((file: string) => {
-        const relativePath = path.relative(process.cwd(), file);
-        console.log(`   ${relativePath} (${file})`);
+      console.log(`📂 Current directory: ${process.cwd()}`);
+      resolvedFiles.forEach((file: string, index: number) => {
+        const originalFile = files[resolvedFiles.indexOf(file)] || file;
+        const isRelative = !path.isAbsolute(originalFile);
+        if (isRelative && originalFile !== file) {
+          console.log(`   ${originalFile} → ${file}`);
+        } else {
+          console.log(`   ${file}`);
+        }
       });
       
       // Multiple PDF Detection for Special Handling
