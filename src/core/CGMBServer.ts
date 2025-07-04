@@ -12,6 +12,8 @@ import {
 import { LayerManager } from './LayerManager.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
+import path from 'path';
+import fs from 'fs';
 import {
   CGMBError,
   DocumentAnalysisArgs,
@@ -533,10 +535,56 @@ export class CGMBServer {
         logger.info('Request normalized', {
           hasCGMB: normalizedRequest.hasCGMB,
           promptLength: normalizedRequest.prompt.length,
-          filesCount: normalizedRequest.files.length
+          filesCount: normalizedRequest.files.length,
+          hasUrls: normalizedRequest.hasUrls,
+          urlCount: normalizedRequest.urlsDetected.length
         });
         
-        // 2. Convert to format that each layer can understand
+        // 2. URL Auto-routing: If URLs detected, route directly to Gemini CLI
+        if (normalizedRequest.hasUrls) {
+          logger.info('URLs detected - auto-routing to Gemini CLI layer', {
+            urls: normalizedRequest.urlsDetected,
+            originalPrompt: normalizedRequest.prompt
+          });
+          
+          // Construct analysis prompt based on URLs and original request
+          let analysisPrompt: string;
+          if (normalizedRequest.urlsDetected.length === 1) {
+            const basePrompt = normalizedRequest.prompt.toLowerCase().includes('analyze') 
+              ? normalizedRequest.prompt 
+              : `Analyze the content at ${normalizedRequest.urlsDetected[0]}`;
+            analysisPrompt = basePrompt;
+          } else {
+            analysisPrompt = `Analyze the content at these URLs: ${normalizedRequest.urlsDetected.join(', ')}. ${normalizedRequest.prompt}`;
+          }
+          
+          logger.info('Executing URL analysis via Gemini CLI', { analysisPrompt });
+          
+          // Direct execution on Gemini layer for URL processing
+          const result = await this.layerManager.getGeminiLayer().execute({
+            type: 'text_processing',
+            prompt: analysisPrompt,
+            files: [],
+            useSearch: true // Enable web search for URL content access
+          });
+          
+          // Format response for URL processing
+          const urlResponse = {
+            success: result.success,
+            data: result.data,
+            metadata: {
+              ...result.metadata,
+              layer: 'gemini',
+              routing_reason: 'url_auto_routing',
+              urls_processed: normalizedRequest.urlsDetected.length,
+              processing_time: result.metadata?.duration || 0
+            }
+          };
+          
+          return this.formatResponse(urlResponse, normalizedRequest.hasCGMB);
+        }
+        
+        // 3. Convert to format that each layer can understand (for non-URL requests)
         const convertedRequest = this.convertForLayers(
           normalizedRequest.prompt,
           normalizedRequest.files,
@@ -547,7 +595,7 @@ export class CGMBServer {
           optionsKeys: Object.keys(convertedRequest.options)
         });
         
-        // 3. Delegate to LayerManager for intelligent routing
+        // 4. Delegate to LayerManager for intelligent routing (non-URL requests)
         logger.info('Calling LayerManager.processMultimodal...');
         const result = await this.layerManager.processMultimodal(
           convertedRequest.prompt,
@@ -561,7 +609,7 @@ export class CGMBServer {
           hasSummary: !!result.summary
         });
 
-        // 4. Format unified response
+        // 5. Format unified response
         const response = this.formatResponse(result, normalizedRequest.hasCGMB);
         logger.info('Response formatted', {
           contentLength: (response.content?.[0] as any)?.text?.length || 0
@@ -646,13 +694,15 @@ export class CGMBServer {
   }
 
   /**
-   * Validate and normalize input from Claude Code
+   * Validate and normalize input from Claude Code with URL detection and file path resolution
    */
   private validateAndNormalize(args: unknown): {
     prompt: string;
     files: any[];
     options: any;
     hasCGMB: boolean;
+    hasUrls: boolean;
+    urlsDetected: string[];
   } {
     // Basic validation
     if (!args || typeof args !== 'object' || !('prompt' in args)) {
@@ -668,11 +718,82 @@ export class CGMBServer {
     // Simple CGMB keyword detection
     const hasCGMB = prompt.toLowerCase().includes('cgmb');
 
+    // URL Detection - check for URLs in the prompt and file paths
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const urlsInPrompt = prompt.match(urlRegex) || [];
+    
+    // Also check file paths for URLs
+    const fileArray = Array.isArray(files) ? files : [];
+    const urlsInFiles: string[] = [];
+    const resolvedFiles: any[] = [];
+    
+    for (const file of fileArray) {
+      const filePath = typeof file === 'string' ? file : (file?.path || '');
+      
+      // Check if file path is actually a URL
+      if (/^https?:\/\//.test(filePath)) {
+        urlsInFiles.push(filePath);
+        // Keep URL files as-is for URL routing
+        resolvedFiles.push(typeof file === 'string' ? { path: filePath, type: 'url' } : { ...file, type: 'url' });
+      } else if (filePath) {
+        // File path resolution for local files
+        try {
+          const normalizedPath = path.normalize(filePath);
+          const resolvedPath = path.isAbsolute(normalizedPath) 
+            ? normalizedPath 
+            : path.resolve(process.cwd(), normalizedPath);
+          
+          // Check file existence and permissions
+          if (fs.existsSync(resolvedPath)) {
+            const stats = fs.statSync(resolvedPath);
+            if (stats.isFile()) {
+              try {
+                fs.accessSync(resolvedPath, fs.constants.R_OK);
+                // File is accessible, add resolved path
+                resolvedFiles.push(typeof file === 'string' 
+                  ? { path: resolvedPath, type: 'document' }
+                  : { ...file, path: resolvedPath, type: file.type || 'document' });
+              } catch (permError) {
+                logger.warn(`File permission denied: ${filePath} -> ${resolvedPath}`);
+                throw new Error(`Permission denied for file: ${filePath}`);
+              }
+            } else {
+              logger.warn(`Path is not a file: ${filePath} -> ${resolvedPath}`);
+              throw new Error(`Path is not a file: ${filePath}`);
+            }
+          } else {
+            logger.warn(`File not found: ${filePath} -> ${resolvedPath}`);
+            throw new Error(`File not found: ${filePath}. Resolved path: ${resolvedPath}`);
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('not found')) {
+            throw error; // Re-throw file not found errors with context
+          }
+          logger.warn(`File path resolution error: ${filePath}`, error as Error);
+          throw new Error(`Invalid file path: ${filePath}`);
+        }
+      }
+    }
+    
+    const urlsDetected = [...urlsInPrompt, ...urlsInFiles];
+    const hasUrls = urlsDetected.length > 0;
+    
+    if (hasUrls) {
+      logger.info(`URLs detected in request`, { 
+        urlCount: urlsDetected.length,
+        urls: urlsDetected.slice(0, 3), // Log first 3 URLs for debugging
+        inPrompt: urlsInPrompt.length,
+        inFiles: urlsInFiles.length
+      });
+    }
+
     return {
       prompt: prompt.trim(),
-      files: Array.isArray(files) ? files : [],
+      files: resolvedFiles,
       options: typeof options === 'object' ? options : {},
-      hasCGMB
+      hasCGMB,
+      hasUrls,
+      urlsDetected
     };
   }
 
