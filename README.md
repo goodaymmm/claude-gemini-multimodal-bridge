@@ -194,12 +194,6 @@ src/
 └── mcp-servers/    # Custom MCP servers
 ```
 
-## 📄 Documentation
-
-- **[Enhanced CLI Guide](docs/ENHANCED_CLI_GUIDE.md)**: Comprehensive command reference
-- **[Project Files](PROJECT_FILES.md)**: Complete file structure overview
-- **[Claude Code Guidelines](CLAUDE.md)**: Integration guidelines for Claude Code
-
 ## 🔗 Links
 
 ### Project Links

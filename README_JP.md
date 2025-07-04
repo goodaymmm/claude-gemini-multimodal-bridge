@@ -195,12 +195,6 @@ src/
 └── mcp-servers/    # カスタムMCPサーバー
 ```
 
-## 📄 ドキュメント
-
-- **[拡張CLIガイド](docs/ENHANCED_CLI_GUIDE.md)**: 包括的なコマンドリファレンス
-- **[プロジェクトファイル](PROJECT_FILES.md)**: 完全なファイル構造の概要
-- **[Claude Codeガイドライン](CLAUDE.md)**: Claude Code用の統合ガイドライン
-
 ## 🔗 リンク
 
 ### プロジェクトリンク
