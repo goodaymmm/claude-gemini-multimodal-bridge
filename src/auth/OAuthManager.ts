@@ -2,6 +2,9 @@ import { execSync, spawn } from 'child_process';
 import { AuthenticationError, AuthErrorCode, AuthStatus } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
+import path from 'path';
+import fs from 'fs';
+import os from 'os';
 
 /**
  * OAuthManager handles OAuth flow management and Gemini CLI authentication
@@ -13,6 +16,7 @@ export class OAuthManager {
 
   /**
    * Check Gemini CLI authentication status
+   * Simplified to check OAuth file and API key without executing gemini commands
    */
   async checkGeminiAuthentication(): Promise<AuthStatus> {
     return safeExecute(
@@ -23,20 +27,58 @@ export class OAuthManager {
           return cached;
         }
 
-        // Detect authentication method
-        const method = await this.detectAuthMethod();
+        // Check OAuth authentication file first
+        const oauthFile = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
         
-        if (method === 'api_key') {
-          return this.checkApiKeyAuth();
-        } else if (method === 'oauth') {
-          return this.checkOAuthAuth();
-        } else {
-          return {
-            isAuthenticated: false,
-            method: 'oauth',
-            userInfo: undefined,
-          };
+        if (fs.existsSync(oauthFile)) {
+          try {
+            const creds = JSON.parse(fs.readFileSync(oauthFile, 'utf8'));
+            
+            // If credentials exist (access_token or refresh_token), consider authenticated
+            if (creds.access_token || creds.refresh_token) {
+              const status: AuthStatus = {
+                isAuthenticated: true,
+                method: 'oauth',
+                userInfo: {
+                  planType: 'free',
+                  email: undefined,
+                  quotaRemaining: undefined
+                }
+              };
+              
+              this.updateCache('gemini', status);
+              return status;
+            }
+          } catch (error) {
+            logger.warn('OAuth credentials file exists but could not be read', { 
+              error: error instanceof Error ? error.message : String(error) 
+            });
+          }
         }
+        
+        // Check API Key as fallback
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (apiKey && apiKey.length > 10) {
+          const status: AuthStatus = {
+            isAuthenticated: true,
+            method: 'api_key',
+            userInfo: {
+              planType: 'free',
+              email: undefined,
+              quotaRemaining: undefined
+            }
+          };
+          
+          this.updateCache('gemini', status);
+          return status;
+        }
+        
+        // No authentication found
+        return {
+          isAuthenticated: false,
+          method: 'oauth',
+          userInfo: undefined,
+        };
       },
       {
         operationName: 'check-gemini-auth',
@@ -72,9 +114,8 @@ export class OAuthManager {
           if (result) {
             logger.info('OAuth authentication successful');
             
-            // Verify authentication worked
-            const status = await this.checkOAuthAuth();
-            this.updateCache('gemini', status);
+            // Verify authentication worked by checking file
+            const status = await this.checkGeminiAuthentication();
             
             return status.isAuthenticated;
           }
@@ -150,9 +191,16 @@ export class OAuthManager {
 
   /**
    * Detect current authentication method (OAuth vs API key)
+   * Simplified to check files and env vars only
    */
   private async detectAuthMethod(): Promise<'oauth' | 'api_key' | 'none'> {
-    // Check for Gemini-specific API keys only (exclude AI_STUDIO_API_KEY)
+    // Check for OAuth file first
+    const oauthFile = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
+    if (fs.existsSync(oauthFile)) {
+      return 'oauth';
+    }
+    
+    // Check for Gemini-specific API keys
     const geminiApiKey = process.env.GEMINI_API_KEY ||  // Gemini CLI specific
                          process.env.GOOGLE_API_KEY;   // Legacy support
                    
@@ -160,27 +208,16 @@ export class OAuthManager {
       return 'api_key';
     }
 
-    // Check if gemini CLI is available and authenticated
-    try {
-      const hasGeminiCLI = await this.checkGeminiCLIAvailable();
-      if (hasGeminiCLI) {
-        return 'oauth';
-      }
-    } catch (error) {
-      logger.debug('Gemini CLI not available', { error: (error as Error).message });
-    }
-
     return 'none';
   }
 
   /**
    * Check API key authentication
+   * Only checks Gemini-specific API keys
    */
   private async checkApiKeyAuth(): Promise<AuthStatus> {
-    const apiKey = process.env.AI_STUDIO_API_KEY || 
-                   process.env.GOOGLE_AI_STUDIO_API_KEY ||
-                   process.env.GEMINI_API_KEY ||  // Backward compatibility
-                   process.env.GOOGLE_API_KEY;   // Legacy support
+    const apiKey = process.env.GEMINI_API_KEY ||  // Gemini CLI specific
+                   process.env.GOOGLE_API_KEY;    // Legacy support
     
     if (!apiKey) {
       return {
@@ -190,8 +227,8 @@ export class OAuthManager {
       };
     }
 
-    // Validate API key format (basic check)
-    if (apiKey.length < 20 || !apiKey.startsWith('AI')) {
+    // Basic validation - Gemini API keys have different format than AI Studio
+    if (apiKey.length < 10) {
       logger.warn('API key format appears invalid');
       return {
         isAuthenticated: false,
@@ -214,43 +251,37 @@ export class OAuthManager {
   }
 
   /**
-   * Check OAuth authentication via Gemini CLI
+   * Check OAuth authentication via file existence
+   * Removed dependency on gemini command execution
    */
   private async checkOAuthAuth(): Promise<AuthStatus> {
-    try {
-      // Try a simple gemini command to test authentication
-      const output = execSync('gemini --version', { 
-        encoding: 'utf8', 
-        timeout: 5000,
-        stdio: 'pipe'
-      });
-
-      if (output && !output.toLowerCase().includes('error')) {
-        return {
-          isAuthenticated: true,
-          method: 'oauth',
-          userInfo: {
-            email: undefined, // Could be extracted from gemini CLI if available
-            quotaRemaining: undefined,
-            planType: 'free',
-          },
-        };
+    const oauthFile = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
+    
+    if (fs.existsSync(oauthFile)) {
+      try {
+        const creds = JSON.parse(fs.readFileSync(oauthFile, 'utf8'));
+        
+        if (creds.access_token || creds.refresh_token) {
+          return {
+            isAuthenticated: true,
+            method: 'oauth',
+            userInfo: {
+              email: undefined,
+              quotaRemaining: undefined,
+              planType: 'free',
+            },
+          };
+        }
+      } catch (error) {
+        logger.debug('OAuth credentials file could not be parsed', { error: (error as Error).message });
       }
-
-      return {
-        isAuthenticated: false,
-        method: 'oauth',
-        userInfo: undefined,
-      };
-      
-    } catch (error) {
-      logger.debug('OAuth authentication check failed', { error: (error as Error).message });
-      return {
-        isAuthenticated: false,
-        method: 'oauth',
-        userInfo: undefined,
-      };
     }
+    
+    return {
+      isAuthenticated: false,
+      method: 'oauth',
+      userInfo: undefined,
+    };
   }
 
   /**

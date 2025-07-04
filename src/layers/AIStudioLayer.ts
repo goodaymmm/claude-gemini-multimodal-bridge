@@ -639,23 +639,33 @@ export class AIStudioLayer implements LayerInterface {
               language: `${languageName} → English`
             });
           } catch (translationError) {
-            logger.error('🔧 COMPLETE GeminiCLI translation error with full stack trace', {
-              errorMessage: translationError instanceof Error ? translationError.message : String(translationError),
-              errorType: translationError instanceof Error ? translationError.constructor.name : typeof translationError,
-              fullStack: translationError instanceof Error ? translationError.stack : 'No stack',
-              geminiLayerAvailable: !!this.geminiLayer,
-              hasTranslateMethod: this.geminiLayer ? typeof this.geminiLayer.translateToEnglish === 'function' : false,
-              geminiLayerMethods: this.geminiLayer ? Object.getOwnPropertyNames(Object.getPrototypeOf(this.geminiLayer)) : [],
-              originalPrompt: prompt.substring(0, 100),
-              corePrompt: corePrompt.substring(0, 100)
+            logger.warn('Translation unavailable. Continuing with image generation in the input language.', {
+              error: translationError instanceof Error ? translationError.message : String(translationError),
+              originalLanguage: detectedLang,
+              languageName,
+              originalPrompt: prompt.substring(0, 100)
             });
+            
+            console.log('⚠️ Translation unavailable. Continuing with image generation in the input language.');
             // processedPrompt remains as original prompt
           }
         } else {
-          logger.warn('GeminiCLI translateToEnglish method not available, using original prompt');
+          logger.warn('Translation unavailable. Continuing with image generation in the input language.', {
+            reason: 'translateToEnglish method not found',
+            originalLanguage: detectedLang,
+            languageName
+          });
+          
+          console.log('⚠️ Translation unavailable. Continuing with image generation in the input language.');
         }
       } else {
-        logger.warn('GeminiCLI layer not available for translation, using original prompt');
+        logger.warn('Translation unavailable. Continuing with image generation in the input language.', {
+          reason: 'GeminiCLI layer not available',
+          originalLanguage: detectedLang,
+          languageName
+        });
+        
+        console.log('⚠️ Translation unavailable. Continuing with image generation in the input language.');
       }
     }
     

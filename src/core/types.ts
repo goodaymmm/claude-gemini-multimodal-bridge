@@ -180,6 +180,8 @@ export interface LayerInterface {
   getCapabilities(): string[];
   getCost(task: any): number;
   getEstimatedDuration(task: any): number;
+  // Optional methods
+  translateToEnglish?(text: string, sourceLang: string): Promise<string>;
 }
 
 // MCP Tool Result

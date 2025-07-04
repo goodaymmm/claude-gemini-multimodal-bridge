@@ -50,6 +50,7 @@ export class GeminiCLILayer implements LayerInterface {
 
   /**
    * Initialize the Gemini CLI layer with minimal overhead
+   * Simplified to only check authentication status without blocking
    */
   async initialize(): Promise<void> {
     if (this.isInitialized) {
@@ -58,28 +59,30 @@ export class GeminiCLILayer implements LayerInterface {
 
     return safeExecute(
       async () => {
-        logger.info('Initializing Gemini CLI layer (simplified)...');
+        logger.info('Initializing Gemini CLI layer...');
 
-        // Verify authentication using enhanced caching
+        // Check authentication status but don't block on failure
         const authResult = await this.authVerifier.verifyGeminiAuth();
         if (!authResult.success) {
-          throw new Error(`Gemini CLI authentication failed: ${authResult.error}`);
+          logger.info('Gemini authentication not configured. Some features may not work.', {
+            error: authResult.error,
+            instructions: 'Run "cgmb auth --service gemini" to authenticate'
+          });
         }
 
-        // Find Gemini CLI path
-        this.geminiPath = await this.findGeminiPath() || 'gemini';
+        // Set default gemini path - will be resolved on actual use
+        this.geminiPath = 'gemini';
 
         this.isInitialized = true;
-        logger.info('Gemini CLI layer initialized successfully', {
-          geminiPath: this.geminiPath,
+        logger.info('Gemini CLI layer initialized', {
           authenticated: authResult.success,
-          authMethod: authResult.status?.method || 'unknown',
+          authMethod: authResult.status?.method || 'none',
         });
       },
       {
         operationName: 'initialize-gemini-cli-layer',
         layer: 'gemini',
-        timeout: 30000,
+        timeout: 10000, // Reduced timeout since we're not executing commands
       }
     );
   }
@@ -302,6 +305,14 @@ export class GeminiCLILayer implements LayerInterface {
    * Core Gemini CLI execution - mcp-gemini-cli style with error enhancements
    */
   private async executeGeminiCLI(prompt: string, options: { model?: string } = {}): Promise<string> {
+    // Lazy load gemini path on first use
+    if (this.geminiPath === 'gemini') {
+      const resolvedPath = await this.findGeminiPath();
+      if (resolvedPath) {
+        this.geminiPath = resolvedPath;
+      }
+    }
+    
     const args = ['-p', prompt];
     
     if (options.model && options.model !== this.DEFAULT_MODEL) {
