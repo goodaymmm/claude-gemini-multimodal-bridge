@@ -68,34 +68,12 @@ nano .env  # or use your preferred editor
 
 Note: The `.env` file should be created in the directory where you'll run CGMB commands.
 
-#### Troubleshooting MCP Integration
-
-If Claude Code cannot find the CGMB tools, run:
-
-```bash
-# Reconfigure MCP with environment detection
-cgmb setup-mcp --force
-
-# Restart Claude Code to apply changes
-```
-
 #### First-time Setup with Claude Code
 
 After NPM installation, help Claude Code discover CGMB with this initial prompt:
 
 ```
 I installed CGMB via NPM. Please check my current environment for the cgmb command and help me use it.
-```
-
-Claude Code will then:
-1. Find the `cgmb` command in your PATH
-2. Show you available commands with `cgmb --help`
-3. Help you use features like `cgmb chat` for queries
-
-Example usage after discovery:
-```bash
-cgmb chat "search for today's news"
-cgmb generate-image "a beautiful sunset"
 ```
 
 ### Authentication Setup

@@ -68,17 +68,6 @@ nano .env  # またはお好みのエディタを使用
 
 注意：`.env`ファイルはCGMBコマンドを実行するディレクトリに作成してください。
 
-#### MCPインテグレーションのトラブルシューティング
-
-Claude CodeがCGMBツールを認識しない場合：
-
-```bash
-# 環境検出付きでMCPを再設定
-cgmb setup-mcp --force
-
-# 変更を適用するためClaude Codeを再起動
-```
-
 #### Claude Codeでの初回セットアップ
 
 NPMインストール後、Claude Codeに以下の初回プロンプトでCGMBを認識させてください：
