@@ -68,6 +68,17 @@ nano .env  # or use your preferred editor
 
 Note: The `.env` file should be created in the directory where you'll run CGMB commands.
 
+#### Gemini CLI Authentication
+
+Set up authentication using Gemini CLI:
+
+```bash
+# Gemini CLI authentication
+gemini
+```
+
+This enables web search and current information retrieval through Gemini CLI.
+
 #### First-time Setup with Claude Code
 
 After NPM installation, help Claude Code discover CGMB with this initial prompt:

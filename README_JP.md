@@ -68,6 +68,17 @@ nano .env  # またはお好みのエディタを使用
 
 注意：`.env`ファイルはCGMBコマンドを実行するディレクトリに作成してください。
 
+#### Gemini CLIの認証
+
+Gemini CLIを使用して認証を設定してください：
+
+```bash
+# Gemini CLIの認証
+gemini
+```
+
+Gemini CLIを通じてWeb検索や最新情報の取得が可能になります。
+
 #### Claude Codeでの初回セットアップ
 
 NPMインストール後、Claude Codeに以下の初回プロンプトでCGMBを認識させてください：
