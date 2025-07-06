@@ -1205,6 +1205,83 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Resolve MCP server path with multiple fallback strategies
+   */
+  private resolveMCPServerPath(): string {
+    const serverFileName = 'ai-studio-mcp-server.js';
+    
+    // Strategy 1: Development mode (current working directory)
+    const devPath = join(process.cwd(), 'dist', 'mcp-servers', serverFileName);
+    if (fs.existsSync(devPath)) {
+      logger.debug('Using development MCP server path', { path: devPath });
+      return devPath;
+    }
+    
+    // Strategy 2: NPM local install (node_modules)
+    const localNpmPath = join(process.cwd(), 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName);
+    if (fs.existsSync(localNpmPath)) {
+      logger.debug('Using local npm install MCP server path', { path: localNpmPath });
+      return localNpmPath;
+    }
+    
+    // Strategy 3: Global npm install via require.resolve
+    try {
+      const packagePath = require.resolve('claude-gemini-multimodal-bridge/package.json');
+      const packageDir = dirname(packagePath);
+      const globalNpmPath = join(packageDir, 'dist', 'mcp-servers', serverFileName);
+      if (fs.existsSync(globalNpmPath)) {
+        logger.debug('Using global npm install MCP server path', { path: globalNpmPath });
+        return globalNpmPath;
+      }
+    } catch (error) {
+      logger.debug('Could not resolve package via require.resolve', { error: (error as Error).message });
+    }
+    
+    // Strategy 4: Search in typical global npm locations
+    const globalPaths = [
+      join(process.env.HOME || process.env.USERPROFILE || '', '.nvm', 'versions', 'node', process.version, 'lib', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
+      join('/usr/local/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
+      join('/opt/homebrew/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName)
+    ];
+    
+    for (const globalPath of globalPaths) {
+      if (fs.existsSync(globalPath)) {
+        logger.debug('Using global npm path from search', { path: globalPath });
+        return globalPath;
+      }
+    }
+    
+    // Strategy 5: Check if running from global npm installation (current directory check)
+    const currentDirPath = join(__dirname, '..', 'mcp-servers', serverFileName);
+    if (fs.existsSync(currentDirPath)) {
+      logger.debug('Using current directory relative path', { path: currentDirPath });
+      return currentDirPath;
+    }
+    
+    // Strategy 6: Last resort - try module directory traversal
+    try {
+      const moduleDir = dirname(require.resolve('claude-gemini-multimodal-bridge'));
+      const modulePath = join(moduleDir, 'mcp-servers', serverFileName);
+      if (fs.existsSync(modulePath)) {
+        logger.debug('Using module directory path', { path: modulePath });
+        return modulePath;
+      }
+    } catch (error) {
+      logger.debug('Module directory traversal failed', { error: (error as Error).message });
+    }
+    
+    // If all strategies fail, return the development path as fallback
+    logger.warn('Could not resolve MCP server path, using development fallback', { 
+      fallbackPath: devPath,
+      cwd: process.cwd(),
+      __dirname,
+      strategies_tried: ['development', 'local_npm', 'global_npm_resolve', 'global_paths_search', 'current_dir_relative', 'module_traversal']
+    });
+    
+    return devPath;
+  }
+
+  /**
    * Get or create persistent MCP process for better performance
    */
   private async getPersistentMCPProcess(): Promise<any> {
@@ -1226,7 +1303,18 @@ export class AIStudioLayer implements LayerInterface {
 
       logger.debug('Starting persistent AI Studio MCP process...');
       
-      const mcpServerPath = join(process.cwd(), 'dist', 'mcp-servers', 'ai-studio-mcp-server.js');
+      const mcpServerPath = this.resolveMCPServerPath();
+      
+      // Verify the MCP server exists before spawning
+      if (!fs.existsSync(mcpServerPath)) {
+        logger.error('MCP server not found at resolved path for persistent process', { 
+          mcpServerPath,
+          cwd: process.cwd(),
+          __dirname
+        });
+        throw new Error(`AI Studio MCP server not found at: ${mcpServerPath}`);
+      }
+      
       this.persistentMCPProcess = spawn('node', [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
@@ -1398,7 +1486,19 @@ export class AIStudioLayer implements LayerInterface {
       });
 
       // Use our custom AI Studio MCP server with proper MCP protocol
-      const mcpServerPath = join(process.cwd(), 'dist', 'mcp-servers', 'ai-studio-mcp-server.js');
+      const mcpServerPath = this.resolveMCPServerPath();
+      
+      // Verify the MCP server exists before spawning
+      if (!fs.existsSync(mcpServerPath)) {
+        logger.error('MCP server not found at resolved path', { 
+          mcpServerPath,
+          cwd: process.cwd(),
+          __dirname
+        });
+        reject(new Error(`AI Studio MCP server not found at: ${mcpServerPath}`));
+        return;
+      }
+      
       const child = spawn('node', [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
