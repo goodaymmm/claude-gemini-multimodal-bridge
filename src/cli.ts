@@ -21,7 +21,7 @@ import { TimeoutManager, withCLITimeout } from './utils/TimeoutManager.js';
 // ===================================
 
 function showChatHelp() {
-  console.log('💬 CGMB Chat - Natural Gemini interaction');
+  console.log('💬 CGMB Chat - Primary interface for questions and research');
   console.log('');
   console.log('✨ Simple usage:');
   console.log('  cgmb chat "your question"');
@@ -31,34 +31,37 @@ function showChatHelp() {
   console.log('  cgmb chat "question" --model gemini-2.5-flash');
   console.log('  cgmb chat "question" --fast');
   console.log('');
-  console.log('💡 Alternative: cgmb gemini -p "question"');
-  console.log('');
   console.log('🌐 Web search is automatic - just ask about current events!');
   console.log('');
-  console.log('Examples:');
+  console.log('📋 Task examples:');
   console.log('  cgmb chat "What are the latest AI trends in 2025?"');
   console.log('  cgmb c "Android security best practices"');
   console.log('  cgmb chat "Current cryptocurrency market status"');
+  console.log('');
+  console.log('🎨 For other tasks:');
+  console.log('  cgmb generate-image "description"  # Create images');
+  console.log('  cgmb analyze file.pdf             # Analyze documents');
   console.log('');
   console.log('❓ Having issues? Try: cgmb auth-status');
 }
 
 function showGeminiHelp() {
-  console.log('🤖 CGMB Gemini - Direct Gemini CLI access');
+  console.log('🔧 CGMB Gemini - Advanced/Troubleshooting tool only');
   console.log('');
-  console.log('Usage examples:');
-  console.log('  cgmb gemini -p "your question"        # Explicit mode');
-  console.log('  cgmb gemini "your question"           # Auto-detected');
-  console.log('  cgmb chat "your question"             # User-friendly');
+  console.log('⚠️  WARNING: This is an advanced troubleshooting command.');
+  console.log('    For normal use, avoid this command and use the recommended ones below.');
   console.log('');
-  console.log('🚀 Performance options:');
-  console.log('  cgmb gemini -p "question" --fast      # Direct CLI (fastest)');
-  console.log('  cgmb gemini -p "question" --model gemini-2.5-flash');
+  console.log('✅ Recommended for normal use:');
+  console.log('  cgmb chat "your question"             # Primary chat interface');
+  console.log('  cgmb generate-image "description"     # Image generation');
+  console.log('  cgmb analyze file.pdf                 # Document analysis');
   console.log('');
-  console.log('💡 Tip: Use "cgmb chat" for the easiest experience!');
+  console.log('❌ Advanced/Troubleshooting only:');
+  console.log('  cgmb gemini -p "question"             # Direct CLI access');
+  console.log('  cgmb gemini "question" --fast         # Performance testing');
   console.log('');
-  console.log('🌐 Web search is automatically enabled for current information.');
-  console.log('🔐 Authentication issues? Try: gemini auth (OAuth recommended)');
+  console.log('💡 Use standard cgmb commands for reliable results!');
+  console.log('🔐 Authentication issues? Try: cgmb auth-status');
 }
 
 // ===================================
@@ -1013,16 +1016,16 @@ program
         logger.error('❌ Chat command failed', error as Error);
         logger.info('💡 Troubleshooting:');
         logger.info('   • Check auth: cgmb auth-status');
-        logger.info('   • Try manual: cgmb gemini -p "your question"');
+        logger.info('   • Verify setup: cgmb verify');
       }
       process.exit(1);
     }
   });
 
-// Direct Gemini CLI command
+// ADVANCED/TROUBLESHOOTING: Direct Gemini CLI command  
 program
   .command('gemini')
-  .description('Direct Gemini CLI processing (web search enabled by default)')
+  .description('⚠️  ADVANCED: Direct Gemini CLI access (troubleshooting only - use cgmb chat instead)')
   .argument('[prompt...]', 'Direct prompt (auto-detects if -p missing)')
   .option('-p, --prompt <text>', 'Explicit prompt for Gemini CLI')
   .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
@@ -1247,10 +1250,10 @@ async function executeGeminiCommand(options: any) {
   }
 }
 
-// Direct AI Studio command
+// ADVANCED: Direct AI Studio command
 program
   .command('aistudio')
-  .description('Direct AI Studio processing for multimodal content')
+  .description('⚠️  ADVANCED: Direct AI Studio access (use cgmb analyze instead for documents)')
   .option('-p, --prompt <text>', 'Prompt for AI Studio')
   .option('-f, --files <paths...>', 'Files to process (images, documents, etc.)')
   .option('-m, --model <model>', 'AI Studio model to use', 'gemini-2.0-flash-exp')
