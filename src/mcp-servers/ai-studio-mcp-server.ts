@@ -655,37 +655,66 @@ To retrieve this file, use:
       // Process each file
       for (const file of params.files) {
         console.log(`Processing file: ${file.path}`);
-        if (!fs.existsSync(file.path)) {
-          console.warn(`File not found: ${file.path}`);
-          continue;
-        }
-
-        const fileData = fs.readFileSync(file.path);
-        const mimeType = this.getMimeType(file.path);
-        console.log(`File detected as MIME type: ${mimeType}`);
-
-        if (mimeType.startsWith('image/')) {
-          parts.push({
-            inlineData: {
-              data: fileData.toString('base64'),
-              mimeType
-            }
-          });
-        } else if (mimeType === 'application/pdf') {
-          // Use File API to upload PDF for native processing
-          console.log(`Uploading PDF to Gemini File API: ${file.path}`);
-          const uploadedFile = await this.uploadPDFWithFileAPI(file.path);
-          parts.push({
-            fileData: {
-              fileUri: uploadedFile.uri,
-              mimeType: 'application/pdf'
-            }
-          });
+        
+        // Check if the path is a URL
+        const isUrl = file.path.startsWith('http://') || file.path.startsWith('https://');
+        
+        if (isUrl) {
+          console.log(`Detected URL: ${file.path}`);
+          const mimeType = this.getMimeTypeFromUrl(file.path);
+          console.log(`URL detected as MIME type: ${mimeType}`);
+          
+          if (mimeType === 'application/pdf') {
+            // Use File API to upload PDF URL for native processing
+            console.log(`Uploading PDF URL to Gemini File API: ${file.path}`);
+            const uploadedFile = await this.uploadPDFUrlWithFileAPI(file.path);
+            parts.push({
+              fileData: {
+                fileUri: uploadedFile.uri,
+                mimeType: 'application/pdf'
+              }
+            });
+          } else {
+            console.warn(`Unsupported URL type: ${mimeType} for ${file.path}`);
+            // For now, add as text reference
+            parts.push({
+              text: `URL: ${file.path} (Type: ${mimeType})`
+            });
+          }
         } else {
-          // For other text files, add as text content
-          parts.push({
-            text: `File: ${file.path}\nContent: ${fileData.toString('utf-8')}`
-          });
+          // Handle local files (existing logic)
+          if (!fs.existsSync(file.path)) {
+            console.warn(`File not found: ${file.path}`);
+            continue;
+          }
+
+          const fileData = fs.readFileSync(file.path);
+          const mimeType = this.getMimeType(file.path);
+          console.log(`File detected as MIME type: ${mimeType}`);
+
+          if (mimeType.startsWith('image/')) {
+            parts.push({
+              inlineData: {
+                data: fileData.toString('base64'),
+                mimeType
+              }
+            });
+          } else if (mimeType === 'application/pdf') {
+            // Use File API to upload PDF for native processing
+            console.log(`Uploading PDF to Gemini File API: ${file.path}`);
+            const uploadedFile = await this.uploadPDFWithFileAPI(file.path);
+            parts.push({
+              fileData: {
+                fileUri: uploadedFile.uri,
+                mimeType: 'application/pdf'
+              }
+            });
+          } else {
+            // For other text files, add as text content
+            parts.push({
+              text: `File: ${file.path}\nContent: ${fileData.toString('utf-8')}`
+            });
+          }
         }
       }
 
@@ -786,6 +815,35 @@ To retrieve this file, use:
       '.json': 'application/json'
     };
     return mimeTypes[ext] || 'application/octet-stream';
+  }
+
+  /**
+   * Get MIME type from URL by examining the file extension
+   */
+  private getMimeTypeFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+      const ext = path.extname(pathname).toLowerCase();
+      
+      const mimeTypes: { [key: string]: string } = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.pdf': 'application/pdf',
+        '.txt': 'text/plain',
+        '.md': 'text/markdown',
+        '.json': 'application/json'
+      };
+      
+      return mimeTypes[ext] || 'application/octet-stream';
+    } catch (error) {
+      console.warn(`Failed to parse URL: ${url}`, error);
+      return 'application/octet-stream';
+    }
   }
 
   /**
@@ -1192,6 +1250,58 @@ To retrieve this file, use:
     } catch (error) {
       console.error(`Failed to upload PDF via File API: ${pdfPath}`, error);
       throw new Error(`PDF upload failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Upload PDF URL using Gemini File API for native processing
+   * Supports OCR and complex PDF layouts via URL
+   */
+  private async uploadPDFUrlWithFileAPI(pdfUrl: string): Promise<any> {
+    try {
+      console.log(`Starting PDF URL upload via File API: ${pdfUrl}`);
+      
+      // Upload the URL directly using GoogleGenAI files API
+      const uploadResult = await this.genAI.files.upload({
+        file: pdfUrl,  // Pass URL as file parameter
+        config: {
+          mimeType: 'application/pdf',
+          displayName: path.basename(new URL(pdfUrl).pathname) || 'url-document.pdf'
+        }
+      });
+      
+      console.log(`PDF URL uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
+      
+      // Wait for processing to complete
+      let file = uploadResult;
+      let waitTime = 0;
+      const maxWaitTime = 120000; // 2 minutes max wait
+      
+      while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
+        console.log(`Waiting for PDF URL processing... (${waitTime / 1000}s)`);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        waitTime += 2000;
+        
+        file = await this.genAI.files.get({ name: file.name! });
+        console.log(`PDF URL processing state: ${file.state}`);
+      }
+      
+      if (file.state !== 'ACTIVE') {
+        throw new Error(`PDF URL processing failed or timed out. Final state: ${file.state}`);
+      }
+      
+      console.log(`PDF URL ready for processing: ${file.name} (from ${pdfUrl})`);
+      
+      return {
+        uri: file.uri,
+        name: file.name,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes
+      };
+      
+    } catch (error) {
+      console.error(`Failed to upload PDF URL via File API: ${pdfUrl}`, error);
+      throw new Error(`PDF URL upload failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

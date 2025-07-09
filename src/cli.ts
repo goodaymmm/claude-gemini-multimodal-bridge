@@ -1615,9 +1615,10 @@ program
 // Analyze command
 program
   .command('analyze <files...>')
-  .description('Analyze documents using AI Studio')
+  .description('Analyze documents using optimal AI layer (auto-routes based on file type)')
   .option('-t, --type <type>', 'Analysis type (summary, extract, compare)', 'summary')
   .option('-p, --prompt <prompt>', 'Custom analysis prompt')
+  .option('-l, --layer <layer>', 'Force specific layer (gemini, claude, aistudio, auto)', 'auto')
   .action(async (files, options) => {
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
@@ -1640,23 +1641,23 @@ program
         const pdfUrls = urlFiles.filter((url: string) => url.toLowerCase().endsWith('.pdf'));
         const webUrls = urlFiles.filter((url: string) => !url.toLowerCase().endsWith('.pdf'));
         
-        // Handle PDF URLs with Claude Code layer
+        // Handle PDF URLs with AI Studio layer
         if (pdfUrls.length > 0) {
-          console.log('📄 PDF URL(s) detected - routing to Claude Code for optimal processing...');
+          console.log('📄 PDF URL(s) detected - routing to AI Studio for optimal PDF processing...');
           
           // Construct analysis prompt for PDF URLs
           let analysisPrompt: string;
           if (pdfUrls.length === 1) {
             const basePrompt = options.prompt || `Please ${options.type} this PDF document`;
-            analysisPrompt = `${basePrompt} from ${pdfUrls[0]}`;
+            analysisPrompt = `${basePrompt}`;
           } else {
-            analysisPrompt = `Analyze and ${options.type} the PDF documents from these URLs: ${pdfUrls.join(', ')}`;
+            analysisPrompt = `Analyze and ${options.type} these PDF documents`;
           }
           
           console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
           console.log('');
           
-          // Use LayerManager with Claude Code layer for PDF processing
+          // Use LayerManager with AI Studio layer for PDF URL processing
           const layerManager = new LayerManager({
             gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
             claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
@@ -1667,10 +1668,17 @@ program
           
           try {
             await layerManager.initializeLayers();
-            const result = await layerManager.executeWithLayer('claude', {
-              type: 'document_analysis',
-              prompt: analysisPrompt,
-              analysis_type: options.type || 'summary'
+            const result = await layerManager.executeWithLayer('aistudio', {
+              type: 'multimodal_processing',
+              files: pdfUrls.map((url: string) => ({ 
+                path: url, 
+                type: 'document'
+              })),
+              instructions: analysisPrompt,
+              options: {
+                analysisType: options.type || 'summary',
+                depth: 'deep'
+              }
             });
             
             console.log('\n📋 Result:');
@@ -1680,13 +1688,36 @@ program
             if (result.metadata) {
               console.log('\n📊 Metadata:');
               console.log(`Processing time: ${result.metadata.duration || 'N/A'}ms`);
-              console.log(`Layer: Claude Code (PDF URL processing)`);
+              console.log(`Layer: AI Studio (PDF URL processing via Gemini File API)`);
             }
           } catch (error) {
             logger.error('PDF URL processing failed', error as Error);
             console.log('❌ Failed to process PDF URL(s)');
-            console.log('💡 Try downloading the PDF manually and using: cgmb analyze local-file.pdf');
-            process.exit(1);
+            console.log('💡 Falling back to Claude Code layer...');
+            
+            // Fallback to Claude Code layer
+            try {
+              const fallbackResult = await layerManager.executeWithLayer('claude', {
+                type: 'document_analysis',
+                prompt: `${analysisPrompt} from ${pdfUrls.join(', ')}`,
+                analysis_type: options.type || 'summary'
+              });
+              
+              console.log('\n📋 Fallback Result (Claude Code):');
+              console.log('═'.repeat(50));
+              console.log(fallbackResult.data || 'Processing completed');
+              
+              if (fallbackResult.metadata) {
+                console.log('\n📊 Metadata:');
+                console.log(`Processing time: ${fallbackResult.metadata.duration || 'N/A'}ms`);
+                console.log(`Layer: Claude Code (Fallback)`);
+              }
+            } catch (fallbackError) {
+              logger.error('Fallback processing also failed', fallbackError as Error);
+              console.log('❌ Both AI Studio and Claude Code processing failed');
+              console.log('💡 Try downloading the PDF manually and using: cgmb analyze local-file.pdf');
+              process.exit(1);
+            }
           }
         }
         
@@ -1811,18 +1842,53 @@ program
         logging: { level: 'info' as const }
       };
       const layerManager = new LayerManager(defaultConfig);
+      
+      // Validate user-specified layer option
+      const validLayers = ['gemini', 'claude', 'aistudio', 'auto'];
+      if (!validLayers.includes(options.layer)) {
+        console.error(`❌ Invalid layer: ${options.layer}`);
+        console.error(`Valid options: ${validLayers.join(', ')}`);
+        process.exit(1);
+      }
+      
+      // Auto-detect file types instead of hardcoding 'document'
+      const fileReferences = resolvedFiles.map((f: string) => {
+        // Use LayerManager's detectFileType method for accurate type detection
+        const detectedType = layerManager.detectFileType(f);
+        return { path: f, type: detectedType };
+      });
+      
       const analysisPrompt = options.prompt || `Please ${options.type} these documents`;
+      
+      // Determine user preferred layer (undefined for auto)
+      const userPreferredLayer = options.layer !== 'auto' ? options.layer : undefined;
+      
+      // Log file analysis for user understanding
+      if (fileReferences.length > 0) {
+        console.log(`\n📁 File Analysis:`);
+        fileReferences.forEach((ref: any) => {
+          console.log(`   ${ref.path} → ${ref.type}`);
+        });
+        
+        if (userPreferredLayer) {
+          console.log(`\n🎯 Layer Override: Using ${userPreferredLayer} layer as requested`);
+        } else {
+          console.log(`\n🤖 Auto-routing: Optimal layer will be selected based on file types`);
+        }
+        console.log('');
+      }
       
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
         () => layerManager.executeWithOptimalLayer({
           prompt: analysisPrompt,
-          files: resolvedFiles.map((f: string) => ({ path: f, type: 'document' as const })),
+          files: fileReferences,
           options: {
             analysisType: options.type,
             depth: 'deep',
-            multiplePDFs: pdfFiles.length > 1
+            multiplePDFs: pdfFiles.length > 1,
+            preferredLayer: userPreferredLayer
           }
         }),
         'analyze-documents',

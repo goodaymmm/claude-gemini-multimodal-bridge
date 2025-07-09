@@ -150,8 +150,9 @@ export class LayerManager {
   /**
    * Intelligent task analysis for optimal layer selection
    * Implements enterprise-level routing logic for CGMB
+   * Enhanced to support user-specified layer preferences
    */
-  public analyzeTask(task: any): TaskAnalysis {
+  public analyzeTask(task: any, userPreferredLayer?: LayerType): TaskAnalysis {
     const prompt = task.prompt || task.request || task.input || '';
     const files = task.files || [];
     
@@ -159,38 +160,81 @@ export class LayerManager {
     const fileTypes = files.map((f: FileReference) => f.type || this.detectFileType(f.path));
     const hasFiles = files.length > 0;
     const hasImages = fileTypes.some((type: string) => ['image'].includes(type));
-    const hasDocuments = fileTypes.some((type: string) => ['pdf', 'document', 'text'].includes(type));
+    const hasDocuments = fileTypes.some((type: string) => ['pdf', 'document', 'text', 'spreadsheet', 'presentation'].includes(type));
     const hasAudio = fileTypes.some((type: string) => ['audio'].includes(type));
     const hasVideo = fileTypes.some((type: string) => ['video'].includes(type));
     
+    // Enhanced code file detection
+    const hasCodeFiles = fileTypes.some((type: string) => ['code', 'config', 'markup', 'stylesheet', 'database'].includes(type));
+    
     // Analyze prompt characteristics
     const promptLength = prompt.length;
-    const isCodeRelated = this.detectCodeContent(prompt);
+    const isCodeRelated = this.detectCodeContent(prompt) || hasCodeFiles;
     const needsCurrentInfo = this.detectCurrentInfoNeed(prompt);
     const isGenerationTask = this.detectGenerationTask(prompt, task);
     const complexity = this.assessComplexity(prompt, files, task);
+    
+    // Check for user-specified layer override
+    if (userPreferredLayer) {
+      return {
+        complexity,
+        hasFiles,
+        fileTypes,
+        needsCurrentInfo,
+        isGenerationTask,
+        isCodeRelated,
+        estimatedTokens: Math.ceil(promptLength / 4) + files.length * 100,
+        preferredLayer: userPreferredLayer,
+        reasoning: `User explicitly requested ${userPreferredLayer} layer`,
+      };
+    }
     
     // Determine optimal layer based on task characteristics
     let preferredLayer: LayerType;
     let reasoning: string;
     
-    // Priority 1: File processing (multimodal content)
-    if (hasFiles && (hasImages || hasDocuments || hasAudio || hasVideo)) {
+    // Priority 1: Code files - ALWAYS route to Claude Code (highest priority for all code-related tasks)
+    if (hasCodeFiles) {
+      if (isGenerationTask) {
+        preferredLayer = 'claude';
+        reasoning = 'Code files with generation task - Claude Code optimal for code generation and analysis';
+      } else {
+        preferredLayer = 'claude';
+        reasoning = 'Code files detected - Claude Code optimal for code analysis and understanding';
+      }
+    } 
+    // Priority 2: Media files - Route to AI Studio for multimodal processing
+    else if (hasFiles && (hasImages || hasAudio || hasVideo)) {
       preferredLayer = 'aistudio';
-      reasoning = 'Multimodal files requiring AI Studio processing';
-    } else if (isGenerationTask && (hasImages || hasAudio || hasVideo || prompt.includes('generate') || prompt.includes('create'))) {
+      reasoning = 'Media files requiring AI Studio multimodal processing';
+    }
+    // Priority 3: Document files (PDFs, etc.) - Route to AI Studio for OCR and analysis
+    else if (hasFiles && hasDocuments) {
+      preferredLayer = 'aistudio';
+      reasoning = 'Document files requiring AI Studio OCR and analysis capabilities';
+    }
+    // Priority 4: Generation tasks - Route to AI Studio for content creation
+    else if (isGenerationTask && (hasImages || hasAudio || hasVideo || prompt.includes('generate') || prompt.includes('create'))) {
       preferredLayer = 'aistudio';
       reasoning = 'Generation task requiring AI Studio capabilities (Imagen 3, Veo 2)';
-    } else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
+    }
+    // Priority 5: Current information needs - Route to Gemini CLI for web search
+    else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
       preferredLayer = 'gemini';
       reasoning = 'Current information or search required - Gemini CLI optimal';
-    } else if (complexity === 'high' || isCodeRelated || promptLength > 2000) {
+    }
+    // Priority 6: Complex reasoning or code-related prompts - Route to Claude Code
+    else if (complexity === 'high' || isCodeRelated || promptLength > 2000) {
       preferredLayer = 'claude';
       reasoning = 'Complex reasoning or code analysis - Claude Code optimal';
-    } else if (complexity === 'low' && promptLength < 500) {
+    }
+    // Priority 7: Simple tasks - Route to Gemini CLI for speed
+    else if (complexity === 'low' && promptLength < 500) {
       preferredLayer = 'gemini';
       reasoning = 'Simple task - Gemini CLI for speed';
-    } else {
+    }
+    // Default: Route to Claude Code for balanced capabilities
+    else {
       preferredLayer = 'claude';
       reasoning = 'Default to Claude Code for balanced capabilities';
     }
@@ -213,9 +257,13 @@ export class LayerManager {
   /**
    * Execute task with optimal layer selection
    * Implements intelligent routing with fallback strategies
+   * Enhanced to support user-specified layer preferences
    */
   public async executeWithOptimalLayer(task: any): Promise<LayerResult> {
-    const analysis = this.analyzeTask(task);
+    // Extract user-preferred layer from task options
+    const userPreferredLayer = task.options?.preferredLayer;
+    
+    const analysis = this.analyzeTask(task, userPreferredLayer);
     
     logger.info('Optimal layer analysis completed', {
       preferredLayer: analysis.preferredLayer,
@@ -223,6 +271,7 @@ export class LayerManager {
       reasoning: analysis.reasoning,
       hasFiles: analysis.hasFiles,
       fileTypes: analysis.fileTypes,
+      userSpecified: !!userPreferredLayer,
     });
 
     try {
@@ -335,16 +384,39 @@ export class LayerManager {
 
   /**
    * Detect file type from path
+   * Public method for external access from CLI and other components
    */
-  private detectFileType(path: string): string {
+  public detectFileType(path: string): string {
     const ext = path.toLowerCase().split('.').pop() || '';
     
-    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].includes(ext)) {return 'image';}
-    if (['mp3', 'wav', 'm4a', 'flac'].includes(ext)) {return 'audio';}
-    if (['mp4', 'mov', 'avi', 'webm'].includes(ext)) {return 'video';}
+    // Code files - prioritize for Claude Code layer
+    if (['ts', 'js', 'jsx', 'tsx', 'py', 'java', 'cpp', 'c', 'cs', 'go', 'rs', 'rb', 'php', 'swift', 'kt', 'scala', 'clj', 'r', 'sh', 'bash', 'zsh', 'ps1'].includes(ext)) {return 'code';}
+    
+    // Configuration and data files - also good for Claude Code
+    if (['json', 'yaml', 'yml', 'toml', 'ini', 'conf', 'env', 'dockerfile', 'makefile', 'cmake', 'gradle', 'package-lock.json', 'yarn.lock'].includes(ext)) {return 'config';}
+    
+    // Markup and template files - Claude Code can analyze these well
+    if (['html', 'xml', 'svg', 'vue', 'svelte', 'handlebars', 'hbs', 'mustache', 'pug', 'ejs', 'liquid'].includes(ext)) {return 'markup';}
+    
+    // Stylesheet files
+    if (['css', 'scss', 'sass', 'less', 'stylus'].includes(ext)) {return 'stylesheet';}
+    
+    // Database and SQL files
+    if (['sql', 'sqlite', 'db'].includes(ext)) {return 'database';}
+    
+    // Media files - AI Studio is optimal
+    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tiff', 'ico', 'svg'].includes(ext)) {return 'image';}
+    if (['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg', 'wma'].includes(ext)) {return 'audio';}
+    if (['mp4', 'mov', 'avi', 'webm', 'mkv', 'flv', 'wmv', '3gp'].includes(ext)) {return 'video';}
+    
+    // Document files - AI Studio for OCR and analysis
     if (['pdf'].includes(ext)) {return 'pdf';}
-    if (['txt', 'md'].includes(ext)) {return 'text';}
-    if (['doc', 'docx'].includes(ext)) {return 'document';}
+    if (['doc', 'docx', 'odt', 'rtf', 'pages'].includes(ext)) {return 'document';}
+    if (['xls', 'xlsx', 'ods', 'csv', 'numbers'].includes(ext)) {return 'spreadsheet';}
+    if (['ppt', 'pptx', 'odp', 'keynote'].includes(ext)) {return 'presentation';}
+    
+    // Text files - can be analyzed by any layer
+    if (['txt', 'md', 'rst', 'log', 'readme', 'license', 'changelog'].includes(ext)) {return 'text';}
     
     return 'unknown';
   }
