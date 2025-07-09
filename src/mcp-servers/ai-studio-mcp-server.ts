@@ -649,10 +649,12 @@ To retrieve this file, use:
     const params = MultimodalProcessSchema.parse(args);
     
     try {
+      console.log(`Processing multimodal request with ${params.files.length} files`);
       const parts: any[] = [{ text: params.instructions }];
 
       // Process each file
       for (const file of params.files) {
+        console.log(`Processing file: ${file.path}`);
         if (!fs.existsSync(file.path)) {
           console.warn(`File not found: ${file.path}`);
           continue;
@@ -660,6 +662,7 @@ To retrieve this file, use:
 
         const fileData = fs.readFileSync(file.path);
         const mimeType = this.getMimeType(file.path);
+        console.log(`File detected as MIME type: ${mimeType}`);
 
         if (mimeType.startsWith('image/')) {
           parts.push({
@@ -669,10 +672,14 @@ To retrieve this file, use:
             }
           });
         } else if (mimeType === 'application/pdf') {
-          // Extract text from PDF instead of treating as binary
-          const extractedText = await this.extractPDFText(file.path);
+          // Use File API to upload PDF for native processing
+          console.log(`Uploading PDF to Gemini File API: ${file.path}`);
+          const uploadedFile = await this.uploadPDFWithFileAPI(file.path);
           parts.push({
-            text: `File: ${file.path}\n${extractedText}`
+            fileData: {
+              fileUri: uploadedFile.uri,
+              mimeType: 'application/pdf'
+            }
           });
         } else {
           // For other text files, add as text content
@@ -682,6 +689,7 @@ To retrieve this file, use:
         }
       }
 
+      console.log(`Sending request to Gemini with ${parts.length} parts (instructions + ${parts.length - 1} files)`);
       const response = await this.genAI.models.generateContent({
         model: params.model || 'gemini-2.5-flash',
         contents: parts,
@@ -690,6 +698,7 @@ To retrieve this file, use:
         },
       });
 
+      console.log(`Received response from Gemini, response length: ${response.candidates?.[0]?.content?.parts?.[0]?.text?.length || 0} characters`);
       return {
         content: [
           {
@@ -1121,6 +1130,68 @@ To retrieve this file, use:
         ErrorCode.InternalError,
         `Audio generation failed: ${errorMessage}`
       );
+    }
+  }
+
+  /**
+   * Upload PDF using Gemini File API for native processing
+   * Supports OCR and complex PDF layouts
+   */
+  private async uploadPDFWithFileAPI(pdfPath: string): Promise<any> {
+    try {
+      console.log(`Starting PDF upload via File API: ${pdfPath}`);
+      
+      // Check file size (50MB limit)
+      const stats = fs.statSync(pdfPath);
+      const fileSizeMB = stats.size / (1024 * 1024);
+      if (fileSizeMB > 50) {
+        throw new Error(`PDF file too large: ${fileSizeMB.toFixed(1)}MB (max 50MB)`);
+      }
+      
+      // Read file as binary data
+      const fileData = fs.readFileSync(pdfPath);
+      
+      // Upload the file using GoogleGenAI files API
+      const uploadResult = await this.genAI.files.upload({
+        file: pdfPath,
+        config: {
+          mimeType: 'application/pdf',
+          displayName: path.basename(pdfPath)
+        }
+      });
+      
+      console.log(`PDF uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
+      
+      // Wait for processing to complete
+      let file = uploadResult;
+      let waitTime = 0;
+      const maxWaitTime = 120000; // 2 minutes max wait
+      
+      while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
+        console.log(`Waiting for PDF processing... (${waitTime / 1000}s)`);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        waitTime += 2000;
+        
+        file = await this.genAI.files.get({ name: file.name! });
+        console.log(`PDF processing state: ${file.state}`);
+      }
+      
+      if (file.state !== 'ACTIVE') {
+        throw new Error(`PDF processing failed or timed out. Final state: ${file.state}`);
+      }
+      
+      console.log(`PDF ready for processing: ${file.name} (${fileSizeMB.toFixed(1)}MB)`);
+      
+      return {
+        uri: file.uri,
+        name: file.name,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes
+      };
+      
+    } catch (error) {
+      console.error(`Failed to upload PDF via File API: ${pdfPath}`, error);
+      throw new Error(`PDF upload failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
