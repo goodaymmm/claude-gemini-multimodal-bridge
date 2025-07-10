@@ -181,4 +181,4 @@ credentials.json
 # Generated and build artifacts
 lib/
 types/
-docs/generated/
+docs/generated/NEXT_STEPS.md
