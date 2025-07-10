@@ -241,7 +241,10 @@ export class AuthCache {
       });
     }
     
-    const tracking = this.failureTracking.get(service)!;
+    const tracking = this.failureTracking.get(service);
+    if (!tracking) {
+      throw new Error(`Failure tracking not found for service: ${service}`);
+    }
     
     // Reset if 24 hours have passed since first failure
     if (Date.now() - tracking.firstFailureTime > this.FAILURE_BACKOFF.resetAfter) {
@@ -257,7 +260,7 @@ export class AuthCache {
    */
   private calculateFailureTTL(failureCount: number): number {
     const index = Math.min(failureCount - 1, this.FAILURE_BACKOFF.delays.length - 1);
-    const baseDelay = this.FAILURE_BACKOFF.delays[index] || this.FAILURE_BACKOFF.maxDelay;
+    const baseDelay = this.FAILURE_BACKOFF.delays[index] ?? this.FAILURE_BACKOFF.maxDelay;
     
     // Add jitter (±10%) to prevent thundering herd
     const jitter = baseDelay * this.FAILURE_BACKOFF.jitterFactor;
@@ -271,7 +274,7 @@ export class AuthCache {
    */
   getFailureInfo(service: string): { count: number; nextRetryTime?: Date } | null {
     const tracking = this.failureTracking.get(service);
-    if (!tracking) return null;
+    if (!tracking) {return null;}
     
     const cached = this.cache.get(service);
     if (cached && !cached.auth.success) {

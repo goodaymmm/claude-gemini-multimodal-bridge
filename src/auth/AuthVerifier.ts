@@ -137,7 +137,7 @@ export class AuthVerifier {
           
           // Add failure info to error message
           const failureInfo = this.authCache.getFailureInfo('gemini');
-          if (failureInfo && failureInfo.nextRetryTime) {
+          if (failureInfo?.nextRetryTime) {
             result.error += ` (Failure #${failureInfo.count}, retry after ${failureInfo.nextRetryTime.toLocaleTimeString()})`;
           }
           
@@ -189,7 +189,7 @@ export class AuthVerifier {
         const fallback1 = process.env.GOOGLE_AI_STUDIO_API_KEY;
         const fallback2 = process.env.GEMINI_API_KEY; // Deprecated
         
-        const apiKey = preferredKey || fallback1 || fallback2;
+        const apiKey = preferredKey ?? fallback1 ?? fallback2;
         
         // Enhanced logging for debugging authentication chain
         logger.debug('AI Studio authentication verification', {
@@ -244,7 +244,7 @@ export class AuthVerifier {
           
           // Add failure info to error message
           const failureInfo = this.authCache.getFailureInfo('aistudio');
-          if (failureInfo && failureInfo.nextRetryTime) {
+          if (failureInfo?.nextRetryTime) {
             result.error += ` (Failure #${failureInfo.count}, retry after ${failureInfo.nextRetryTime.toLocaleTimeString()})`;
           }
           
@@ -640,7 +640,7 @@ export class AuthVerifier {
       
       if (result.success) {
         const method = result.status.method;
-        const user = result.status.userInfo?.email || 'authenticated user';
+        const user = result.status.userInfo?.email ?? 'authenticated user';
         return `✅ ${service}: Authenticated via ${method} (${user})`;
       } else {
         return `❌ ${service}: ${result.error}`;

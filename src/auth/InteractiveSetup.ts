@@ -99,7 +99,7 @@ export class InteractiveSetup {
         console.log('STEP 4: Final Verification');
         console.log('═══════════════════════════════════════\n');
         
-        const _verificationResult = await this.verifyAllSetup();
+        // Commented out unused variable for safety - verification result may be needed for future validation logic\n        // const _verificationResult = await this.verifyAllSetup();\n        await this.verifyAllSetup();
         
         // Generate next steps
         const nextSteps: string[] = [];
@@ -189,7 +189,7 @@ export class InteractiveSetup {
     }
 
     // Check if API key is available as fallback
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
     
     if (apiKey) {
       console.log('🔄 Trying API key authentication (fallback)...');
@@ -264,7 +264,7 @@ export class InteractiveSetup {
       };
     }
     
-    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_AI_STUDIO_API_KEY;
     
     if (!apiKey) {
       console.log('⚠️  No API key found - AI Studio requires API key if OAuth not available');

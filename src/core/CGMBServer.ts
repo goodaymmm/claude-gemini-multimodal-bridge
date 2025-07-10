@@ -16,13 +16,14 @@ import path from 'path';
 import fs from 'fs';
 import {
   CGMBError,
-  DocumentAnalysisArgs,
+  // Commented out unused imports for safety - may be needed for future schema validation
+  // DocumentAnalysisArgs,
   DocumentAnalysisArgsSchema,
   EnhancedCGMBRequest,
   EnhancedCGMBRequestSchema,
-  MultimodalProcessArgs,
+  // MultimodalProcessArgs,
   MultimodalProcessArgsSchema,
-  WorkflowDefinitionArgs,
+  // WorkflowDefinitionArgs,
   WorkflowDefinitionArgsSchema,
   WorkflowResult,
 } from './types.js';

@@ -201,7 +201,7 @@ export class OAuthManager {
     }
     
     // Check for Gemini-specific API keys
-    const geminiApiKey = process.env.GEMINI_API_KEY ||  // Gemini CLI specific
+    const geminiApiKey = process.env.GEMINI_API_KEY ??  // Gemini CLI specific
                          process.env.GOOGLE_API_KEY;   // Legacy support
                    
     if (geminiApiKey && geminiApiKey.length > 10) {
@@ -216,7 +216,7 @@ export class OAuthManager {
    * Only checks Gemini-specific API keys
    */
   private async checkApiKeyAuth(): Promise<AuthStatus> {
-    const apiKey = process.env.GEMINI_API_KEY ||  // Gemini CLI specific
+    const apiKey = process.env.GEMINI_API_KEY ??  // Gemini CLI specific
                    process.env.GOOGLE_API_KEY;    // Legacy support
     
     if (!apiKey) {

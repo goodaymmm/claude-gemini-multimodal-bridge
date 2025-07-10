@@ -4,22 +4,23 @@ import { mkdir } from 'fs/promises';
 import * as fs from 'fs';
 import { dirname, join } from 'path';
 import * as path from 'path';
-import { GoogleGenAI, Modality } from '@google/genai';
+// Commented out unused import for safety - Modality may be needed for future multimodal processing
+import { GoogleGenAI /*, Modality */ } from '@google/genai';
 import { 
+  AI_MODELS, 
   AudioAnalysisResult, 
   AudioGenOptions, 
   FileReference, 
   GenerationType, 
   ImageAnalysisResult, 
-  ImageAnalysisType, 
+  ImageAnalysisType,
   ImageGenOptions,
   LayerInterface,
   LayerResult,
   MediaGenResult,
   MultimodalFile,
   MultimodalResult,
-  VideoGenOptions,
-  AI_MODELS
+  VideoGenOptions
 } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -2032,11 +2033,11 @@ export class AIStudioLayer implements LayerInterface {
     if (options.width && options.height) {
       const ratio = options.width / options.height;
       // Map to supported aspect ratios
-      if (Math.abs(ratio - 1) < 0.1) return '1:1';
-      if (Math.abs(ratio - 0.75) < 0.1) return '3:4';
-      if (Math.abs(ratio - 1.33) < 0.1) return '4:3';
-      if (Math.abs(ratio - 0.56) < 0.1) return '9:16';
-      if (Math.abs(ratio - 1.78) < 0.1) return '16:9';
+      if (Math.abs(ratio - 1) < 0.1) {return '1:1';}
+      if (Math.abs(ratio - 0.75) < 0.1) {return '3:4';}
+      if (Math.abs(ratio - 1.33) < 0.1) {return '4:3';}
+      if (Math.abs(ratio - 0.56) < 0.1) {return '9:16';}
+      if (Math.abs(ratio - 1.78) < 0.1) {return '16:9';}
     }
     return '1:1'; // Default square
   }
