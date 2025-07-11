@@ -444,7 +444,7 @@ class AIStudioMCPServer {
     try {
       // Sanitize the prompt to replace problematic words  
       // Translation is now handled by GeminiCLI in AIStudioLayer
-      let sanitizedPrompt = sanitizePrompt(params.prompt);
+      const sanitizedPrompt = sanitizePrompt(params.prompt);
       // Log sanitization for debugging if needed
       if (params.prompt !== sanitizedPrompt) {
         console.error(`[AI Studio MCP] Prompt sanitized: "${params.prompt}" → "${sanitizedPrompt}"`);
@@ -1051,7 +1051,7 @@ To retrieve this file, use:
       
       // Determine file type and additional metadata
       let fileType = 'document';
-      let metadata: any = {};
+      const metadata: any = {};
       
       if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(fileExtension)) {
         fileType = 'image';

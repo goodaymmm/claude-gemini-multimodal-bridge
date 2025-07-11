@@ -289,7 +289,7 @@ Please extract the complete text content while maintaining readability and struc
         version: 'v1.10.100', // Use specific version for compatibility
         pagerender: (pageData: any) => {
           // Enhanced page rendering for Japanese text and better structure
-          let renderOptions = {
+          const renderOptions = {
             normalizeWhitespace: false,
             disableCombineTextItems: false,
             includeMarkedContent: true, // Include tagged content for better structure
@@ -300,7 +300,7 @@ Please extract the complete text content while maintaining readability and struc
               let lastY, text = '';
               let lineSpacing = 0;
               
-              for (let item of textContent.items) {
+              for (const item of textContent.items) {
                 // Improved line break detection for Japanese text
                 if (lastY && Math.abs(lastY - item.transform[5]) > lineSpacing) {
                   // Add line break for significant Y position changes
