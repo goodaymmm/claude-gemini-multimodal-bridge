@@ -182,3 +182,6 @@ credentials.json
 lib/
 types/
 docs/generated/NEXT_STEPS.md
+
+# Development notes (local only)
+NEXT_STEPS.md
