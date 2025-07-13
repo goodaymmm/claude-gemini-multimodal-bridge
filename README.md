@@ -22,7 +22,6 @@
 - 🛡️ **Enterprise Reliability**: 95% self-healing with exponential backoff
 - 📊 **Complete Multimodal Support**: Images, audio, PDFs, and documents
 - 🔍 **Advanced OCR Processing**: Automatic fallback to AI Studio OCR for image-based PDFs
-- 🛡️ **Enhanced Type Safety**: Improved authentication system with comprehensive type checking
 
 ### 🏗️ **Core Architecture**
 - 🔗 **3-Layer System**: Claude Code ↔ Gemini CLI ↔ AI Studio
