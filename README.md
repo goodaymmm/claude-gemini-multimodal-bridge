@@ -14,18 +14,20 @@
 
 ## ✨ Key Features
 
-### 🎯 **Version 1.0.0 - Production Ready**
+### 🎯 **Version 1.1.0 - Enhanced with OCR**
 - 🔐 **OAuth Authentication**: Simplified OAuth file-based authentication for Claude Code compatibility
 - 🌐 **Automatic Translation**: Japanese to English translation for optimal image generation
 - 🔧 **Intelligent URL Routing**: PDF URLs to Claude Code, web pages to Gemini CLI
 - ⚡ **Performance Optimization**: Reduced timeouts, lazy loading, and smart caching
 - 🛡️ **Enterprise Reliability**: 95% self-healing with exponential backoff
 - 📊 **Complete Multimodal Support**: Images, audio, PDFs, and documents
+- 🔍 **Advanced OCR Processing**: Automatic fallback to AI Studio OCR for image-based PDFs
+- 🛡️ **Enhanced Type Safety**: Improved authentication system with comprehensive type checking
 
 ### 🏗️ **Core Architecture**
 - 🔗 **3-Layer System**: Claude Code ↔ Gemini CLI ↔ AI Studio
 - 🎯 **Intelligent Routing**: Automatically routes tasks to optimal AI layer
-- 📊 **Multimodal Processing**: Images, Audio, PDFs, Documents
+- 📊 **Multimodal Processing**: Images, Audio, PDFs, Documents with OCR
 - ⚡ **Workflow Orchestration**: Complex multi-step automation
 - 💰 **Cost Optimization**: Smart layer selection with caching
 
@@ -128,6 +130,12 @@ CGMB integrates seamlessly with Claude Code. Use the "CGMB" keyword for optimal 
 # Audio generation
 "CGMB create audio saying 'Welcome to our podcast'"
 
+# OCR-enabled PDF analysis (scanned documents, image-based PDFs)
+"CGMB analyze this scanned PDF document with OCR"
+
+# Complex PDF with poor text extraction
+"CGMB extract text from this image-based PDF using OCR"
+
 # Multi-file processing
 "CGMB analyze the image at /path/to/image.png and the document at /path/to/document.pdf together"
 ```
@@ -157,14 +165,36 @@ flowchart TD
 |-------|------------------|----------|---------|
 | **Claude Code** | Complex reasoning, code analysis | Strategic planning, complex logic | 300s |
 | **Gemini CLI** | Web search, current information | Real-time data, quick queries | 30s |
-| **AI Studio** | Multimodal processing, generation | Images, documents, files | 120s |
+| **AI Studio** | Multimodal processing, generation, OCR | Images, documents, files, OCR for scanned documents | 120s |
 
 ### Performance Features
 
 - **Authentication Caching**: 80% overhead reduction (Gemini 6h, AI Studio 24h, Claude 12h TTL)
 - **Search Cache**: 60-80% hit rates with 1-hour TTL
+- **OCR Processing**: Smart fallback with quality assessment reduces unnecessary OCR calls
+- **PDF Caching**: Processed documents cached to avoid re-OCR of identical files
 - **Intelligent Routing**: Automatic optimal layer selection
 - **Error Recovery**: 95% automatic recovery with fallback strategies
+
+## 🔍 Advanced PDF Processing
+
+### OCR Capabilities
+- **Automatic OCR Fallback**: When standard PDF text extraction fails, CGMB automatically uses AI Studio's OCR
+- **Image-based PDFs**: Handles scanned documents and image-based PDFs seamlessly
+- **Multi-language Support**: OCR works with various languages and document formats
+- **Quality Assessment**: Automatically compares text extraction quality and chooses the best result
+
+### Processing Workflow
+1. **Standard Extraction**: First attempts regular PDF text extraction
+2. **Quality Check**: Evaluates extraction quality and completeness
+3. **OCR Fallback**: Automatically triggers AI Studio OCR for poor extractions
+4. **Best Result**: Returns the highest quality text extraction available
+
+### Supported Document Types
+- **Text-based PDFs**: Direct text extraction for fast processing
+- **Scanned PDFs**: OCR processing via Google AI Studio
+- **Image-based PDFs**: Automatic OCR fallback for optimal results
+- **Mixed Content**: Intelligently handles PDFs with both text and images
 
 ## 📁 File Organization
 
@@ -215,6 +245,30 @@ CGMB automatically configures Claude Code MCP integration:
 export CGMB_DEBUG=true
 export LOG_LEVEL=debug
 cgmb serve --debug
+```
+
+### OCR and PDF Processing Issues
+
+#### Problem: Poor OCR results
+**Symptoms**: Incomplete or incorrect text extraction from scanned PDFs
+**Solution**:
+```bash
+# Check PDF quality and format
+cgmb analyze document.pdf --type diagnostic
+
+# For best OCR results:
+# - Use high-resolution scanned PDFs (300+ DPI)
+# - Ensure clear, high-contrast text
+# - Avoid skewed or rotated documents
+```
+
+#### Problem: OCR timeout for large documents
+**Symptoms**: OCR processing fails on large PDF files
+**Solution**:
+```bash
+# Split large PDFs before processing (Gemini File API limit: 50MB, 1,000 pages)
+# Or increase timeout in configuration
+export AI_STUDIO_TIMEOUT=180000  # 3 minutes
 ```
 
 ### Project Structure
