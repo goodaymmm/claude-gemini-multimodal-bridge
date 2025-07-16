@@ -649,24 +649,24 @@ To retrieve this file, use:
     const params = MultimodalProcessSchema.parse(args);
     
     try {
-      console.log(`Processing multimodal request with ${params.files.length} files`);
+      console.error(`Processing multimodal request with ${params.files.length} files`);
       const parts: any[] = [{ text: params.instructions }];
 
       // Process each file
       for (const file of params.files) {
-        console.log(`Processing file: ${file.path}`);
+        console.error(`Processing file: ${file.path}`);
         
         // Check if the path is a URL
         const isUrl = file.path.startsWith('http://') || file.path.startsWith('https://');
         
         if (isUrl) {
-          console.log(`Detected URL: ${file.path}`);
+          console.error(`Detected URL: ${file.path}`);
           const mimeType = this.getMimeTypeFromUrl(file.path);
-          console.log(`URL detected as MIME type: ${mimeType}`);
+          console.error(`URL detected as MIME type: ${mimeType}`);
           
           if (mimeType === 'application/pdf') {
             // Use File API to upload PDF URL for native processing
-            console.log(`Uploading PDF URL to Gemini File API: ${file.path}`);
+            console.error(`Uploading PDF URL to Gemini File API: ${file.path}`);
             const uploadedFile = await this.uploadPDFUrlWithFileAPI(file.path);
             parts.push({
               fileData: {
@@ -690,7 +690,7 @@ To retrieve this file, use:
 
           const fileData = fs.readFileSync(file.path);
           const mimeType = this.getMimeType(file.path);
-          console.log(`File detected as MIME type: ${mimeType}`);
+          console.error(`File detected as MIME type: ${mimeType}`);
 
           if (mimeType.startsWith('image/')) {
             parts.push({
@@ -701,7 +701,7 @@ To retrieve this file, use:
             });
           } else if (mimeType === 'application/pdf') {
             // Use File API to upload PDF for native processing
-            console.log(`Uploading PDF to Gemini File API: ${file.path}`);
+            console.error(`Uploading PDF to Gemini File API: ${file.path}`);
             const uploadedFile = await this.uploadPDFWithFileAPI(file.path);
             parts.push({
               fileData: {
@@ -718,7 +718,7 @@ To retrieve this file, use:
         }
       }
 
-      console.log(`Sending request to Gemini with ${parts.length} parts (instructions + ${parts.length - 1} files)`);
+      console.error(`Sending request to Gemini with ${parts.length} parts (instructions + ${parts.length - 1} files)`);
       const response = await this.genAI.models.generateContent({
         model: params.model || 'gemini-2.5-flash',
         contents: parts,
@@ -727,7 +727,7 @@ To retrieve this file, use:
         },
       });
 
-      console.log(`Received response from Gemini, response length: ${response.candidates?.[0]?.content?.parts?.[0]?.text?.length || 0} characters`);
+      console.error(`Received response from Gemini, response length: ${response.candidates?.[0]?.content?.parts?.[0]?.text?.length || 0} characters`);
       return {
         content: [
           {
@@ -765,11 +765,11 @@ To retrieve this file, use:
         }
 
         const mimeType = this.getMimeType(docPath);
-        console.log(`Document detected as MIME type: ${mimeType}`);
+        console.error(`Document detected as MIME type: ${mimeType}`);
 
         if (mimeType === 'application/pdf') {
           // Use File API to upload PDF for native processing with OCR support
-          console.log(`Uploading PDF to Gemini File API for OCR processing: ${docPath}`);
+          console.error(`Uploading PDF to Gemini File API for OCR processing: ${docPath}`);
           const uploadedFile = await this.uploadPDFWithFileAPI(docPath);
           parts.push({
             fileData: {
@@ -786,7 +786,7 @@ To retrieve this file, use:
         }
       }
 
-      console.log(`Sending document analysis request to Gemini with ${parts.length} parts`);
+      console.error(`Sending document analysis request to Gemini with ${parts.length} parts`);
       const response = await this.genAI.models.generateContent({
         model: options.model || 'gemini-2.5-flash',
         contents: parts,
@@ -868,7 +868,7 @@ To retrieve this file, use:
    */
   private async extractPDFText(filePath: string): Promise<string> {
     try {
-      console.log(`[MCP Server] Extracting text from PDF: ${filePath}`);
+      console.error(`[MCP Server] Extracting text from PDF: ${filePath}`);
       
       // pdf-parseを動的に読み込み（PDFファイル処理時のみ）
       let pdfParse;
@@ -887,7 +887,7 @@ To retrieve this file, use:
 
       const extractedText = data.text.trim();
       
-      console.log(`[MCP Server] PDF extraction completed`, {
+      console.error(`[MCP Server] PDF extraction completed`, {
         filePath,
         textLength: extractedText.length,
         pageCount: data.numpages,
@@ -1214,7 +1214,7 @@ To retrieve this file, use:
    */
   private async uploadPDFWithFileAPI(pdfPath: string): Promise<any> {
     try {
-      console.log(`Starting PDF upload via File API: ${pdfPath}`);
+      console.error(`Starting PDF upload via File API: ${pdfPath}`);
       
       // Check file size (50MB limit)
       const stats = fs.statSync(pdfPath);
@@ -1235,7 +1235,7 @@ To retrieve this file, use:
         }
       });
       
-      console.log(`PDF uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
+      console.error(`PDF uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
       
       // Wait for processing to complete
       let file = uploadResult;
@@ -1243,19 +1243,19 @@ To retrieve this file, use:
       const maxWaitTime = 120000; // 2 minutes max wait
       
       while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
-        console.log(`Waiting for PDF processing... (${waitTime / 1000}s)`);
+        console.error(`Waiting for PDF processing... (${waitTime / 1000}s)`);
         await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
         waitTime += 2000;
         
         file = await this.genAI.files.get({ name: file.name! });
-        console.log(`PDF processing state: ${file.state}`);
+        console.error(`PDF processing state: ${file.state}`);
       }
       
       if (file.state !== 'ACTIVE') {
         throw new Error(`PDF processing failed or timed out. Final state: ${file.state}`);
       }
       
-      console.log(`PDF ready for processing: ${file.name} (${fileSizeMB.toFixed(1)}MB)`);
+      console.error(`PDF ready for processing: ${file.name} (${fileSizeMB.toFixed(1)}MB)`);
       
       return {
         uri: file.uri,
@@ -1276,7 +1276,7 @@ To retrieve this file, use:
    */
   private async uploadPDFUrlWithFileAPI(pdfUrl: string): Promise<any> {
     try {
-      console.log(`Starting PDF URL upload via File API: ${pdfUrl}`);
+      console.error(`Starting PDF URL upload via File API: ${pdfUrl}`);
       
       // Upload the URL directly using GoogleGenAI files API
       const uploadResult = await this.genAI.files.upload({
@@ -1287,7 +1287,7 @@ To retrieve this file, use:
         }
       });
       
-      console.log(`PDF URL uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
+      console.error(`PDF URL uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
       
       // Wait for processing to complete
       let file = uploadResult;
@@ -1295,19 +1295,19 @@ To retrieve this file, use:
       const maxWaitTime = 120000; // 2 minutes max wait
       
       while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
-        console.log(`Waiting for PDF URL processing... (${waitTime / 1000}s)`);
+        console.error(`Waiting for PDF URL processing... (${waitTime / 1000}s)`);
         await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
         waitTime += 2000;
         
         file = await this.genAI.files.get({ name: file.name! });
-        console.log(`PDF URL processing state: ${file.state}`);
+        console.error(`PDF URL processing state: ${file.state}`);
       }
       
       if (file.state !== 'ACTIVE') {
         throw new Error(`PDF URL processing failed or timed out. Final state: ${file.state}`);
       }
       
-      console.log(`PDF URL ready for processing: ${file.name} (from ${pdfUrl})`);
+      console.error(`PDF URL ready for processing: ${file.name} (from ${pdfUrl})`);
       
       return {
         uri: file.uri,
