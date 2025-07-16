@@ -1364,7 +1364,9 @@ export class AIStudioLayer implements LayerInterface {
         command,
         hasParams: !!params,
         timeout,
+        timeoutMinutes: Math.round(timeout / 60000),
         usesPersistentProcess: true,
+        paramKeys: params ? Object.keys(params) : []
       });
 
       let output = '';
@@ -1400,6 +1402,13 @@ export class AIStudioLayer implements LayerInterface {
         }
       };
       
+      logger.debug(`[${this.instanceId}] Sending optimized MCP request`, {
+        instanceId: this.instanceId,
+        command,
+        requestId: mcpRequest.id,
+        requestLength: JSON.stringify(mcpRequest).length
+      });
+      
       try {
         process.stdin.write(JSON.stringify(mcpRequest) + '\n');
       } catch (error) {
@@ -1409,7 +1418,15 @@ export class AIStudioLayer implements LayerInterface {
       }
       
       const dataHandler = (data: Buffer) => {
-        output += data.toString();
+        const chunk = data.toString();
+        output += chunk;
+        
+        logger.debug(`[${this.instanceId}] Optimized MCP stdout chunk received`, {
+          instanceId: this.instanceId,
+          command,
+          chunkLength: chunk.length,
+          totalOutputLength: output.length
+        });
         
         // Try to parse complete responses
         const lines = output.split('\n');
@@ -1418,12 +1435,22 @@ export class AIStudioLayer implements LayerInterface {
             try {
               const mcpResponse = JSON.parse(line);
               if (mcpResponse.result || mcpResponse.error) {
-                cleanup(); // 即座にクリーンアップとタイムアウトクリア
-                
-                if (mcpResponse.error) {
-                  reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
-                } else {
-                  resolve(mcpResponse.result); // 即座にresolve（タイムアウト問題の修正）
+                if (!isResolved) {
+                  cleanup(); // 即座にクリーンアップとタイムアウトクリア
+                  
+                  logger.debug(`[${this.instanceId}] MCP response received - immediate resolution`, {
+                    instanceId: this.instanceId,
+                    command,
+                    hasResult: !!mcpResponse.result,
+                    hasError: !!mcpResponse.error,
+                    responseId: mcpResponse.id
+                  });
+                  
+                  if (mcpResponse.error) {
+                    reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
+                  } else {
+                    resolve(mcpResponse.result); // 即座にresolve（タイムアウト問題の修正）
+                  }
                 }
                 return;
               }
@@ -1436,13 +1463,22 @@ export class AIStudioLayer implements LayerInterface {
       };
 
       const errorHandler = (data: Buffer) => {
-        errorOutput += data.toString();
+        const chunk = data.toString();
+        errorOutput += chunk;
+        logger.debug(`[${this.instanceId}] Optimized MCP stderr chunk received`, {
+          instanceId: this.instanceId,
+          command,
+          chunkLength: chunk.length,
+          errorContent: chunk.substring(0, 200)
+        });
       };
       
       // Set up timeout with immediate cleanup
       timeoutId = setTimeout(() => {
-        cleanup();
-        reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation completed but response delayed`));
+        if (!isResolved) {
+          cleanup();
+          reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
+        }
       }, timeout);
 
       process.stdout.on('data', dataHandler);
@@ -1480,10 +1516,13 @@ export class AIStudioLayer implements LayerInterface {
     }
     
     return new Promise<any>((resolve, reject) => {
-      logger.debug('Executing MCP command', {
+      logger.debug(`[${this.instanceId}] Executing MCP command`, {
+        instanceId: this.instanceId,
         command,
         hasParams: !!params,
         timeout,
+        timeoutMinutes: Math.round(timeout / 60000),
+        paramKeys: params ? Object.keys(params) : []
       });
 
       // Use our custom AI Studio MCP server with proper MCP protocol
@@ -1516,9 +1555,13 @@ export class AIStudioLayer implements LayerInterface {
       let output = '';
       let errorOutput = '';
 
+      let isCompleted = false;
       const timeoutId = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error(`AI Studio MCP command timeout after ${timeout}ms`));
+        if (!isCompleted) {
+          isCompleted = true;
+          child.kill('SIGKILL');
+          reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
+        }
       }, timeout);
 
       // Send MCP request
@@ -1532,72 +1575,107 @@ export class AIStudioLayer implements LayerInterface {
         }
       };
 
+      logger.debug(`[${this.instanceId}] Sending MCP request`, {
+        instanceId: this.instanceId,
+        command,
+        requestId: mcpRequest.id,
+        requestLength: JSON.stringify(mcpRequest).length
+      });
+      
       child.stdin.write(JSON.stringify(mcpRequest) + '\n');
       child.stdin.end();
 
       child.stdout.on('data', (data) => {
-        output += data.toString();
+        const chunk = data.toString();
+        output += chunk;
+        logger.debug(`[${this.instanceId}] MCP stdout chunk received`, {
+          instanceId: this.instanceId,
+          command,
+          chunkLength: chunk.length,
+          totalOutputLength: output.length
+        });
       });
 
       child.stderr.on('data', (data) => {
-        errorOutput += data.toString();
+        const chunk = data.toString();
+        errorOutput += chunk;
+        logger.debug(`[${this.instanceId}] MCP stderr chunk received`, {
+          instanceId: this.instanceId,
+          command,
+          chunkLength: chunk.length,
+          errorContent: chunk.substring(0, 200)
+        });
       });
 
       child.on('close', (code) => {
-        clearTimeout(timeoutId);
-        
-        if (code === 0) {
-          // Immediate resolution pattern for new installations
-          // Process results immediately without waiting for additional processing
-          try {
-            const lines = output.trim().split('\n').filter(line => line.trim());
-            let result = {};
-            
-            for (const line of lines) {
-              try {
-                const mcpResponse = JSON.parse(line);
-                if (mcpResponse.result) {
-                  result = mcpResponse.result;
-                  break;
-                }
-              } catch (parseError) {
-                continue;
-              }
-            }
-            
-            logger.debug(`[${this.instanceId}] MCP command completed successfully - immediate resolution`, {
-              instanceId: this.instanceId,
-              command,
-              outputLength: output.length,
-              code,
-              resultType: typeof result,
-              hasResult: !!result
-            });
-            
-            resolve(result);
-          } catch (parseError) {
-            logger.debug(`[${this.instanceId}] MCP parsing failed, using raw output fallback`, {
-              instanceId: this.instanceId,
-              parseError: parseError instanceof Error ? parseError.message : String(parseError)
-            });
-            resolve({ content: output.trim() });
-          }
-        } else {
-          const error = `AI Studio MCP command failed with code ${code}: ${errorOutput}`;
-          logger.error(`[${this.instanceId}] MCP command failed`, { 
+        if (!isCompleted) {
+          isCompleted = true;
+          clearTimeout(timeoutId);
+          
+          logger.debug(`[${this.instanceId}] MCP process closed with code ${code}`, {
             instanceId: this.instanceId,
-            command, 
-            code, 
-            error: errorOutput 
+            command,
+            code,
+            outputLength: output.length,
+            errorLength: errorOutput.length
           });
-          reject(new Error(error));
+          
+          if (code === 0) {
+            // Immediate resolution pattern for new installations
+            // Process results immediately without waiting for additional processing
+            try {
+              const lines = output.trim().split('\n').filter(line => line.trim());
+              let result = {};
+              
+              for (const line of lines) {
+                try {
+                  const mcpResponse = JSON.parse(line);
+                  if (mcpResponse.result) {
+                    result = mcpResponse.result;
+                    break;
+                  }
+                } catch (parseError) {
+                  continue;
+                }
+              }
+              
+              logger.debug(`[${this.instanceId}] MCP command completed successfully - immediate resolution`, {
+                instanceId: this.instanceId,
+                command,
+                outputLength: output.length,
+                code,
+                resultType: typeof result,
+                hasResult: !!result
+              });
+              
+              resolve(result);
+            } catch (parseError) {
+              logger.debug(`[${this.instanceId}] MCP parsing failed, using raw output fallback`, {
+                instanceId: this.instanceId,
+                parseError: parseError instanceof Error ? parseError.message : String(parseError)
+              });
+              resolve({ content: output.trim() });
+            }
+          } else {
+            const error = `AI Studio MCP command failed with code ${code}: ${errorOutput}`;
+            logger.error(`[${this.instanceId}] MCP command failed`, { 
+              instanceId: this.instanceId,
+              command, 
+              code, 
+              error: errorOutput 
+            });
+            reject(new Error(error));
+          }
         }
       });
 
       child.on('error', (error) => {
-        clearTimeout(timeoutId); // エラー時も即座にクリア
-        logger.error('MCP command process error', { command, error: error.message });
-        reject(error);
+        if (!isCompleted) {
+          isCompleted = true;
+          clearTimeout(timeoutId);
+          logger.error('MCP command process error', { command, error: error.message });
+          reject(error);
+        }
       });
     });
   }
