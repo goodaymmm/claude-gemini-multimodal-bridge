@@ -751,7 +751,7 @@ To retrieve this file, use:
   }
 
   private async analyzeDocuments(args: any) {
-    // Simple document analysis implementation
+    // Enhanced document analysis implementation with File API support
     const { documents, instructions, options = {} } = args;
     
     try {
@@ -764,15 +764,32 @@ To retrieve this file, use:
           continue;
         }
 
-        const docData = fs.readFileSync(docPath, 'utf-8');
-        parts.push({
-          text: `Document: ${docPath}\nContent: ${docData}`
-        });
+        const mimeType = this.getMimeType(docPath);
+        console.log(`Document detected as MIME type: ${mimeType}`);
+
+        if (mimeType === 'application/pdf') {
+          // Use File API to upload PDF for native processing with OCR support
+          console.log(`Uploading PDF to Gemini File API for OCR processing: ${docPath}`);
+          const uploadedFile = await this.uploadPDFWithFileAPI(docPath);
+          parts.push({
+            fileData: {
+              fileUri: uploadedFile.uri,
+              mimeType: 'application/pdf'
+            }
+          });
+        } else {
+          // For text files, read as UTF-8
+          const docData = fs.readFileSync(docPath, 'utf-8');
+          parts.push({
+            text: `Document: ${docPath}\nContent: ${docData}`
+          });
+        }
       }
 
+      console.log(`Sending document analysis request to Gemini with ${parts.length} parts`);
       const response = await this.genAI.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: parts.map(part => part.text).join('\n'),
+        model: options.model || 'gemini-2.5-flash',
+        contents: parts,
         config: {
           responseModalities: [Modality.TEXT],
         },
