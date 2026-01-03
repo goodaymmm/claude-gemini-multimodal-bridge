@@ -1,6 +1,6 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.0.4",
+  "version": "1.1.6",
   "description": "Enterprise-grade AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing and advanced multimodal processing capabilities",
   "type": "module",
   "main": "dist/index.js",
@@ -30,7 +30,7 @@
     }
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js",
+    "build": "tsc",
     "dev": "tsx src/index.ts",
     "start": "cgmb serve",
     "serve": "cgmb serve",

@@ -20,9 +20,11 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
 import { AI_MODELS } from '../core/types.js';
+import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
 // pdf-parse は extractPDFText() メソッド内で動的に読み込みます
@@ -113,10 +115,8 @@ class AIStudioMCPServer {
     this.server = new Server(
       {
         name: 'ai-studio-mcp-server',
-        version: '1.1.0',
-        description: 'Professional AI content generation server for Google AI Studio. Provides safe, policy-compliant image generation, audio synthesis, and document processing capabilities.',
-        author: 'CGMB Development Team',
-        license: 'MIT',
+        version: '1.1.4',
+        // Note: author and license info in package.json
       },
       {
         capabilities: {
@@ -508,20 +508,28 @@ class AIStudioMCPServer {
       }
 
       // Save the generated image if we have data
-      let savedFilePath = null;
+      let savedFilePath: string | null = null;
+      let savedAbsolutePath: string | null = null;
       let fileSize = 0;
       if (imageData) {
         const outputDir = path.join(process.cwd(), 'output', 'images');
         await fsPromises.mkdir(outputDir, { recursive: true });
-        
+
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const filename = `generated-image-${timestamp}.png`;
-        savedFilePath = path.join('output', 'images', filename);
-        const absolutePath = path.join(outputDir, filename);
-        
+        savedAbsolutePath = path.join(outputDir, filename);
+
         const buffer = Buffer.from(imageData, 'base64');
-        await fsPromises.writeFile(absolutePath, buffer);
+        await fsPromises.writeFile(savedAbsolutePath, buffer);
+
+        // Verify file was written
+        if (!fs.existsSync(savedAbsolutePath)) {
+          throw new Error(`Failed to write image file: ${savedAbsolutePath}`);
+        }
+
         fileSize = buffer.length;
+        // Use normalized cross-platform path (forward slashes)
+        savedFilePath = normalizeCrossPlatformPath(`output/images/${filename}`);
       }
 
       return {
@@ -546,7 +554,7 @@ To retrieve this file, use:
         downloadUrl: null,
         file: savedFilePath ? {
           path: savedFilePath,
-          absolutePath: path.resolve(savedFilePath),
+          absolutePath: savedAbsolutePath,
           size: fileSize,
           format: 'png',
           createdAt: new Date().toISOString()
@@ -1138,15 +1146,14 @@ To retrieve this file, use:
       // Save the generated audio
       const outputDir = path.join(process.cwd(), 'output', 'audio');
       await fsPromises.mkdir(outputDir, { recursive: true });
-      
+
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = `generated-audio-${timestamp}.wav`;
-      const savedFilePath = path.join('output', 'audio', filename);
       const absolutePath = path.join(outputDir, filename);
-      
+
       // Create proper WAV file with headers using WaveFile library
       const rawAudioBuffer = Buffer.from(audioData, 'base64');
-      
+
       // Google AI Studio returns L16 PCM data (16-bit signed integers)
       // Convert Buffer to Int16Array for WaveFile.fromScratch()
       const pcmSamples = [];
@@ -1155,17 +1162,25 @@ To retrieve this file, use:
         const sample = rawAudioBuffer.readInt16LE(i);
         pcmSamples.push(sample);
       }
-      
+
       // Create WAV file with proper headers per google_docs.md specification
       const wav = new WaveFile();
       wav.fromScratch(1, 24000, '16', pcmSamples);
-      
+
       // Get complete WAV file buffer with headers
       const wavBuffer = wav.toBuffer();
-      
+
       // Write to disk
       await fsPromises.writeFile(absolutePath, wavBuffer);
+
+      // Verify file was written
+      if (!fs.existsSync(absolutePath)) {
+        throw new Error(`Failed to write audio file: ${absolutePath}`);
+      }
+
       const fileSize = wavBuffer.length;
+      // Use normalized cross-platform path (forward slashes)
+      const savedFilePath = normalizeCrossPlatformPath(`output/audio/${filename}`);
 
       return {
         content: [
@@ -1186,7 +1201,7 @@ To retrieve this file, use:
         audioData,
         file: {
           path: savedFilePath,
-          absolutePath: path.resolve(savedFilePath),
+          absolutePath: absolutePath,
           size: fileSize,
           format: 'wav',
           createdAt: new Date().toISOString()
@@ -1329,8 +1344,26 @@ To retrieve this file, use:
   }
 }
 
-// CLI execution
-if (import.meta.url === `file://${process.argv[1]}`) {
+// CLI execution - Windows compatible path comparison
+// On Windows: import.meta.url = 'file:///M:/path/...' but process.argv[1] = 'M:\path\...'
+function isMainModule(): boolean {
+  try {
+    const currentFile = fileURLToPath(import.meta.url);
+    const executedFile = process.argv[1];
+    if (!executedFile) {
+      return true; // Fallback: assume main module
+    }
+    // Normalize both paths for cross-platform comparison
+    const normalizedCurrent = currentFile.replace(/\\/g, '/').toLowerCase();
+    const normalizedExecuted = executedFile.replace(/\\/g, '/').toLowerCase();
+    return normalizedCurrent === normalizedExecuted;
+  } catch {
+    // Fallback: assume main module if we can't determine
+    return true;
+  }
+}
+
+if (isMainModule()) {
   const server = new AIStudioMCPServer();
   server.run().catch((error) => {
     console.error('Server error:', error);

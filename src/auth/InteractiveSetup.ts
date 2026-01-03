@@ -309,18 +309,10 @@ export class InteractiveSetup {
       };
     }
 
-    // Check AI Studio MCP availability
-    console.log('🔄 Checking AI Studio MCP server availability...');
+    // Verify AI Studio authentication
     const result = await this.authVerifier.verifyAIStudioAuth();
-    
-    if (!result.success && result.error?.includes('MCP server')) {
-      console.log('ℹ️  AI Studio MCP server not found');
-      console.log('\n📋 To install AI Studio MCP server:');
-      console.log('   1. Run: npm install -g aistudio-mcp-server');
-      console.log('   2. Verify installation: npx aistudio-mcp-server --version\n');
-    }
-
     return result;
+
   }
 
   /**
@@ -453,7 +445,6 @@ npm install -g claude-gemini-multimodal-bridge
 
 This will automatically:
 - Install Gemini CLI (@google/gemini-cli) 
-- Install AI Studio MCP Server (aistudio-mcp-server)
 - Setup Claude Code MCP integration
 - Create .env template file
 - Verify system requirements
@@ -479,10 +470,7 @@ npm install -g @anthropic-ai/claude-code
 3b. Install Gemini CLI:
 npm install -g @google/gemini-cli
 
-3c. Install AI Studio MCP:
-npm install -g aistudio-mcp-server
-
-3d. Setup authentication:
+3c. Setup authentication:
 cgmb auth --interactive
 
 STEP 4: API Key Configuration

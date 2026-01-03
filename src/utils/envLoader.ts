@@ -1,5 +1,6 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
+import { commandExists, findExecutable } from './platformUtils.js';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
@@ -257,11 +258,7 @@ export class SmartEnvLoader {
 
     // Try alternative: look for cgmb binary and trace back
     try {
-      const cgmbPath = execSync('which cgmb', { 
-        encoding: 'utf8', 
-        timeout: 5000,
-        stdio: 'pipe' 
-      }).trim();
+      const cgmbPath = findExecutable('cgmb');
       
       if (cgmbPath) {
         // cgmb binary found, trace back to package directory

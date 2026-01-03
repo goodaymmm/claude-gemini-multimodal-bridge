@@ -318,15 +318,20 @@ export class OAuthManager {
   }
 
   /**
-   * Check if Gemini CLI is available on system
+   * Check if Gemini CLI is available on system (cross-platform)
    */
   private async checkGeminiCLIAvailable(): Promise<boolean> {
+    const isWindows = process.platform === 'win32';
+    const checkCommand = isWindows ? 'where gemini' : 'which gemini';
+
     try {
-      execSync('which gemini', { stdio: 'ignore' });
+      execSync(checkCommand, { stdio: 'ignore', timeout: 5000 });
       return true;
     } catch {
+      // Fallback: try running gemini directly
       try {
-        execSync('gemini --version', { stdio: 'ignore' });
+        const geminiCmd = isWindows ? 'gemini.cmd --version' : 'gemini --version';
+        execSync(geminiCmd, { stdio: 'ignore', timeout: 5000 });
         return true;
       } catch {
         return false;

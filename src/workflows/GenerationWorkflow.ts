@@ -1176,7 +1176,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
             layer: 'claude' as const,
             action: 'explain_limitation',
             input: {
-              message: 'Image generation requires AI Studio (Imagen 3). Please check your GEMINI_API_KEY configuration.'
+              message: 'Image generation requires AI Studio (Imagen 3). Please check your AI_STUDIO_API_KEY configuration.'
             }
           }
         }
@@ -1220,7 +1220,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
             layer: 'claude' as const,
             action: 'explain_limitation',
             input: {
-              message: 'Video generation requires AI Studio (Veo 2). Please check your GEMINI_API_KEY configuration.'
+              message: 'Video generation requires AI Studio (Veo 2). Please check your AI_STUDIO_API_KEY configuration.'
             }
           }
         }

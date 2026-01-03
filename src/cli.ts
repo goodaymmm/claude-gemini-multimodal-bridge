@@ -73,7 +73,7 @@ const program = new Command();
 program
   .name('cgmb')
   .description('Claude-Gemini Multimodal Bridge - Enterprise-grade AI integration tool')
-  .version('1.0.0');
+  .version('1.1.6');
 
 // Server command
 program
@@ -116,7 +116,7 @@ program
       if (envResult.loadedFrom) {
         logger.info('Environment loaded successfully', {
           source: envResult.loadedFrom,
-          hasGeminiKey: !!process.env.GEMINI_API_KEY
+          hasAIStudioKey: !!process.env.AI_STUDIO_API_KEY
         });
       }
 
@@ -1468,7 +1468,9 @@ program
       await loadEnvironmentSmart({ verbose: false });
       
       console.log('🎨 Generating image with AI Studio...');
-      
+      console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+      console.log('   "CGMB generate an image of a futuristic city"\n');
+
       // Add safety prefix if safe mode is enabled
       let safePrompt = prompt;
       if (options.safeMode) {
@@ -1485,8 +1487,8 @@ program
       }
       
       const defaultConfig = {
-        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        claude: { timeout: 300000, code_path: 'claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -1559,10 +1561,12 @@ program
       await loadEnvironmentSmart({ verbose: false });
       
       console.log('🎵 Generating audio with AI Studio...');
-      
+      console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+      console.log('   "CGMB create audio saying Welcome to our podcast"\n');
+
       const defaultConfig = {
-        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        claude: { timeout: 300000, code_path: 'claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -1644,7 +1648,9 @@ program
         // Handle PDF URLs with AI Studio layer
         if (pdfUrls.length > 0) {
           console.log('📄 PDF URL(s) detected - routing to AI Studio for optimal PDF processing...');
-          
+          console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+          console.log('   "CGMB analyze https://example.com/document.pdf"\n');
+
           // Construct analysis prompt for PDF URLs
           let analysisPrompt: string;
           if (pdfUrls.length === 1) {
@@ -1660,7 +1666,7 @@ program
           // Use LayerManager with AI Studio layer for PDF URL processing
           const layerManager = new LayerManager({
             gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-            claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
+            claude: { code_path: 'claude', timeout: 300000 },
             aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
             cache: { enabled: true, ttl: 3600 },
             logging: { level: 'info' as const }
@@ -1724,7 +1730,9 @@ program
         // Handle regular web URLs with Gemini CLI
         if (webUrls.length > 0) {
           console.log('🔍 Web URL(s) detected - routing to Gemini CLI for current information...');
-          
+          console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+          console.log('   "CGMB search for the latest AI developments"\n');
+
           // Construct analysis prompt for web URLs
           let analysisPrompt: string;
           if (webUrls.length === 1) {
@@ -1816,6 +1824,8 @@ program
       }
 
       console.log('📄 Analyzing documents with AI Studio...');
+      console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+      console.log('   "CGMB analyze the document at /path/to/report.pdf"\n');
       console.log(`📁 Files (${resolvedFiles.length}):`);
       console.log(`📂 Current directory: ${process.cwd()}`);
       resolvedFiles.forEach((file: string, index: number) => {
@@ -1835,8 +1845,8 @@ program
       }
 
       const defaultConfig = {
-        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        claude: { timeout: 300000, code_path: 'claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -1944,8 +1954,8 @@ program
       console.log(`📁 Files: ${files.join(', ')}`);
       
       const defaultConfig = {
-        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        claude: { timeout: 300000, code_path: 'claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }

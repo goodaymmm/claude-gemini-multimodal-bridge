@@ -1,4 +1,6 @@
 import { logger } from './logger.js';
+import { findProcesses, getHomeDir } from './platformUtils.js';
+
 
 /**
  * Unified timeout management for CGMB operations
@@ -181,11 +183,8 @@ export class TimeoutManager {
       
       // Check for node processes running AI Studio MCP server
       try {
-        const processes = execSync('pgrep -f "ai-studio-mcp-server" || true', { 
-          encoding: 'utf8', 
-          timeout: 1000 
-        });
-        return !processes.trim(); // No processes found = needs startup
+        const processes = findProcesses("ai-studio-mcp-server");
+        return processes.length === 0; // No processes found = needs startup
       } catch {
         return true; // Assume needs startup if check fails
       }
