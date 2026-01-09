@@ -241,7 +241,7 @@ program
         await interactiveSetup.runAuthSetupWizard();
       }
       
-      // 認証完了後の明示的な終了
+      // Explicit exit after authentication completion
       logger.info('Authentication setup completed successfully');
       process.exit(0);
       
@@ -345,10 +345,9 @@ program
   .command('detect-paths')
   .description('Detect and show paths for required CLI tools')
   .option('--fix', 'Attempt to fix PATH issues automatically')
-  .action(async (options) => {
-    try {
-      console.log('🔍 Detecting CLI Tool Paths');
-      console.log('===========================');
+          .action(async (options) => {
+          try {
+            console.log('🔍 Detecting CLI Tool Paths');      console.log('===========================');
       
       const tools = [
         { name: 'Claude Code', commands: ['claude', 'claude-code'], env: 'CLAUDE_CODE_PATH' },
@@ -999,8 +998,8 @@ program
 
       console.log('💡 Auto-detected prompt (using chat mode)');
       
-      // 内部的にgeminiコマンドと同じ処理を実行
-      // ただし-pフラグは自動で設定
+      // Internally execute the same processing as the gemini command
+      // However, the -p flag is set automatically
       options.prompt = prompt;
       await executeGeminiCommand(options);
       
@@ -1035,7 +1034,7 @@ program
     try {
       let prompt = options.prompt;
       
-      // スマート検出: 引数があるけど-pがない場合
+      // Smart detection: When there are arguments but no -p flag
       if (!prompt && promptArgs.length > 0) {
         prompt = promptArgs.join(' ');
         console.log('💡 Auto-detected prompt (tip: use -p for explicit mode)');
@@ -1120,7 +1119,7 @@ program
     }
   });
 
-// 共通のGemini実行関数
+// Common Gemini execution function
 async function executeGeminiCommand(options: any) {
   try {
     if (!options.prompt) {

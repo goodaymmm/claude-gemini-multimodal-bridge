@@ -27,7 +27,7 @@ import { AI_MODELS } from '../core/types.js';
 import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
-// pdf-parse は extractPDFText() メソッド内で動的に読み込みます
+// pdf-parse is dynamically imported within the extractPDFText() method
 
 
 // Input validation schemas
@@ -872,16 +872,16 @@ To retrieve this file, use:
   }
 
   /**
-   * Extract text from PDF using pdf-parse (動的読み込み)
+   * Extract text from PDF using pdf-parse (dynamic import)
    */
   private async extractPDFText(filePath: string): Promise<string> {
     try {
       console.error(`[MCP Server] Extracting text from PDF: ${filePath}`);
       
-      // pdf-parseを動的に読み込み（PDFファイル処理時のみ）
+      // Dynamically import pdf-parse (only during PDF file processing)
       let pdfParse;
       try {
-        // ESモジュール環境でのCommonJS動的インポート（テストモード回避のため直接libを使用）
+        // CommonJS dynamic import in ES module environment (using lib directly to avoid test mode)
         pdfParse = (await import('pdf-parse/lib/pdf-parse.js' as any)).default;
       } catch (importError) {
         throw new Error(`PDF processing library not available: ${importError instanceof Error ? importError.message : String(importError)}`);

@@ -630,8 +630,9 @@ export class CGMBServer {
                   type: f.type === 'pdf' ? 'document' : f.type
                 }));
 
-                // Execute via AI Studio
-                const result = await this.layerManager.getAIStudioLayer().execute({
+                // Execute via AI Studio (with async initialization)
+                const aiStudioLayer = await this.layerManager.getAIStudioLayerAsync();
+                const result = await aiStudioLayer.execute({
                   type: 'document_analysis',
                   files: filesForProcessing,
                   prompt: normalizedRequest.prompt
@@ -681,8 +682,9 @@ export class CGMBServer {
 
           logger.info('Executing URL analysis via Gemini CLI', { analysisPrompt });
 
-          // Direct execution on Gemini layer for URL processing
-          const result = await this.layerManager.getGeminiLayer().execute({
+          // Direct execution on Gemini layer for URL processing (with async initialization)
+          const geminiLayer = await this.layerManager.getGeminiLayerAsync();
+          const result = await geminiLayer.execute({
             type: 'text_processing',
             prompt: analysisPrompt,
             files: [],
@@ -716,8 +718,9 @@ export class CGMBServer {
             matchedKeywords: searchKeywords.filter(k => lowerPrompt.includes(k.toLowerCase()))
           });
 
-          // Direct execution on Gemini layer for search
-          const result = await this.layerManager.getGeminiLayer().execute({
+          // Direct execution on Gemini layer for search (with async initialization)
+          const geminiLayerForSearch = await this.layerManager.getGeminiLayerAsync();
+          const result = await geminiLayerForSearch.execute({
             type: 'search',
             prompt: normalizedRequest.prompt,
             files: [],
@@ -753,18 +756,19 @@ export class CGMBServer {
           });
 
           try {
-            const aiStudioLayer = this.layerManager.getAIStudioLayer();
+            // Async initialization for AI Studio layer
+            const aiStudioLayerForGen = await this.layerManager.getAIStudioLayerAsync();
             let result;
 
             if (isImageGeneration) {
-              result = await aiStudioLayer.execute({
+              result = await aiStudioLayerForGen.execute({
                 type: 'image_generation',
                 prompt: normalizedRequest.prompt,
                 files: [],
                 action: 'generate_image'
               });
             } else {
-              result = await aiStudioLayer.execute({
+              result = await aiStudioLayerForGen.execute({
                 type: 'audio_generation',
                 prompt: normalizedRequest.prompt,
                 files: [],
@@ -785,7 +789,7 @@ export class CGMBServer {
 
             return this.formatResponse(genResponse, normalizedRequest.hasCGMB);
           } catch (error) {
-            // 診断強化: 詳細なエラー情報を出力
+            // Enhanced diagnostics: Output detailed error information
             logger.error('AI Studio generation failed - detailed diagnostics', {
               error: (error as Error).message,
               stack: (error as Error).stack,
@@ -817,7 +821,10 @@ export class CGMBServer {
           convertedRequest.prompt,
           convertedRequest.files,
           convertedRequest.workflow,
-          convertedRequest.options
+          {
+            ...convertedRequest.options,
+            workingDirectory: normalizedRequest.workingDirectory  // Propagate for file path resolution
+          }
         );
         logger.info('LayerManager.processMultimodal completed', {
           success: result.success,
@@ -868,9 +875,10 @@ export class CGMBServer {
     const targetLayer = request.targetLayer || 'adaptive';
     
     if (targetLayer === 'gemini' && request.formattedData?.geminiFormat) {
-      // Direct execution on Gemini layer
+      // Direct execution on Gemini layer (with async initialization)
       logger.info('Executing preformatted request on Gemini layer');
-      const result = await this.layerManager.getGeminiLayer().execute({
+      const geminiLayerPreformatted = await this.layerManager.getGeminiLayerAsync();
+      const result = await geminiLayerPreformatted.execute({
         type: 'text_processing',
         prompt: request.formattedData.geminiFormat.stdin,
         files: [],
@@ -919,6 +927,7 @@ export class CGMBServer {
     hasCGMB: boolean;
     hasUrls: boolean;
     urlsDetected: string[];
+    workingDirectory: string;
   } {
     // Basic validation
     if (!args || typeof args !== 'object' || !('prompt' in args)) {
@@ -1120,7 +1129,8 @@ Solutions:
       options: typeof options === 'object' ? options : {},
       hasCGMB,
       hasUrls,
-      urlsDetected
+      urlsDetected,
+      workingDirectory: workingDirectory || process.cwd()  // Preserve for layer execution
     };
   }
 
@@ -1174,41 +1184,94 @@ Solutions:
 
   /**
    * Format unified response for Claude Code
+   * Improved data extraction to handle various result structures
    */
   private formatResponse(result: any, hasCGMB: boolean): CallToolResult {
     const prefix = hasCGMB ? '🎯 **CGMB**: ' : '';
-    
-    // Handle fast processing
-    if (result.metadata?.optimization === 'fast-path-bypass') {
-      const mainResult = Array.isArray(result.results) 
-        ? result.results[0] 
-        : Object.values(result.results || {})[0];
-      
-      let responseText = prefix + (mainResult?.data || 'Processing completed');
-      
-      // Add usage hints for new users when CGMB keyword is missing
-      if (!hasCGMB) {
-        responseText += '\n\n💡 CGMB Commands:\n' +
-          '• Chat: "CGMB tell me about..."\n' +
-          '• Search: "CGMB search for latest..."\n' +
-          '• Analyze: "CGMB analyze file.pdf"\n' +
-          '• Generate: "CGMB create image/audio..."\n' +
-          '• Process: "CGMB process files..."';
+
+    // Extract response data from various result structures
+    let responseData: string | null = null;
+
+    // 1. Direct data field (from simple routing)
+    if (typeof result.data === 'string' && result.data.trim()) {
+      responseData = result.data;
+    }
+    // 2. Results array format (from workflow)
+    else if (Array.isArray(result.results) && result.results.length > 0) {
+      const firstResult = result.results[0];
+      if (typeof firstResult?.data === 'string' && firstResult.data.trim()) {
+        responseData = firstResult.data;
       }
-      
-      return {
-        content: [{
-          type: 'text',
-          text: responseText
-        }]
-      };
+      // Handle nested data.content format: {data: {content: [{type: 'text', text: '...'}]}}
+      else if (firstResult?.data?.content && Array.isArray(firstResult.data.content) && firstResult.data.content[0]?.text) {
+        responseData = firstResult.data.content[0].text;
+      }
+      else if (firstResult?.content) {
+        // Handle MCP content array format: [{type: 'text', text: '...'}]
+        if (Array.isArray(firstResult.content) && firstResult.content[0]?.text) {
+          responseData = firstResult.content[0].text;
+        } else if (typeof firstResult.content === 'string') {
+          responseData = firstResult.content;
+        } else {
+          responseData = JSON.stringify(firstResult.content);
+        }
+      }
+    }
+    // 3. Results object format (from workflow with named steps)
+    else if (result.results && typeof result.results === 'object' && !Array.isArray(result.results)) {
+      const resultValues = Object.values(result.results) as any[];
+      if (resultValues.length > 0) {
+        const firstResult = resultValues[0];
+        if (typeof firstResult?.data === 'string' && firstResult.data.trim()) {
+          responseData = firstResult.data;
+        }
+        // Handle nested data.content format: {data: {content: [{type: 'text', text: '...'}]}}
+        else if (firstResult?.data?.content && Array.isArray(firstResult.data.content) && firstResult.data.content[0]?.text) {
+          responseData = firstResult.data.content[0].text;
+        }
+        else if (firstResult?.content) {
+          // Handle MCP content array format: [{type: 'text', text: '...'}]
+          if (Array.isArray(firstResult.content) && firstResult.content[0]?.text) {
+            responseData = firstResult.content[0].text;
+          } else if (typeof firstResult.content === 'string') {
+            responseData = firstResult.content;
+          } else {
+            responseData = JSON.stringify(firstResult.content);
+          }
+        }
+      }
+    }
+    // 4. Summary or content fallback
+    else if (result.summary && typeof result.summary === 'string') {
+      responseData = result.summary;
+    }
+    else if (result.content) {
+      // Handle MCP content array format: [{type: 'text', text: '...'}]
+      if (Array.isArray(result.content) && result.content[0]?.text) {
+        responseData = result.content[0].text;
+      } else if (typeof result.content === 'string') {
+        responseData = result.content;
+      } else {
+        responseData = JSON.stringify(result.content);
+      }
     }
 
-    // Handle full processing
-    let responseText = prefix + (result.summary || result.content || 'Processing completed');
-    
-    // Add usage hints for new users when CGMB keyword is missing
-    if (!hasCGMB) {
+    // 5. Final fallback with debug info
+    if (!responseData) {
+      logger.warn('formatResponse: No meaningful data extracted from result', {
+        hasData: !!result.data,
+        hasResults: !!result.results,
+        hasSummary: !!result.summary,
+        hasContent: !!result.content,
+        resultKeys: Object.keys(result)
+      });
+      responseData = 'Processing completed';
+    }
+
+    let responseText = prefix + responseData;
+
+    // Add usage hints only when CGMB keyword is missing AND response is minimal
+    if (!hasCGMB && responseData.length < 100) {
       responseText += '\n\n💡 CGMB Commands:\n' +
         '• Chat: "CGMB tell me about..."\n' +
         '• Search: "CGMB search for latest..."\n' +
@@ -1216,7 +1279,7 @@ Solutions:
         '• Generate: "CGMB create image/audio..."\n' +
         '• Process: "CGMB process files..."';
     }
-    
+
     return {
       content: [{
         type: 'text',
@@ -1346,7 +1409,7 @@ Solutions:
         name: 'Claude Code',
         check: async () => {
           try {
-            const layer = this.layerManager.getClaudeLayer();
+            const layer = await this.layerManager.getClaudeLayerAsync();
             return await layer.isAvailable();
           } catch {
             return false;
@@ -1357,7 +1420,7 @@ Solutions:
         name: 'Gemini CLI',
         check: async () => {
           try {
-            const layer = this.layerManager.getGeminiLayer();
+            const layer = await this.layerManager.getGeminiLayerAsync();
             return await layer.isAvailable();
           } catch {
             return false;
@@ -1368,7 +1431,7 @@ Solutions:
         name: 'AI Studio MCP',
         check: async () => {
           try {
-            const layer = this.layerManager.getAIStudioLayer();
+            const layer = await this.layerManager.getAIStudioLayerAsync();
             return await layer.isAvailable();
           } catch {
             return false;

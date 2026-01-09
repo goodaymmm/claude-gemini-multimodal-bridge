@@ -1,29 +1,22 @@
 import {
-  ExecutionPlan,
   FileReference,
   ProcessingOptions,
   ResourceEstimate,
   WorkflowDefinition,
   WorkflowResult,
 } from '../core/types.js';
-import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { DocumentAnalysis } from '../tools/documentAnalysis.js';
 import { MultimodalProcess } from '../tools/multimodalProcess.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
+import { BaseWorkflow } from './BaseWorkflow.js';
 import path from 'path';
 
 /**
  * ExtractionWorkflow provides specialized workflows for data extraction from various file types
  * Supports text, metadata, structured data, and multimodal content extraction
  */
-export class ExtractionWorkflow implements WorkflowDefinition {
-  id: string;
-  steps: any[];
-  continueOnError: boolean;
-  timeout: number;
-
-  private orchestrator: WorkflowOrchestrator;
+export class ExtractionWorkflow extends BaseWorkflow {
   private documentAnalysis: DocumentAnalysis;
   private multimodalProcess: MultimodalProcess;
 
@@ -63,13 +56,7 @@ export class ExtractionWorkflow implements WorkflowDefinition {
   };
 
   constructor(id?: string) {
-    this.id = id || `extraction_workflow_${Date.now()}`;
-    this.steps = [];
-    
-    this.continueOnError = false;
-    this.timeout = 900000; // 15 minutes
-
-    this.orchestrator = new WorkflowOrchestrator();
+    super('extraction', 900000, id); // 15 minutes
     this.documentAnalysis = new DocumentAnalysis();
     this.multimodalProcess = new MultimodalProcess();
   }
@@ -289,49 +276,6 @@ export class ExtractionWorkflow implements WorkflowDefinition {
         timeout: this.timeout,
       }
     );
-  }
-
-  /**
-   * Create execution plan for extraction workflows
-   */
-  async createExecutionPlan(files: FileReference[], prompt: string, options?: ProcessingOptions): Promise<ExecutionPlan> {
-    const extractionComplexity = this.assessExtractionComplexity(files, options);
-    const fileTypes = this.categorizeFileTypes(files);
-    
-    const phases = [];
-    let estimatedDuration = 0;
-    let estimatedCost = 0;
-
-    // Phase 1: File analysis and preparation
-    phases.push({
-      name: 'analysis',
-      steps: ['analyze_files', 'determine_extraction_strategy', 'prepare_processing'],
-      requiredLayers: ['aistudio'],
-    });
-    estimatedDuration += 60000;
-
-    // Phase 2: Content extraction
-    const extractionDuration = this.estimateExtractionDuration(files, extractionComplexity);
-    phases.push({
-      name: 'extraction',
-      steps: ['extract_content', 'process_multimodal', 'structure_data'],
-      requiredLayers: ['aistudio', 'claude'],
-    });
-    estimatedDuration += extractionDuration;
-    estimatedCost += this.estimateExtractionCost(files, extractionComplexity);
-
-    // Phase 3: Post-processing and organization
-    phases.push({
-      name: 'postprocessing',
-      steps: ['organize_results', 'validate_extraction', 'generate_output'],
-      requiredLayers: ['claude'],
-    });
-    estimatedDuration += 120000;
-
-    return {
-      steps: [],
-      timeout: estimatedDuration,
-    };
   }
 
   /**

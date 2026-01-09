@@ -6,212 +6,161 @@
 
 </div>
 
-🚀 **エンタープライズグレードのAI統合ブリッジ** - Claude Code、Gemini CLI、Google AI Studioをインテリジェントなルーティングと高度なマルチモーダル処理で接続します。
+Claude Code、Gemini CLI、Google AI Studioを統合するMCPブリッジです。
 
 [![npm version](https://badge.fury.io/js/claude-gemini-multimodal-bridge.svg)](https://badge.fury.io/js/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org/)
 
-## ✨ 主な機能
+## 主な機能
 
-### 🎯 **バージョン 1.1.0 - OCR機能強化**
-- 🔐 **OAuth認証**: Claude Code互換性のための簡素化されたOAuthファイルベース認証
-- 🌐 **自動翻訳**: 最適な画像生成のための日本語から英語への翻訳
-- 🔧 **インテリジェントURLルーティング**: PDF URLはClaude Codeへ、WebページはGemini CLIへ
-- ⚡ **パフォーマンス最適化**: タイムアウト短縮、遅延読み込み、スマートキャッシング
-- 🛡️ **エンタープライズ信頼性**: 指数バックオフによる95%の自己修復
-- 📊 **完全なマルチモーダルサポート**: 画像、音声、PDF、ドキュメント
-- 🔍 **高度なOCR処理**: 画像ベースPDFに対するAI Studio OCRへの自動フォールバック
+### v1.1.0の変更点
+- Windows環境でのCLI/MCP両方に対応
+- MCP統合の非同期レイヤー初期化を改善
+- Gemini最新モデル対応: `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash`
+- OAuth認証: Claude Code互換のファイルベース認証
+- 自動翻訳: 画像生成時の日本語→英語翻訳
+- URLルーティング: PDF URLはClaude Codeへ、WebページはGemini CLIへ
+- パフォーマンス最適化: タイムアウト短縮、遅延読み込み、キャッシング
+- エラー回復: 指数バックオフによる95%の自己修復
+- マルチモーダルサポート: 画像、音声、PDF、ドキュメント
+- OCR処理: 画像ベースPDFに対するAI Studio OCRへの自動フォールバック
 
-### 🏗️ **コアアーキテクチャ**
-- 🔗 **3層システム**: Claude Code ↔ Gemini CLI ↔ AI Studio
-- 🎯 **インテリジェントルーティング**: タスクを最適なAIレイヤーに自動ルーティング
-- 📊 **マルチモーダル処理**: 画像、音声、PDF、OCR対応ドキュメント
-- ⚡ **ワークフローオーケストレーション**: 複雑な多段階自動化
-- 💰 **コスト最適化**: キャッシングを使用したスマートレイヤー選択
+### 3層アーキテクチャ
+- Claude Code ↔ Gemini CLI ↔ AI Studio
+- タスクを最適なAIレイヤーに自動ルーティング
+- 画像、音声、PDF、OCR対応ドキュメント処理
+- ワークフローオーケストレーション
+- キャッシングによるコスト最適化
 
-## 🚀 クイックスタート
+## クイックスタート
 
-### WSLユーザー向け
+### 前提条件
 
-```bash
-nvm use 22.17                        # 正しいNode.jsバージョンを使用
-nvm current                          # バージョンを確認
-```
+- Node.js ≥ 22.0.0
+- Claude Code CLI インストール済み
+- Gemini CLI (自動インストール)
 
 ### インストール
 
 ```bash
-# グローバルインストール
 npm install -g claude-gemini-multimodal-bridge
-
-# postinstallスクリプトが自動的に実行:
-# ✅ Gemini CLIをインストール
-# ✅ Claude Code MCP統合をセットアップ
-# ✅ .envテンプレートを作成
-# ✅ システム要件を検証
 ```
 
-### NPMグローバルインストール後の設定
+postinstallスクリプトが以下を自動実行:
+- Gemini CLIインストール
+- Claude Code MCP統合セットアップ
+- .envテンプレート作成
+- システム要件検証
 
-`npm install -g claude-gemini-multimodal-bridge`でインストール後、作業ディレクトリに`.env`ファイルを作成してください：
+### 環境設定
+
+作業ディレクトリに`.env`ファイルを作成:
 
 ```bash
-# 現在のディレクトリに.envファイルを作成
-cat > .env << 'EOF'
-# Claude-Gemini Multimodal Bridge Configuration
 AI_STUDIO_API_KEY=your_api_key_here
-EOF
-
-# 実際のAPIキーを追加するためにファイルを編集
-nano .env  # またはお好みのエディタを使用
 ```
 
-注意：`.env`ファイルはCGMBコマンドを実行するディレクトリに作成してください。
+APIキーは https://aistudio.google.com/app/apikey から取得できます。
 
-#### Gemini CLIの認証
-
-Gemini CLIを使用して認証を設定してください：
+### Gemini CLI認証
 
 ```bash
-# Gemini CLIの認証
 gemini
 ```
 
-Gemini CLIを通じてWeb検索や最新情報の取得が可能になります。
+### Claude Codeでの初回セットアップ
 
-#### Claude Codeでの初回セットアップ
-
-NPMインストール後、Claude Codeに以下の初回プロンプトでCGMBを認識させてください：
+NPMインストール後、以下のプロンプトでCGMBを認識させてください:
 
 ```
 NPMでCGMBをインストールしたので、今の環境からcgmbコマンドを探してください。使い方も教えてください。
 ```
 
-Claude Codeは以下を実行します：
-1. PATHから`cgmb`コマンドを検出
-2. `cgmb --help`で利用可能なコマンドを表示
-3. `cgmb chat`などの機能の使い方を説明
+## APIコスト
 
-検出後の使用例：
-```bash
-cgmb chat "今日のニュースを検索して"
-cgmb generate-image "美しい夕日"
-```
+CGMBは従量課金制APIを使用します:
+- Google AI Studio API: [料金詳細](https://ai.google.dev/pricing)
 
-### 認証セットアップ
+## 使用方法
 
-```bash
-# APIキーを取得: https://aistudio.google.com/app/apikey
-# .envファイルに追加:
-AI_STUDIO_API_KEY=your_api_key_here
-```
-
-### ⚠️ 重要: APIコスト
-
-**CGMBは従量課金制APIを使用します:**
-- **Google AI Studio API**: Gemini API (Generative Language API) [料金詳細](https://ai.google.dev/pricing)
-
-### 前提条件
-
-- **Node.js** ≥ 22.0.0
-- **Claude Code CLI** インストール済みで設定済み
-- **Gemini CLI** (自動インストール)
-
-## 🎯 Claude Codeでの使用
-
-CGMBはClaude Codeとシームレスに統合されます。最適なツール選択のために「CGMB」キーワードを使用してください:
-
-### 使用例
+CGMBはClaude Codeとシームレスに統合されます。「CGMB」キーワードを使用してください:
 
 ```bash
 # 画像生成
 "CGMBで未来都市のイメージを生成してください"
 
-# ドキュメント分析（ローカルファイル - 絶対パスを使用）
+# ドキュメント分析（絶対パスを使用）
 "CGMBで/full/path/to/report.pdfにあるこの文書を分析してください"
 
-# URL分析（直接Webコンテンツ処理）
+# URL分析
 "CGMBでhttps://example.com/document.pdfを分析してください"
 
-# Web検索（最新情報）
+# Web検索
 "CGMBで最新のAI情報を検索してください"
 
 # 音声生成
-"CGMBで「ポッドキャストへようこそ」という音声を作成してください。"
+"CGMBで「ポッドキャストへようこそ」という音声を作成してください"
 
-# OCR対応PDF解析（スキャン文書、画像ベースPDF）
+# OCR対応PDF解析
 "CGMBでこのスキャンされたPDF文書をOCRで解析してください"
-
-# テキスト抽出が困難な複雑なPDF
-"CGMBでこの画像ベースPDFからOCRを使ってテキストを抽出してください"
-
-# 複数ファイル処理
-"CGMBで/path/to/image.pngにある画像と/path/to/document.pdfにある文書を一緒に解析して。"
 ```
 
-### 動作の仕組み
+### ルーティング
 
 1. Claude Codeリクエストに「CGMB」を含める
 2. CGMBが最適なAIレイヤーに自動ルーティング:
-   - **Gemini CLI**: Web検索、最新情報
-   - **AI Studio**: 画像、音声、ファイル処理
-   - **Claude Code**: 複雑な推論、コード分析
+   - Gemini CLI: Web検索、最新情報
+   - AI Studio: 画像、音声、ファイル処理
+   - Claude Code: 複雑な推論、コード分析
 
-
-## 🏗️ アーキテクチャ
+## アーキテクチャ
 
 ```mermaid
 flowchart TD
     A[Claude Code] --> B[CGMB]
-    
     B --> C[Gemini CLI]
     B --> D[Claude Code]
     B --> E[AI Studio]
 ```
 
-### 3層システム
+| レイヤー | 主要機能 | タイムアウト |
+|---------|---------|------------|
+| Claude Code | 複雑な推論、コード分析 | 300秒 |
+| Gemini CLI | Web検索、最新情報 | 30秒 |
+| AI Studio | マルチモーダル処理、生成、OCR | 120秒 |
 
-| レイヤー | 主要機能 | 最適な用途 | タイムアウト |
-|-------|------------------|----------|---------|
-| **Claude Code** | 複雑な推論、コード分析 | 戦略的計画、複雑なロジック | 300秒 |
-| **Gemini CLI** | Web検索、最新情報 | リアルタイムデータ、クイッククエリ | 30秒 |
-| **AI Studio** | マルチモーダル処理、生成、OCR | 画像、ドキュメント、ファイル、スキャン文書のOCR | 120秒 |
+### パフォーマンス
 
-### パフォーマンス機能
+- 認証キャッシング: 80%のオーバーヘッド削減
+- 検索キャッシュ: 60-80%のヒット率、1時間TTL
+- OCR処理: 品質評価によるスマートフォールバック
+- エラー回復: フォールバック戦略による95%の自動回復
 
-- **認証キャッシング**: 80%のオーバーヘッド削減（Gemini 6時間、AI Studio 24時間、Claude 12時間TTL）
-- **検索キャッシュ**: 60-80%のヒット率、1時間TTL
-- **OCR処理**: 品質評価によるスマートフォールバックで不要なOCR呼び出しを削減
-- **PDFキャッシング**: 処理済み文書をキャッシュして同一ファイルの再OCRを回避
-- **インテリジェントルーティング**: 最適なレイヤーの自動選択
-- **エラー回復**: フォールバック戦略による95%の自動回復
+## PDF処理
 
-## 🔍 高度なPDF処理
+### OCR機能
+- テキストベースと画像ベースの両方のPDFを処理
+- OCRが必要な場合を自動検出
+- Google AI Studio統合: Gemini File APIでネイティブOCR処理
+- 多言語サポート
 
-### OCR機能 ✅ **完全に動作確認済み**
-- **統合PDF対応**: テキストベースと画像ベースの両方のPDFをシームレスに処理
-- **自動OCR検出**: OCRが必要な場合を自動的に検出し、適用
-- **Google AI Studio統合**: Gemini File APIを使用してビジョン機能付きネイティブOCR処理
-- **多言語サポート**: OCRは様々な言語と文書形式に対応
-- **タイムアウト最適化**: 処理完了後の即座レスポンスで遅延を解消
+### 処理ワークフロー
+1. ファイルアップロード: PDFをGemini File APIにアップロード
+2. OCR処理: スキャンコンテンツに自動OCRを適用
+3. コンテンツ分析: テキストと視覚要素の両方を処理
+4. 即座レスポンス: 処理完了と同時に結果を返却
 
-### 処理ワークフロー ✅ **動作確認済み**
-1. **ファイルアップロード**: PDFをGemini File APIにアップロードしてネイティブ処理
-2. **OCR処理**: スキャンまたは画像ベースコンテンツに自動OCRを適用
-3. **コンテンツ分析**: AIがテキストと視覚要素の両方を処理
-4. **即座レスポンス**: 処理完了と同時に結果を返却（タイムアウト遅延なし）
+### サポート形式
+- テキストベースPDF
+- スキャンPDF（OCR処理）
+- 画像ベースPDF（OCR変換）
+- 混合コンテンツ
+- 複雑なレイアウト（表、グラフ、フォーマット済みコンテンツ）
 
-### サポートされる文書タイプ ✅ **全て動作確認済み**
-- **テキストベースPDF**: AI理解機能付き直接テキスト抽出
-- **スキャンPDF**: Google AI Studio経由の完全OCR処理
-- **画像ベースPDF**: コンテンツ分析付き完全OCR変換
-- **混合コンテンツ**: テキストと画像の両方を含む文書を処理
-- **複雑なレイアウト**: 表、グラフ、フォーマット済みコンテンツを処理
+## ファイル構成
 
-## 📁 ファイル構成
-
-生成されたコンテンツは自動的に整理されます：
+生成されたコンテンツは自動的に整理されます:
 
 ```
 output/
@@ -220,12 +169,12 @@ output/
 └── documents/  # 処理されたドキュメント
 ```
 
-Claude Code経由でファイルにアクセス：
+Claude Code経由でファイルにアクセス:
 - `get_generated_file`: 特定のファイルを取得
 - `list_generated_files`: すべての生成ファイルをリスト
 - `get_file_info`: ファイルメタデータを取得
 
-## 🔧 設定
+## 設定
 
 ### 環境変数
 
@@ -233,10 +182,8 @@ Claude Code経由でファイルにアクセス：
 # 必須
 AI_STUDIO_API_KEY=your_api_key_here
 
-# オプション（GeminiではOAuth推奨）
+# オプション
 GEMINI_API_KEY=your_api_key_here
-
-# パフォーマンス設定
 ENABLE_CACHING=true
 CACHE_TTL=3600
 LOG_LEVEL=info
@@ -244,17 +191,36 @@ LOG_LEVEL=info
 
 ### MCP統合
 
-CGMBは自動的にClaude Code MCP統合を設定：
+CGMBは自動的にClaude Code MCP統合を設定:
 - 設定パス: `~/.claude-code/mcp_servers.json`
-- 100%互換性のための直接Node.js実行
+- 直接Node.js実行
 - 既存サーバーを上書きしない安全なマージ
 
-## 🐛 トラブルシューティング
+## Windows環境
+
+CGMBはv1.1.0でWindows環境を完全サポート:
+
+- CLI: すべてのコマンドが動作
+- MCP統合: MCPツール呼び出しが正常動作
+- パス解決: Windows形式のパス（`C:\path\to\file`）を自動処理
+- Gemini CLI: Windows版との完全な互換性
+
+```bash
+# パスは絶対パスを推奨
+cgmb analyze "C:\Users\name\Documents\report.pdf"
+
+# 環境変数の設定（PowerShell）
+$env:AI_STUDIO_API_KEY = "your_api_key_here"
+
+# 環境変数の設定（コマンドプロンプト）
+set AI_STUDIO_API_KEY=your_api_key_here
+```
+
+## トラブルシューティング
 
 ### デバッグモード
 
 ```bash
-# 包括的なデバッグを有効化
 export CGMB_DEBUG=true
 export LOG_LEVEL=debug
 cgmb serve --debug
@@ -262,29 +228,16 @@ cgmb serve --debug
 
 ### OCRとPDF処理の問題
 
-#### 問題: OCR結果が不正確
-**症状**: スキャンされたPDFからのテキスト抽出が不完全または不正確
-**解決方法**:
-```bash
-# PDF品質と形式をチェック
-cgmb analyze document.pdf --type diagnostic
+OCR結果が不正確な場合:
+- 高解像度スキャンPDF（300+ DPI）を使用
+- 明瞭で高コントラストなテキストを確保
+- 傾きや回転した文書を避ける
 
-# 最適なOCR結果を得るために:
-# - 高解像度スキャンPDF（300+ DPI）を使用
-# - 明瞭で高コントラストなテキストを確保
-# - 傾きや回転した文書を避ける
-```
+大きな文書でOCRタイムアウトする場合:
+- 処理前に大きなPDFを分割（Gemini File API制限: 50MB、1,000ページ）
+- タイムアウトを延長: `export AI_STUDIO_TIMEOUT=180000`
 
-#### 問題: 大きな文書でOCRタイムアウト
-**症状**: 大きなPDFファイルでOCR処理が失敗
-**解決方法**:
-```bash
-# 処理前に大きなPDFを分割（Gemini File API制限: 50MB、1,000ページ）
-# または設定でタイムアウトを延長
-export AI_STUDIO_TIMEOUT=180000  # 3分
-```
-
-### プロジェクト構造
+## プロジェクト構造
 
 ```
 src/
@@ -297,24 +250,24 @@ src/
 └── mcp-servers/    # カスタムMCPサーバー
 ```
 
-## 🔗 リンク
+## リンク
 
-### プロジェクトリンク
-- **GitHubリポジトリ**: [claude-gemini-multimodal-bridge](https://github.com/goodaymmm/claude-gemini-multimodal-bridge)
-- **NPMパッケージ**: [claude-gemini-multimodal-bridge](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
-- **Issues**: [GitHub Issues](https://github.com/goodaymmm/claude-gemini-multimodal-bridge/issues)
+### プロジェクト
+- [GitHub](https://github.com/goodaymmm/claude-gemini-multimodal-bridge)
+- [NPM](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+- [Issues](https://github.com/goodaymmm/claude-gemini-multimodal-bridge/issues)
 
-### 関連ツール & API
-- **Claude Code**: [ドキュメント](https://docs.anthropic.com/en/docs/claude-code) | [ダウンロード](https://claude.ai/code)
-- **Gemini CLI**: [GitHub](https://github.com/google-gemini/gemini-cli) | [ドキュメント](https://ai.google.dev/gemini-api/docs/cli)
-- **Google AI Studio**: [コンソール](https://aistudio.google.com/) | [APIドキュメント](https://ai.google.dev/gemini-api/docs)
-- **MCPプロトコル**: [仕様](https://modelcontextprotocol.io/) | [SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+### 関連ツール
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+- [Google AI Studio](https://aistudio.google.com/)
+- [MCP](https://modelcontextprotocol.io/)
 
-### 利用規約 & ポリシー
-- **Google AI Studio**: [利用規約](https://ai.google.dev/gemini-api/terms) | [プライバシーポリシー](https://policies.google.com/privacy)
-- **Claude**: [利用規約](https://www.anthropic.com/terms) | [プライバシーポリシー](https://www.anthropic.com/privacy)
-- **Gemini API**: [使用ガイドライン](https://ai.google.dev/gemini-api/docs/safety-guidance)
+### 利用規約
+- [Google AI Studio](https://ai.google.dev/gemini-api/terms)
+- [Claude](https://www.anthropic.com/terms)
+- [Gemini API](https://ai.google.dev/gemini-api/docs/safety-guidance)
 
-## 📄 ライセンス
+## ライセンス
 
-MITライセンス - 詳細は[LICENSE](LICENSE)ファイルを参照してください。
+MIT - [LICENSE](LICENSE)を参照

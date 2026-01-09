@@ -1,28 +1,21 @@
 import {
-  ExecutionPlan,
   FileReference,
   ProcessingOptions,
   ResourceEstimate,
   WorkflowDefinition,
   WorkflowResult,
 } from '../core/types.js';
-import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { MultimodalProcess } from '../tools/multimodalProcess.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
+import { BaseWorkflow } from './BaseWorkflow.js';
 import path from 'path';
 
 /**
  * ConversionWorkflow provides specialized workflows for file format conversion
  * Supports various conversion types including document, image, audio, and data format conversions
  */
-export class ConversionWorkflow implements WorkflowDefinition {
-  id: string;
-  steps: any[];
-  continueOnError: boolean;
-  timeout: number;
-
-  private orchestrator: WorkflowOrchestrator;
+export class ConversionWorkflow extends BaseWorkflow {
   private multimodalProcess: MultimodalProcess;
 
   private readonly SUPPORTED_CONVERSIONS = {
@@ -49,13 +42,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
   };
 
   constructor(id?: string) {
-    this.id = id || `conversion_workflow_${Date.now()}`;
-    this.steps = [];
-    
-    this.continueOnError = false;
-    this.timeout = 600000; // 10 minutes
-
-    this.orchestrator = new WorkflowOrchestrator();
+    super('conversion', 600000, id); // 10 minutes
     this.multimodalProcess = new MultimodalProcess();
   }
 
@@ -80,7 +67,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
         });
 
         // Validate conversion feasibility
-        this.validateDocumentConversion(files, targetFormat);
+        this.validateConversion('document', files, targetFormat);
 
         const workflow = this.createDocumentConversionWorkflow(files, targetFormat, options);
         return await this.orchestrator.executeWorkflow(workflow);
@@ -113,7 +100,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
           workflowId: this.id,
         });
 
-        this.validateImageConversion(files, targetFormat);
+        this.validateConversion('image', files, targetFormat);
 
         const workflow = this.createImageConversionWorkflow(files, targetFormat, options);
         return await this.orchestrator.executeWorkflow(workflow);
@@ -146,7 +133,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
           workflowId: this.id,
         });
 
-        this.validateAudioConversion(files, targetFormat);
+        this.validateConversion('audio', files, targetFormat);
 
         const workflow = this.createAudioConversionWorkflow(files, targetFormat, options);
         return await this.orchestrator.executeWorkflow(workflow);
@@ -179,7 +166,7 @@ export class ConversionWorkflow implements WorkflowDefinition {
           workflowId: this.id,
         });
 
-        this.validateDataConversion(files, targetFormat);
+        this.validateConversion('data', files, targetFormat);
 
         const workflow = this.createDataConversionWorkflow(files, targetFormat, options);
         return await this.orchestrator.executeWorkflow(workflow);
@@ -255,49 +242,6 @@ export class ConversionWorkflow implements WorkflowDefinition {
   }
 
   /**
-   * Create execution plan for conversion workflows
-   */
-  async createExecutionPlan(files: FileReference[], prompt: string, options?: ProcessingOptions): Promise<ExecutionPlan> {
-    const conversionComplexity = this.assessConversionComplexity(files, options);
-    const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
-    
-    const phases = [];
-    let estimatedDuration = 0;
-    let estimatedCost = 0;
-
-    // Phase 1: Pre-processing and validation
-    phases.push({
-      name: 'preprocessing',
-      steps: ['validate_files', 'analyze_formats', 'prepare_conversion'],
-      requiredLayers: ['aistudio'],
-    });
-    estimatedDuration += 30000;
-
-    // Phase 2: Conversion execution
-    const conversionDuration = this.estimateConversionDuration(files, conversionComplexity);
-    phases.push({
-      name: 'conversion',
-      steps: ['execute_conversion', 'verify_output'],
-      requiredLayers: ['aistudio'],
-    });
-    estimatedDuration += conversionDuration;
-    estimatedCost += this.estimateConversionCost(files, conversionComplexity);
-
-    // Phase 3: Post-processing and quality check
-    phases.push({
-      name: 'postprocessing',
-      steps: ['quality_check', 'optimize_output', 'generate_metadata'],
-      requiredLayers: ['claude'],
-    });
-    estimatedDuration += 60000;
-
-    return {
-      steps: [],
-      timeout: estimatedDuration,
-    };
-  }
-
-  /**
    * Validate inputs for conversion workflows
    */
   validateInputs(inputs: any): boolean {
@@ -362,93 +306,31 @@ export class ConversionWorkflow implements WorkflowDefinition {
   }
 
   /**
-   * Validate document conversion feasibility
+   * Validate conversion feasibility for any supported type
+   * @param conversionType - Type of conversion (document, image, audio, data)
+   * @param files - Files to validate
+   * @param targetFormat - Target format to convert to
    */
-  private validateDocumentConversion(files: FileReference[], targetFormat: string): void {
-    const supportedSource = this.SUPPORTED_CONVERSIONS.document.from;
-    const supportedTarget = this.SUPPORTED_CONVERSIONS.document.to;
+  private validateConversion(
+    conversionType: 'document' | 'image' | 'audio' | 'data',
+    files: FileReference[],
+    targetFormat: string
+  ): void {
+    const supported = this.SUPPORTED_CONVERSIONS[conversionType];
 
-    if (!targetFormat.startsWith('.')) {
-      targetFormat = '.' + targetFormat;
+    let normalizedTarget = targetFormat;
+    if (!normalizedTarget.startsWith('.')) {
+      normalizedTarget = '.' + normalizedTarget;
     }
 
-    if (!supportedTarget.includes(targetFormat)) {
-      throw new Error(`Unsupported target format for documents: ${targetFormat}`);
+    if (!supported.to.includes(normalizedTarget as any)) {
+      throw new Error(`Unsupported target format for ${conversionType}: ${targetFormat}`);
     }
 
     for (const file of files) {
       const ext = path.extname(file.path).toLowerCase();
-      if (!supportedSource.includes(ext)) {
-        throw new Error(`Unsupported source format for document: ${file.path}`);
-      }
-    }
-  }
-
-  /**
-   * Validate image conversion feasibility
-   */
-  private validateImageConversion(files: FileReference[], targetFormat: string): void {
-    const supportedSource = this.SUPPORTED_CONVERSIONS.image.from;
-    const supportedTarget = this.SUPPORTED_CONVERSIONS.image.to;
-
-    if (!targetFormat.startsWith('.')) {
-      targetFormat = '.' + targetFormat;
-    }
-
-    if (!supportedTarget.includes(targetFormat)) {
-      throw new Error(`Unsupported target format for images: ${targetFormat}`);
-    }
-
-    for (const file of files) {
-      const ext = path.extname(file.path).toLowerCase();
-      if (!supportedSource.includes(ext)) {
-        throw new Error(`Unsupported source format for image: ${file.path}`);
-      }
-    }
-  }
-
-  /**
-   * Validate audio conversion feasibility
-   */
-  private validateAudioConversion(files: FileReference[], targetFormat: string): void {
-    const supportedSource = this.SUPPORTED_CONVERSIONS.audio.from;
-    const supportedTarget = this.SUPPORTED_CONVERSIONS.audio.to;
-
-    if (!targetFormat.startsWith('.')) {
-      targetFormat = '.' + targetFormat;
-    }
-
-    if (!supportedTarget.includes(targetFormat)) {
-      throw new Error(`Unsupported target format for audio: ${targetFormat}`);
-    }
-
-    for (const file of files) {
-      const ext = path.extname(file.path).toLowerCase();
-      if (!supportedSource.includes(ext)) {
-        throw new Error(`Unsupported source format for audio: ${file.path}`);
-      }
-    }
-  }
-
-  /**
-   * Validate data conversion feasibility
-   */
-  private validateDataConversion(files: FileReference[], targetFormat: string): void {
-    const supportedSource = this.SUPPORTED_CONVERSIONS.data.from;
-    const supportedTarget = this.SUPPORTED_CONVERSIONS.data.to;
-
-    if (!targetFormat.startsWith('.')) {
-      targetFormat = '.' + targetFormat;
-    }
-
-    if (!supportedTarget.includes(targetFormat)) {
-      throw new Error(`Unsupported target format for data: ${targetFormat}`);
-    }
-
-    for (const file of files) {
-      const ext = path.extname(file.path).toLowerCase();
-      if (!supportedSource.includes(ext)) {
-        throw new Error(`Unsupported source format for data: ${file.path}`);
+      if (!supported.from.includes(ext as any)) {
+        throw new Error(`Unsupported source format for ${conversionType}: ${file.path}`);
       }
     }
   }

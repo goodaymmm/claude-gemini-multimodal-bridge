@@ -197,8 +197,9 @@ export class LayerManager {
     });
 
     try {
-      // Use simplified execution directly on Gemini layer
-      const result = await this.getGeminiLayer().execute({
+      // Use simplified execution directly on Gemini layer (with async initialization)
+      const geminiLayer = await this.getGeminiLayerAsync();
+      const result = await geminiLayer.execute({
         type: 'text_processing',
         prompt,
         files: files || [],
@@ -362,17 +363,15 @@ export class LayerManager {
   public async executeWithLayer(layerType: LayerType, task: any): Promise<LayerResult> {
     switch (layerType) {
       case 'claude':
-        const claudeLayer = this.getClaudeLayer();
-        await this.ensureLayerInitialized('claude');
+        const claudeLayer = await this.getClaudeLayerAsync();
         return await claudeLayer.execute(task);
         
       case 'gemini':
-        const geminiLayer = this.getGeminiLayer();
+        const geminiLayer = await this.getGeminiLayerAsync();
         return await geminiLayer.execute(task);
         
       case 'aistudio':
-        const aiStudioLayer = this.getAIStudioLayer();
-        await this.ensureLayerInitialized('aistudio');
+        const aiStudioLayer = await this.getAIStudioLayerAsync();
         return await aiStudioLayer.execute(task);
         
       default:
@@ -1041,6 +1040,9 @@ export class LayerManager {
         inputData.prompt.toLowerCase().includes('now') ||
         inputData.prompt.toLowerCase().includes('recent') ||
         inputData.prompt.toLowerCase().includes('update') ||
+        // Japanese keyword detection for grounding tasks:
+        // 検索 (search), 最新 (latest), 今日 (today), 天気 (weather)
+        // ニュース (news), 株価 (stock price), 現在 (now)
         inputData.prompt.includes('検索') ||
         inputData.prompt.includes('最新') ||
         inputData.prompt.includes('今日') ||
@@ -1442,6 +1444,22 @@ export class LayerManager {
     }
   }
 
+  /**
+   * Get layer with async initialization (for use in async contexts)
+   */
+  private async getLayerAsync(layerType: LayerType) {
+    switch (layerType) {
+      case 'claude':
+        return await this.getClaudeLayerAsync();
+      case 'gemini':
+        return await this.getGeminiLayerAsync();
+      case 'aistudio':
+        return await this.getAIStudioLayerAsync();
+      default:
+        throw new CGMBError(`Unknown layer type: ${layerType}`, 'INVALID_LAYER_TYPE');
+    }
+  }
+
   private topologicalSort(steps: WorkflowStep[]): WorkflowStep[] {
     const sorted: WorkflowStep[] = [];
     const visited = new Set<string>();
@@ -1737,7 +1755,7 @@ export class LayerManager {
 
     try {
       // Get the appropriate layer
-      const layer = this.getLayer(step.layer);
+      const layer = await this.getLayerAsync(step.layer);
       
       // Prepare the execution parameters
       const executionParams = {

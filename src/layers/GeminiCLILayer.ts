@@ -320,9 +320,9 @@ export class GeminiCLILayer implements LayerInterface {
       let child;
 
       // Build args: Use positional prompt (Gemini CLI v0.22.5+ recommended approach)
-      // Note: -y is YOLO mode (auto-approval), NOT a prompt flag
+      // Note: -y is YOLO mode (auto-approval) - REQUIRED for non-interactive execution
       // Note: -p is deprecated, use positional argument instead
-      const args: string[] = [];
+      const args: string[] = ['-y'];  // YOLO mode for non-interactive execution
 
       // Only add model flag if explicitly specified and not 'auto'
       if (options.model && options.model !== 'auto') {

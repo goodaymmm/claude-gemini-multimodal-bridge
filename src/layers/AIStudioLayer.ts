@@ -1472,7 +1472,7 @@ export class AIStudioLayer implements LayerInterface {
               const mcpResponse = JSON.parse(line);
               if (mcpResponse.result || mcpResponse.error) {
                 if (!isResolved) {
-                  cleanup(); // 即座にクリーンアップとタイムアウトクリア
+                  cleanup(); // Immediate cleanup and timeout clear
                   
                   logger.debug(`[${this.instanceId}] MCP response received - immediate resolution`, {
                     instanceId: this.instanceId,
@@ -1485,7 +1485,7 @@ export class AIStudioLayer implements LayerInterface {
                   if (mcpResponse.error) {
                     reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
                   } else {
-                    resolve(mcpResponse.result); // 即座にresolve（タイムアウト問題の修正）
+                    resolve(mcpResponse.result); // Immediate resolve (timeout issue fix)
                   }
                 }
                 return;
@@ -1598,7 +1598,7 @@ export class AIStudioLayer implements LayerInterface {
       // Windows requires shell: true for proper path resolution and process spawning
       const isWindowsSpawn = process.platform === 'win32';
 
-      // Windows診断ログ: spawn実行前の環境情報
+      // Windows diagnostic log: Environment info before spawn execution
       logger.info(`[${this.instanceId}] MCP spawn starting`, {
         instanceId: this.instanceId,
         command,
@@ -1626,7 +1626,7 @@ export class AIStudioLayer implements LayerInterface {
         },
       });
 
-      // spawn成功後の診断ログ
+      // Diagnostic log after successful spawn
       logger.info(`[${this.instanceId}] MCP process spawned`, {
         instanceId: this.instanceId,
         command,

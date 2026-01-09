@@ -1,6 +1,5 @@
 import {
   AnalysisType,
-  ExecutionPlan,
   FileReference,
   ProcessingOptions,
   ResourceEstimate,
@@ -8,34 +7,23 @@ import {
   WorkflowResult,
   WorkflowStep,
 } from '../core/types.js';
-import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { DocumentAnalysis } from '../tools/documentAnalysis.js';
 import { MultimodalProcess } from '../tools/multimodalProcess.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
+import { BaseWorkflow } from './BaseWorkflow.js';
 import path from 'path';
 
 /**
  * AnalysisWorkflow provides specialized workflows for content and document analysis
  * Combines multiple tools and layers for comprehensive analytical processing
  */
-export class AnalysisWorkflow implements WorkflowDefinition {
-  id: string;
-  steps: any[];
-  continueOnError: boolean;
-  timeout: number;
-
-  private orchestrator: WorkflowOrchestrator;
+export class AnalysisWorkflow extends BaseWorkflow {
   private documentAnalysis: DocumentAnalysis;
   private multimodalProcess: MultimodalProcess;
 
   constructor(id?: string) {
-    this.id = id || `analysis_workflow_${Date.now()}`;
-    this.steps = [];
-    this.continueOnError = false;
-    this.timeout = 900000; // 15 minutes
-
-    this.orchestrator = new WorkflowOrchestrator();
+    super('analysis', 900000, id); // 15 minutes
     this.documentAnalysis = new DocumentAnalysis();
     this.multimodalProcess = new MultimodalProcess();
   }
@@ -210,76 +198,6 @@ export class AnalysisWorkflow implements WorkflowDefinition {
         timeout: this.timeout * 1.5, // Statistical analysis may take longer
       }
     );
-  }
-
-  /**
-   * Create execution plan for analysis workflows
-   */
-  async createExecutionPlan(files: FileReference[], prompt: string, options?: ProcessingOptions): Promise<ExecutionPlan> {
-    const fileTypes = this.categorizeFiles(files);
-    const complexity = this.assessComplexity(files, prompt, options);
-    
-    const phases = [];
-    let estimatedDuration = 0;
-    let estimatedCost = 0;
-
-    // Phase 1: Content extraction and preprocessing
-    if (fileTypes.documents.length > 0 || fileTypes.multimodal.length > 0) {
-      phases.push({
-        name: 'content_extraction',
-        steps: ['extract_text', 'extract_metadata', 'preprocess_content'],
-        requiredLayers: ['aistudio'],
-      });
-      estimatedDuration += 60000 * files.length;
-      estimatedCost += 0.01 * files.length;
-    }
-
-    // Phase 2: Initial analysis
-    phases.push({
-      name: 'initial_analysis',
-      steps: ['analyze_structure', 'identify_themes', 'extract_entities'],
-      requiredLayers: ['claude', 'aistudio'],
-    });
-    estimatedDuration += 120000;
-    estimatedCost += 0.02;
-
-    // Phase 3: Deep analysis (if required)
-    if (complexity === 'high' || options?.depth === 'deep') {
-      phases.push({
-        name: 'deep_analysis',
-        steps: ['complex_reasoning', 'cross_referencing', 'pattern_detection'],
-        requiredLayers: ['claude', 'gemini'],
-      });
-      estimatedDuration += 300000;
-      estimatedCost += 0.05;
-    }
-
-    // Phase 4: Synthesis and reporting
-    phases.push({
-      name: 'synthesis',
-      steps: ['synthesize_findings', 'generate_insights', 'create_report'],
-      requiredLayers: ['claude'],
-    });
-    estimatedDuration += 120000;
-    estimatedCost += 0.02;
-
-    const steps: WorkflowStep[] = [];
-    phases.forEach(phase => {
-      phase.steps.forEach(stepName => {
-        steps.push({
-          id: stepName,
-          layer: 'claude' as const,
-          action: 'analyze',
-          input: { instruction: stepName },
-          dependsOn: [],
-        });
-      });
-    });
-    
-    return {
-      steps,
-      timeout: estimatedDuration,
-    };
   }
 
   /**
