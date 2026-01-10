@@ -8,6 +8,7 @@ import {
   ListToolsResult,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import { createRequire } from 'module';
 
 import { LayerManager } from './LayerManager.js';
 import { logger } from '../utils/logger.js';
@@ -30,6 +31,11 @@ import {
 } from './types.js';
 import { Config, ConfigSchema } from './types.js';
 
+// Read version from package.json
+const require = createRequire(import.meta.url);
+const packageJson = require('../../package.json') as { version: string };
+const VERSION = packageJson.version;
+
 // ===================================
 // claude-gemini-multimodal-bridge Server
 // ===================================
@@ -45,8 +51,8 @@ export class CGMBServer {
     this.server = new Server(
       {
         name: 'claude-gemini-multimodal-bridge',
-        version: '1.1.5',
-        description: 'claude-gemini-multimodal-bridge v1.1.5 - Enterprise-grade multi-layer AI integration with OAuth authentication, automatic translation, intelligent routing, and advanced multimodal processing for Claude Code.'
+        version: VERSION,
+        description: `claude-gemini-multimodal-bridge v${VERSION} - Enterprise-grade multi-layer AI integration with OAuth authentication, automatic translation, intelligent routing, and advanced multimodal processing for Claude Code.`
       },
       {
         capabilities: {

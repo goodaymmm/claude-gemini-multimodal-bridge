@@ -21,6 +21,7 @@ import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
 import { AI_MODELS } from '../core/types.js';
@@ -28,6 +29,11 @@ import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
 // pdf-parse is dynamically imported within the extractPDFText() method
+
+// Read version from package.json
+const require = createRequire(import.meta.url);
+const packageJson = require('../../package.json') as { version: string };
+const VERSION = packageJson.version;
 
 
 // Input validation schemas
@@ -115,7 +121,7 @@ class AIStudioMCPServer {
     this.server = new Server(
       {
         name: 'ai-studio-mcp-server',
-        version: '1.1.4',
+        version: VERSION,
         // Note: author and license info in package.json
       },
       {

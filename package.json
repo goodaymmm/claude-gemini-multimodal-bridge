@@ -9,8 +9,8 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "CGMB MCP Server v1.0.0 - Enterprise-grade 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
-    "version": "1.0.0",
+    "description": "CGMB MCP Server v1.1.0 - Enterprise-grade 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
+    "version": "1.1.0",
     "command": "cgmb",
     "args": [
       "serve"

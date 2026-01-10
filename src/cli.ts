@@ -2039,7 +2039,7 @@ program
       
       console.log('🚀 CGMB System Information');
       console.log('═'.repeat(50));
-      console.log(`Version: 1.0.0`);
+      console.log(`Version: ${packageJson.version}`);
       console.log(`Node.js: ${process.version}`);
       console.log(`Platform: ${process.platform}`);
       console.log(`Architecture: ${process.arch}`);

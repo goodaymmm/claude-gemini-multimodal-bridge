@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 
 import { config } from 'dotenv';
+import { createRequire } from 'module';
 import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
+
+// Read version from package.json
+const require = createRequire(import.meta.url);
+const packageJson = require('../package.json') as { version: string };
+const VERSION = packageJson.version;
 
 // ===================================
 // MCP Server Entry Point for Claude Code
@@ -15,7 +21,7 @@ async function main() {
 
     // Log startup information for MCP server
     logger.info('Starting CGMB MCP Server for Claude Code integration...', {
-      version: '1.1.4',
+      version: VERSION,
       nodeVersion: process.version,
       platform: process.platform,
       mcpMode: true,
@@ -23,12 +29,12 @@ async function main() {
 
     // Create and initialize MCP server
     const server = new CGMBServer();
-    
+
     // Start the MCP server (stdio transport for Claude Code)
     await server.start();
-    
+
     logger.info('CGMB MCP Server ready', {
-      version: '1.1.4',
+      version: VERSION,
       mainTool: 'cgmb - handles all CGMB requests',
       capabilities: {
         'Commands': 'chat, search, analyze, generate, process, extract, translate',
