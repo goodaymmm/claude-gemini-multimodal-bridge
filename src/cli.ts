@@ -70,10 +70,15 @@ function showGeminiHelp() {
 
 const program = new Command();
 
+// Read version from package.json
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const packageJson = require('../package.json') as { version: string };
+
 program
   .name('cgmb')
   .description('Claude-Gemini Multimodal Bridge - Enterprise-grade AI integration tool')
-  .version('1.1.6');
+  .version(packageJson.version);
 
 // Server command
 program

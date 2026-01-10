@@ -330,13 +330,9 @@ export class GeminiCLILayer implements LayerInterface {
       }
 
       // Add prompt as positional argument at the end (required format for Gemini CLI v0.22.5+)
-      // Windows: Wrap prompt in quotes to handle spaces correctly with shell: true
-      if (isWindows) {
-        // Escape internal double quotes and wrap in double quotes for cmd.exe
-        args.push(`"${prompt.replace(/"/g, '\\"')}"`);
-      } else {
-        args.push(prompt);
-      }
+      // Note: With shell: true, Node.js handles quoting automatically
+      // Manual quoting causes double-quoting issues on Windows
+      args.push(prompt);
 
       if (isWindows) {
         // Windows: Use shell: true to let Node.js handle .cmd file execution
