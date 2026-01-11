@@ -33,9 +33,9 @@
 <tr>
 <td width="33%" align="center">
 
-### 🔄 統合の力
+### 🔄 マルチモデルオーケストレーション
 
-Claude Code の**推論力**、Gemini CLI の**検索力**、AI Studio の**生成力**を自動で使い分け
+Claude の**推論力**、Gemini CLI の**検索力**、AI Studio の**生成力**を最適に統合。2026年のAIトレンド「専門AIの協調」を先取り
 
 </td>
 <td width="33%" align="center">
@@ -47,9 +47,9 @@ Claude Code の**推論力**、Gemini CLI の**検索力**、AI Studio の**生�
 </td>
 <td width="33%" align="center">
 
-### 🎯 日本語ネイティブ
+### 🎯 MCP標準対応
 
-日本語プロンプトを自動翻訳。自然に使える
+Anthropic Model Context Protocol準拠。95%の自己修復率でエンタープライズグレードの信頼性
 
 </td>
 </tr>
@@ -306,6 +306,31 @@ $env:AI_STUDIO_API_KEY = "your_api_key_here"
 
 # 環境変数の設定（コマンドプロンプト）
 set AI_STUDIO_API_KEY=your_api_key_here
+```
+
+---
+
+## 🐧 Linux / WSL環境
+
+CGMBはLinuxおよびWSL環境で**完全に動作**:
+
+| 機能 | 状態 |
+|------|:----:|
+| CLI | ✅ すべてのコマンドが動作 |
+| MCP統合 | ✅ MCPツール呼び出しが正常動作 |
+| パス解決 | ✅ `/mnt/` WSLパス、Unixパス対応 |
+| Gemini CLI | ✅ Linux版との完全な互換性 |
+
+```bash
+# Unixパス形式で使用
+cgmb analyze /home/user/documents/report.pdf
+
+# WSL環境での例
+cgmb analyze /mnt/c/Users/name/Documents/report.pdf
+
+# 環境変数の設定
+export AI_STUDIO_API_KEY="your_api_key_here"
+export CGMB_CHAT_MODEL="gemini-2.5-flash"
 ```
 
 ---

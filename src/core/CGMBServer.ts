@@ -619,54 +619,56 @@ export class CGMBServer {
             urlTypes: urlTypes.map(u => ({ url: u.url.substring(0, 50), type: u.type }))
           });
 
-          // Route file URLs (PDF, images, audio) through download + AI Studio
+          // Route file URLs (PDF, images, audio) directly to AI Studio (no download needed for PDFs)
           if (fileUrls.length > 0) {
-            logger.info('File URLs detected - downloading and routing to AI Studio', {
+            logger.info('File URLs detected - routing directly to AI Studio', {
               fileUrls: fileUrls.map(u => u.url)
             });
 
             try {
-              // Download files from URLs
-              const downloadedFiles = await this.downloadUrlFiles(fileUrls);
+              // Prepare files for AI Studio processing - pass URLs directly
+              // AI Studio's MCP server handles URL PDFs via Gemini File API
+              const filesForProcessing = fileUrls.map(f => ({
+                path: f.url,  // Pass URL as path - AI Studio detects and handles URLs
+                type: f.type === 'pdf' ? 'document' : f.type
+              }));
 
-              if (downloadedFiles.length > 0) {
-                // Prepare files for AI Studio processing
-                const filesForProcessing = downloadedFiles.map(f => ({
-                  path: f.path,
-                  type: f.type === 'pdf' ? 'document' : f.type
-                }));
+              // Execute via AI Studio (with async initialization)
+              const aiStudioLayer = await this.layerManager.getAIStudioLayerAsync();
+              const result = await aiStudioLayer.execute({
+                type: 'document_analysis',
+                files: filesForProcessing,
+                instructions: normalizedRequest.prompt
+              });
 
-                // Execute via AI Studio (with async initialization)
-                const aiStudioLayer = await this.layerManager.getAIStudioLayerAsync();
-                const result = await aiStudioLayer.execute({
-                  type: 'document_analysis',
-                  files: filesForProcessing,
-                  prompt: normalizedRequest.prompt
-                });
+              // Format response
+              const urlResponse = {
+                success: result.success,
+                data: result.data,
+                metadata: {
+                  ...result.metadata,
+                  layer: 'aistudio',
+                  routing_reason: 'file_url_direct_routing',
+                  urls_processed: fileUrls.length
+                }
+              };
 
-                // Clean up temp files
-                await this.cleanupTempFiles(downloadedFiles);
-
-                // Format response
-                const urlResponse = {
-                  success: result.success,
-                  data: result.data,
-                  metadata: {
-                    ...result.metadata,
-                    layer: 'aistudio',
-                    routing_reason: 'file_url_download_routing',
-                    urls_processed: fileUrls.length,
-                    files_downloaded: downloadedFiles.length
-                  }
-                };
-
-                return this.formatResponse(urlResponse, normalizedRequest.hasCGMB);
-              }
+              return this.formatResponse(urlResponse, normalizedRequest.hasCGMB);
             } catch (error) {
-              logger.warn('File URL download/processing failed, falling back to Gemini CLI', {
+              logger.error('AI Studio URL processing failed', {
                 error: (error as Error).message
               });
-              // Fall through to Gemini CLI processing
+              // Return error with helpful message
+              const errorResponse = {
+                success: false,
+                data: `URL PDF processing failed: ${(error as Error).message}. Try downloading the PDF and using: CGMB analyze local-file.pdf`,
+                metadata: {
+                  layer: 'error',
+                  routing_reason: 'url_pdf_processing_failed',
+                  error: (error as Error).message
+                }
+              };
+              return this.formatResponse(errorResponse, normalizedRequest.hasCGMB);
             }
           }
 
