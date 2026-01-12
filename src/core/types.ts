@@ -205,7 +205,7 @@ export const ConfigSchema = z.object({
     temperature: z.number().default(0.2),
   }),
   claude: z.object({
-    code_path: z.string().default('/usr/local/bin/claude'),
+    code_path: z.string().default('claude'),
     timeout: z.number().default(300000),
   }),
   aistudio: z.object({
@@ -252,7 +252,8 @@ export class WorkflowError extends CGMBError {
 }
 
 // Analysis Types for Advanced Processing
-export const ImageAnalysisTypeSchema = z.enum(['detailed', 'technical', 'extract_text']);
+// 'ocr' is an alias for 'extract_text' with enhanced text extraction focus
+export const ImageAnalysisTypeSchema = z.enum(['detailed', 'technical', 'extract_text', 'ocr']);
 export type ImageAnalysisType = z.infer<typeof ImageAnalysisTypeSchema>;
 
 export const ImageAnalysisResultSchema = z.object({
@@ -261,6 +262,17 @@ export const ImageAnalysisResultSchema = z.object({
   extracted_text: z.string().optional(),
   technical_details: z.record(z.any()).optional(),
   confidence: z.number().min(0).max(1).optional(),
+  // OCR-specific fields
+  text_blocks: z.array(z.object({
+    text: z.string(),
+    bounding_box: z.object({
+      x: z.number(),
+      y: z.number(),
+      width: z.number(),
+      height: z.number(),
+    }).optional(),
+    confidence: z.number().optional(),
+  })).optional(),
 });
 export type ImageAnalysisResult = z.infer<typeof ImageAnalysisResultSchema>;
 
@@ -732,22 +744,23 @@ export type ResourceEstimate = z.infer<typeof ResourceEstimateSchema>;
 
 // Model constants for consistency across the application
 export const AI_MODELS = {
-  // Image generation model - Gemini 2.0 Flash with image generation capabilities
-  IMAGE_GENERATION: 'gemini-2.0-flash-preview-image-generation',
-  
-  // Audio generation model - Gemini 2.5 Flash TTS
+  // Image generation - Gemini 2.5 Flash Image (default)
+  IMAGE_GENERATION: 'gemini-2.5-flash-image',
+  IMAGE_GENERATION_PRO: 'gemini-3-pro-image-preview',
+
+  // Audio generation - Gemini 2.5 Flash TTS
   AUDIO_GENERATION: 'gemini-2.5-flash-preview-tts',
-  
+
   // General purpose models
-  GEMINI_FLASH: 'gemini-2.0-flash',
-  GEMINI_FLASH_EXP: 'gemini-2.0-flash-exp',
-  GEMINI_FLASH_2_5: 'gemini-2.5-flash',
-  
+  GEMINI_FLASH: 'gemini-2.5-flash',
+  GEMINI_FLASH_3: 'gemini-3-flash-preview',
+  GEMINI_FLASH_3_PRO: 'gemini-3-pro-preview',
+
   // Document processing model with 1M token context
   DOCUMENT_PROCESSING: 'gemini-2.5-flash',
-  
+
   // Default multimodal model
-  MULTIMODAL_DEFAULT: 'gemini-2.0-flash-exp'
+  MULTIMODAL_DEFAULT: 'gemini-2.5-flash'
 } as const;
 
 // Type for AI model values

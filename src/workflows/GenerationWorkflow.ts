@@ -1,29 +1,21 @@
 import {
-  ExecutionPlan,
   FileReference,
   ProcessingOptions,
   ResourceEstimate,
   WorkflowDefinition,
   WorkflowResult,
 } from '../core/types.js';
-import { WorkflowOrchestrator } from '../tools/workflowOrchestrator.js';
 import { DocumentAnalysis } from '../tools/documentAnalysis.js';
 import { MultimodalProcess } from '../tools/multimodalProcess.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
-import path from 'path';
+import { BaseWorkflow } from './BaseWorkflow.js';
 
 /**
  * GenerationWorkflow provides specialized workflows for content generation
  * Supports document generation, report creation, summaries, and creative content generation
  */
-export class GenerationWorkflow implements WorkflowDefinition {
-  id: string;
-  steps: any[];
-  continueOnError: boolean;
-  timeout: number;
-
-  private orchestrator: WorkflowOrchestrator;
+export class GenerationWorkflow extends BaseWorkflow {
   private documentAnalysis: DocumentAnalysis;
   private multimodalProcess: MultimodalProcess;
 
@@ -63,12 +55,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
   };
 
   constructor(id?: string) {
-    this.id = id || `generation_workflow_${Date.now()}`;
-    this.steps = [];
-    this.continueOnError = false;
-    this.timeout = 1200000; // 20 minutes
-
-    this.orchestrator = new WorkflowOrchestrator();
+    super('generation', 1200000, id); // 20 minutes
     this.documentAnalysis = new DocumentAnalysis();
     this.multimodalProcess = new MultimodalProcess();
   }
@@ -334,57 +321,6 @@ export class GenerationWorkflow implements WorkflowDefinition {
         timeout: this.timeout,
       }
     );
-  }
-
-  /**
-   * Create execution plan for generation workflows
-   */
-  async createExecutionPlan(files: FileReference[], prompt: string, options?: ProcessingOptions): Promise<ExecutionPlan> {
-    const generationComplexity = this.assessGenerationComplexity(files, prompt, options);
-    const contentLength = this.estimateContentLength(prompt, options);
-    
-    const phases = [];
-    let estimatedDuration = 0;
-    let estimatedCost = 0;
-
-    // Phase 1: Content analysis and research
-    phases.push({
-      name: 'research',
-      steps: ['analyze_sources', 'extract_insights', 'research_context'],
-      requiredLayers: ['aistudio', 'gemini'],
-    });
-    estimatedDuration += 180000;
-
-    // Phase 2: Content planning and structure
-    phases.push({
-      name: 'planning',
-      steps: ['create_outline', 'plan_structure', 'organize_content'],
-      requiredLayers: ['claude'],
-    });
-    estimatedDuration += 120000;
-
-    // Phase 3: Content generation
-    const generationDuration = this.estimateGenerationDuration(contentLength, generationComplexity);
-    phases.push({
-      name: 'generation',
-      steps: ['generate_content', 'enhance_with_context', 'refine_output'],
-      requiredLayers: ['claude', 'gemini'],
-    });
-    estimatedDuration += generationDuration;
-    estimatedCost += this.estimateGenerationCost(contentLength, generationComplexity);
-
-    // Phase 4: Review and formatting
-    phases.push({
-      name: 'finalization',
-      steps: ['review_content', 'format_output', 'quality_check'],
-      requiredLayers: ['claude'],
-    });
-    estimatedDuration += 120000;
-
-    return {
-      steps: [],
-      timeout: estimatedDuration,
-    };
   }
 
   /**
@@ -1176,7 +1112,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
             layer: 'claude' as const,
             action: 'explain_limitation',
             input: {
-              message: 'Image generation requires AI Studio (Imagen 3). Please check your GEMINI_API_KEY configuration.'
+              message: 'Image generation requires AI Studio (Imagen 3). Please check your AI_STUDIO_API_KEY configuration.'
             }
           }
         }
@@ -1220,7 +1156,7 @@ export class GenerationWorkflow implements WorkflowDefinition {
             layer: 'claude' as const,
             action: 'explain_limitation',
             input: {
-              message: 'Video generation requires AI Studio (Veo 2). Please check your GEMINI_API_KEY configuration.'
+              message: 'Video generation requires AI Studio (Veo 2). Please check your AI_STUDIO_API_KEY configuration.'
             }
           }
         }

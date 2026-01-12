@@ -57,6 +57,11 @@ export class LayerManager {
     aistudio: false
   };
 
+  // Promise cache for async layer initialization
+  private claudeLayerPromise: Promise<ClaudeCodeLayer> | null = null;
+  private geminiLayerPromise: Promise<GeminiCLILayer> | null = null;
+  private aiStudioLayerPromise: Promise<AIStudioLayer> | null = null;
+
   constructor(config: Config) {
     this.config = config;
     // Layers are now created on-demand (lazy loading)
@@ -116,6 +121,71 @@ export class LayerManager {
   }
 
   /**
+   * Get Claude layer with guaranteed initialization (async)
+   */
+  public async getClaudeLayerAsync(): Promise<ClaudeCodeLayer> {
+    if (!this.claudeLayerPromise) {
+      this.claudeLayerPromise = (async () => {
+        if (!this.claudeLayer) {
+          logger.info('Async initializing Claude Code layer');
+          this.claudeLayer = new ClaudeCodeLayer();
+        }
+        if (!this.layerInitialized.claude) {
+          await this.claudeLayer.initialize();
+          this.layerInitialized.claude = true;
+          logger.info('Claude Code layer initialized (async)');
+        }
+        return this.claudeLayer;
+      })();
+    }
+    return this.claudeLayerPromise;
+  }
+
+  /**
+   * Get Gemini layer with guaranteed initialization (async)
+   */
+  public async getGeminiLayerAsync(): Promise<GeminiCLILayer> {
+    if (!this.geminiLayerPromise) {
+      this.geminiLayerPromise = (async () => {
+        if (!this.geminiLayer) {
+          logger.info('Async initializing Gemini CLI layer');
+          this.geminiLayer = new GeminiCLILayer();
+        }
+        if (!this.layerInitialized.gemini) {
+          await this.geminiLayer.initialize();
+          this.layerInitialized.gemini = true;
+          logger.info('Gemini CLI layer initialized (async)');
+        }
+        return this.geminiLayer;
+      })();
+    }
+    return this.geminiLayerPromise;
+  }
+
+  /**
+   * Get AI Studio layer with guaranteed initialization (async)
+   */
+  public async getAIStudioLayerAsync(): Promise<AIStudioLayer> {
+    if (!this.aiStudioLayerPromise) {
+      this.aiStudioLayerPromise = (async () => {
+        if (!this.aiStudioLayer) {
+          logger.info('Async initializing AI Studio layer');
+          // Ensure Gemini layer is initialized first (needed for translation)
+          await this.getGeminiLayerAsync();
+          this.aiStudioLayer = new AIStudioLayer(this.geminiLayer!);
+        }
+        if (!this.layerInitialized.aistudio) {
+          await this.aiStudioLayer.initialize();
+          this.layerInitialized.aistudio = true;
+          logger.info('AI Studio layer initialized (async)');
+        }
+        return this.aiStudioLayer;
+      })();
+    }
+    return this.aiStudioLayerPromise;
+  }
+
+  /**
    * Fast processing for simple prompts (reference implementation style)
    * Bypasses heavy layer initialization and routing overhead
    */
@@ -127,8 +197,9 @@ export class LayerManager {
     });
 
     try {
-      // Use simplified execution directly on Gemini layer
-      const result = await this.getGeminiLayer().execute({
+      // Use simplified execution directly on Gemini layer (with async initialization)
+      const geminiLayer = await this.getGeminiLayerAsync();
+      const result = await geminiLayer.execute({
         type: 'text_processing',
         prompt,
         files: files || [],
@@ -150,8 +221,9 @@ export class LayerManager {
   /**
    * Intelligent task analysis for optimal layer selection
    * Implements enterprise-level routing logic for CGMB
+   * Enhanced to support user-specified layer preferences
    */
-  public analyzeTask(task: any): TaskAnalysis {
+  public analyzeTask(task: any, userPreferredLayer?: LayerType): TaskAnalysis {
     const prompt = task.prompt || task.request || task.input || '';
     const files = task.files || [];
     
@@ -159,40 +231,83 @@ export class LayerManager {
     const fileTypes = files.map((f: FileReference) => f.type || this.detectFileType(f.path));
     const hasFiles = files.length > 0;
     const hasImages = fileTypes.some((type: string) => ['image'].includes(type));
-    const hasDocuments = fileTypes.some((type: string) => ['pdf', 'document', 'text'].includes(type));
+    const hasDocuments = fileTypes.some((type: string) => ['pdf', 'document', 'text', 'spreadsheet', 'presentation'].includes(type));
     const hasAudio = fileTypes.some((type: string) => ['audio'].includes(type));
     const hasVideo = fileTypes.some((type: string) => ['video'].includes(type));
     
+    // Enhanced code file detection
+    const hasCodeFiles = fileTypes.some((type: string) => ['code', 'config', 'markup', 'stylesheet', 'database'].includes(type));
+    
     // Analyze prompt characteristics
     const promptLength = prompt.length;
-    const isCodeRelated = this.detectCodeContent(prompt);
+    const isCodeRelated = this.detectCodeContent(prompt) || hasCodeFiles;
     const needsCurrentInfo = this.detectCurrentInfoNeed(prompt);
     const isGenerationTask = this.detectGenerationTask(prompt, task);
     const complexity = this.assessComplexity(prompt, files, task);
+    
+    // Check for user-specified layer override
+    if (userPreferredLayer) {
+      return {
+        complexity,
+        hasFiles,
+        fileTypes,
+        needsCurrentInfo,
+        isGenerationTask,
+        isCodeRelated,
+        estimatedTokens: Math.ceil(promptLength / 4) + files.length * 100,
+        preferredLayer: userPreferredLayer,
+        reasoning: `User explicitly requested ${userPreferredLayer} layer`,
+      };
+    }
     
     // Determine optimal layer based on task characteristics
     let preferredLayer: LayerType;
     let reasoning: string;
     
-    // Priority 1: File processing (multimodal content)
-    if (hasFiles && (hasImages || hasDocuments || hasAudio || hasVideo)) {
+    // Priority 1: Code files - Route to AI Studio (primary layer for most tasks)
+    if (hasCodeFiles) {
+      if (isGenerationTask) {
+        preferredLayer = 'aistudio';
+        reasoning = 'Code files with generation task - AI Studio for multimodal processing';
+      } else {
+        preferredLayer = 'aistudio';
+        reasoning = 'Code files detected - AI Studio for code analysis';
+      }
+    } 
+    // Priority 2: Media files - Route to AI Studio for multimodal processing
+    else if (hasFiles && (hasImages || hasAudio || hasVideo)) {
       preferredLayer = 'aistudio';
-      reasoning = 'Multimodal files requiring AI Studio processing';
-    } else if (isGenerationTask && (hasImages || hasAudio || hasVideo || prompt.includes('generate') || prompt.includes('create'))) {
+      reasoning = 'Media files requiring AI Studio multimodal processing';
+    }
+    // Priority 3: Document files (PDFs, etc.) - Route to AI Studio for OCR and analysis
+    else if (hasFiles && hasDocuments) {
+      preferredLayer = 'aistudio';
+      reasoning = 'Document files requiring AI Studio OCR and analysis capabilities';
+    }
+    // Priority 4: Generation tasks - Route to AI Studio for content creation
+    else if (isGenerationTask && (hasImages || hasAudio || hasVideo || prompt.includes('generate') || prompt.includes('create'))) {
       preferredLayer = 'aistudio';
       reasoning = 'Generation task requiring AI Studio capabilities (Imagen 3, Veo 2)';
-    } else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
+    }
+    // Priority 5: Current information needs - Route to Gemini CLI for web search
+    else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
       preferredLayer = 'gemini';
       reasoning = 'Current information or search required - Gemini CLI optimal';
-    } else if (complexity === 'high' || isCodeRelated || promptLength > 2000) {
+    }
+    // Priority 6: Complex reasoning or code-related prompts - Route to Claude Code
+    else if (complexity === 'high' || isCodeRelated || promptLength > 2000) {
       preferredLayer = 'claude';
       reasoning = 'Complex reasoning or code analysis - Claude Code optimal';
-    } else if (complexity === 'low' && promptLength < 500) {
+    }
+    // Priority 7: Simple tasks - Route to Gemini CLI for speed
+    else if (complexity === 'low' && promptLength < 500) {
       preferredLayer = 'gemini';
       reasoning = 'Simple task - Gemini CLI for speed';
-    } else {
-      preferredLayer = 'claude';
-      reasoning = 'Default to Claude Code for balanced capabilities';
+    }
+    // Default: Route to AI Studio (primary layer)
+    else {
+      preferredLayer = 'aistudio';
+      reasoning = 'Default to AI Studio for balanced multimodal capabilities';
     }
     
     const estimatedTokens = Math.ceil(promptLength / 4) + files.length * 100;
@@ -213,9 +328,13 @@ export class LayerManager {
   /**
    * Execute task with optimal layer selection
    * Implements intelligent routing with fallback strategies
+   * Enhanced to support user-specified layer preferences
    */
   public async executeWithOptimalLayer(task: any): Promise<LayerResult> {
-    const analysis = this.analyzeTask(task);
+    // Extract user-preferred layer from task options
+    const userPreferredLayer = task.options?.preferredLayer;
+    
+    const analysis = this.analyzeTask(task, userPreferredLayer);
     
     logger.info('Optimal layer analysis completed', {
       preferredLayer: analysis.preferredLayer,
@@ -223,6 +342,7 @@ export class LayerManager {
       reasoning: analysis.reasoning,
       hasFiles: analysis.hasFiles,
       fileTypes: analysis.fileTypes,
+      userSpecified: !!userPreferredLayer,
     });
 
     try {
@@ -243,17 +363,15 @@ export class LayerManager {
   public async executeWithLayer(layerType: LayerType, task: any): Promise<LayerResult> {
     switch (layerType) {
       case 'claude':
-        const claudeLayer = this.getClaudeLayer();
-        await this.ensureLayerInitialized('claude');
+        const claudeLayer = await this.getClaudeLayerAsync();
         return await claudeLayer.execute(task);
         
       case 'gemini':
-        const geminiLayer = this.getGeminiLayer();
+        const geminiLayer = await this.getGeminiLayerAsync();
         return await geminiLayer.execute(task);
         
       case 'aistudio':
-        const aiStudioLayer = this.getAIStudioLayer();
-        await this.ensureLayerInitialized('aistudio');
+        const aiStudioLayer = await this.getAIStudioLayerAsync();
         return await aiStudioLayer.execute(task);
         
       default:
@@ -266,14 +384,25 @@ export class LayerManager {
    */
   private async executeWithFallback(task: any, failedLayer: LayerType): Promise<LayerResult> {
     const fallbackOrder = this.getFallbackOrder(failedLayer, task);
-    
+
     for (const layerType of fallbackOrder) {
       try {
+        // Ensure layer is initialized before attempting execution
+        await this.ensureLayerInitialized(layerType);
+
+        // Verify layer is actually ready
+        if (!this.layerInitialized[layerType as keyof typeof this.layerInitialized]) {
+          logger.warn(`Skipping ${layerType} - layer not initialized`, {
+            originalLayer: failedLayer,
+          });
+          continue;
+        }
+
         logger.info('Attempting fallback execution', {
           layer: layerType,
           originalLayer: failedLayer,
         });
-        
+
         return await this.executeWithLayer(layerType, task);
       } catch (error) {
         logger.warn('Fallback layer also failed', {
@@ -283,7 +412,7 @@ export class LayerManager {
         continue;
       }
     }
-    
+
     throw new Error(`All layers failed for task. Primary: ${failedLayer}, Fallbacks: ${fallbackOrder.join(', ')}`);
   }
 
@@ -299,15 +428,15 @@ export class LayerManager {
         return analysis.hasFiles ? ['aistudio', 'gemini'] : ['gemini', 'aistudio'];
         
       case 'gemini':
-        // If Gemini fails, prefer Claude for complex tasks or AI Studio for files
-        return analysis.complexity === 'high' ? ['claude', 'aistudio'] : ['aistudio', 'claude'];
+        // If Gemini fails, prefer AI Studio, then Claude for complex tasks only
+        return analysis.complexity === 'high' ? ['aistudio', 'claude'] : ['aistudio', 'claude'];
         
       case 'aistudio':
-        // If AI Studio fails, prefer Claude for complex tasks or Gemini for simple ones
-        return analysis.complexity === 'high' ? ['claude', 'gemini'] : ['gemini', 'claude'];
+        // If AI Studio fails, prefer Gemini for search, then Claude for complex tasks
+        return analysis.complexity === 'high' ? ['gemini', 'claude'] : ['gemini', 'claude'];
         
       default:
-        return ['claude', 'gemini', 'aistudio'];
+        return ['aistudio', 'gemini', 'claude'];
     }
   }
 
@@ -335,16 +464,39 @@ export class LayerManager {
 
   /**
    * Detect file type from path
+   * Public method for external access from CLI and other components
    */
-  private detectFileType(path: string): string {
+  public detectFileType(path: string): string {
     const ext = path.toLowerCase().split('.').pop() || '';
     
-    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'].includes(ext)) {return 'image';}
-    if (['mp3', 'wav', 'm4a', 'flac'].includes(ext)) {return 'audio';}
-    if (['mp4', 'mov', 'avi', 'webm'].includes(ext)) {return 'video';}
+    // Code files - prioritize for Claude Code layer
+    if (['ts', 'js', 'jsx', 'tsx', 'py', 'java', 'cpp', 'c', 'cs', 'go', 'rs', 'rb', 'php', 'swift', 'kt', 'scala', 'clj', 'r', 'sh', 'bash', 'zsh', 'ps1'].includes(ext)) {return 'code';}
+    
+    // Configuration and data files - also good for Claude Code
+    if (['json', 'yaml', 'yml', 'toml', 'ini', 'conf', 'env', 'dockerfile', 'makefile', 'cmake', 'gradle', 'package-lock.json', 'yarn.lock'].includes(ext)) {return 'config';}
+    
+    // Markup and template files - Claude Code can analyze these well
+    if (['html', 'xml', 'svg', 'vue', 'svelte', 'handlebars', 'hbs', 'mustache', 'pug', 'ejs', 'liquid'].includes(ext)) {return 'markup';}
+    
+    // Stylesheet files
+    if (['css', 'scss', 'sass', 'less', 'stylus'].includes(ext)) {return 'stylesheet';}
+    
+    // Database and SQL files
+    if (['sql', 'sqlite', 'db'].includes(ext)) {return 'database';}
+    
+    // Media files - AI Studio is optimal
+    if (['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tiff', 'ico', 'svg'].includes(ext)) {return 'image';}
+    if (['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg', 'wma'].includes(ext)) {return 'audio';}
+    if (['mp4', 'mov', 'avi', 'webm', 'mkv', 'flv', 'wmv', '3gp'].includes(ext)) {return 'video';}
+    
+    // Document files - AI Studio for OCR and analysis
     if (['pdf'].includes(ext)) {return 'pdf';}
-    if (['txt', 'md'].includes(ext)) {return 'text';}
-    if (['doc', 'docx'].includes(ext)) {return 'document';}
+    if (['doc', 'docx', 'odt', 'rtf', 'pages'].includes(ext)) {return 'document';}
+    if (['xls', 'xlsx', 'ods', 'csv', 'numbers'].includes(ext)) {return 'spreadsheet';}
+    if (['ppt', 'pptx', 'odp', 'keynote'].includes(ext)) {return 'presentation';}
+    
+    // Text files - can be analyzed by any layer
+    if (['txt', 'md', 'rst', 'log', 'readme', 'license', 'changelog'].includes(ext)) {return 'text';}
     
     return 'unknown';
   }
@@ -437,8 +589,18 @@ export class LayerManager {
    * Based on reference implementation principles
    */
   private isSimplePrompt(prompt: string, files?: FileReference[]): boolean {
+    // NEW: Check for file paths embedded in prompt (Windows + Unix)
+    // If paths found, this is not a simple prompt - needs file processing
+    const filePathRegex = /(?:[A-Za-z]:\\[^\s"'<>|]+\.[a-zA-Z0-9]+|\/(?!https?:)[^\s"'<>|]+\.[a-zA-Z0-9]+|\.\.?\/[^\s"'<>|]+\.[a-zA-Z0-9]+)/gi;
+    const embeddedPaths = prompt.match(filePathRegex) || [];
+
+    if (embeddedPaths.length > 0) {
+      logger.debug('File paths detected in prompt - not simple', { paths: embeddedPaths });
+      return false;
+    }
+
     // Fast processing criteria
-    const isSimple = 
+    const isSimple =
       prompt.length < 1000 &&              // Short prompt
       (!files || files.length === 0) &&    // No files
       !prompt.includes('workflow') &&      // No workflow keywords
@@ -486,10 +648,10 @@ export class LayerManager {
     // Fast path for simple prompts (reference implementation style)
     if (this.isSimplePrompt(prompt, files) && workflow === 'analysis') {
       logger.info('Using fast path for simple multimodal request');
-      
+
       try {
         const result = await this.processSimpleFast(prompt, files);
-        
+
         // Convert to WorkflowResult format
         return {
           success: result.success,
@@ -507,6 +669,51 @@ export class LayerManager {
       } catch (error) {
         logger.warn('Fast path failed, falling back to full workflow', {
           error: (error as Error).message
+        });
+        // Continue to full workflow below
+      }
+    }
+
+    // NEW: Fast path for single-file analysis - bypass 3-step workflow
+    // This addresses WSL "1/3 success, 2/3 failed" issue by directly using AI Studio
+    if (files.length > 0 && files.length <= 2 && workflow === 'analysis') {
+      logger.info('Using single-file fast path for analysis', {
+        fileCount: files.length,
+        fileTypes: files.map(f => f.type || 'unknown')
+      });
+
+      try {
+        // Direct AI Studio execution for file analysis (skip 3-step workflow)
+        const aiStudioLayer = await this.getAIStudioLayerAsync();
+        const result = await aiStudioLayer.execute({
+          type: 'multimodal_processing',
+          action: 'analyze',
+          prompt,
+          files,
+          options: options || {}
+        });
+
+        // Convert to WorkflowResult format
+        return {
+          success: result.success,
+          results: [result],
+          summary: result.success
+            ? `File analysis completed successfully using AI Studio direct path.`
+            : `File analysis failed: ${result.error || 'Unknown error'}`,
+          metadata: {
+            workflow: 'analysis',
+            execution_mode: 'single-file-fast',
+            total_duration: result.metadata?.duration || 0,
+            steps_completed: result.success ? 1 : 0,
+            steps_failed: result.success ? 0 : 1,
+            layers_used: ['aistudio'],
+            optimization: 'single-file-fast-path'
+          }
+        };
+      } catch (error) {
+        logger.warn('Single-file fast path failed, falling back to full workflow', {
+          error: (error as Error).message,
+          fileCount: files.length
         });
         // Continue to full workflow below
       }
@@ -833,6 +1040,9 @@ export class LayerManager {
         inputData.prompt.toLowerCase().includes('now') ||
         inputData.prompt.toLowerCase().includes('recent') ||
         inputData.prompt.toLowerCase().includes('update') ||
+        // Japanese keyword detection for grounding tasks:
+        // 検索 (search), 最新 (latest), 今日 (today), 天気 (weather)
+        // ニュース (news), 株価 (stock price), 現在 (now)
         inputData.prompt.includes('検索') ||
         inputData.prompt.includes('最新') ||
         inputData.prompt.includes('今日') ||
@@ -1234,6 +1444,22 @@ export class LayerManager {
     }
   }
 
+  /**
+   * Get layer with async initialization (for use in async contexts)
+   */
+  private async getLayerAsync(layerType: LayerType) {
+    switch (layerType) {
+      case 'claude':
+        return await this.getClaudeLayerAsync();
+      case 'gemini':
+        return await this.getGeminiLayerAsync();
+      case 'aistudio':
+        return await this.getAIStudioLayerAsync();
+      default:
+        throw new CGMBError(`Unknown layer type: ${layerType}`, 'INVALID_LAYER_TYPE');
+    }
+  }
+
   private topologicalSort(steps: WorkflowStep[]): WorkflowStep[] {
     const sorted: WorkflowStep[] = [];
     const visited = new Set<string>();
@@ -1328,8 +1554,25 @@ export class LayerManager {
         // Reference to another step's output
         const [stepId, ...pathParts] = value.slice(1).split('.');
         const stepOutput = stepOutputs[stepId!];
-        
+
         if (stepOutput) {
+          // Check if the step result is a failed LayerResult (has success: false)
+          const layerResult = stepOutput as { success?: boolean; error?: string; output?: unknown };
+          if (layerResult.success === false) {
+            // Previous step failed - provide context for downstream handling
+            logger.warn(`Step reference ${value} points to failed step ${stepId}`, {
+              stepId,
+              error: layerResult.error || 'Unknown error'
+            });
+            resolved[key] = {
+              _stepFailed: true,
+              _stepId: stepId,
+              _error: layerResult.error || 'Previous step failed',
+              _originalReference: value
+            };
+            continue;
+          }
+
           let resolvedValue: unknown = stepOutput;
           for (const part of pathParts) {
             if (typeof resolvedValue === 'object' && resolvedValue !== null) {
@@ -1341,8 +1584,19 @@ export class LayerManager {
           }
           resolved[key] = resolvedValue;
         } else {
-          logger.warn(`Could not resolve step reference: ${value}`);
-          resolved[key] = value;
+          // Step output not found - could be a failed step or not yet executed
+          logger.warn(`Could not resolve step reference: ${value}`, {
+            stepId,
+            availableSteps: Object.keys(stepOutputs),
+            hint: 'The referenced step may have failed or not been executed'
+          });
+          // Provide context for downstream handling
+          resolved[key] = {
+            _stepMissing: true,
+            _stepId: stepId,
+            _originalReference: value,
+            _hint: 'Referenced step output not available - step may have failed or not executed'
+          };
         }
       } else {
         resolved[key] = value;
@@ -1501,7 +1755,7 @@ export class LayerManager {
 
     try {
       // Get the appropriate layer
-      const layer = this.getLayer(step.layer);
+      const layer = await this.getLayerAsync(step.layer);
       
       // Prepare the execution parameters
       const executionParams = {
@@ -1521,6 +1775,29 @@ export class LayerManager {
       );
 
       const duration = Date.now() - startTime;
+
+      // Validate that result contains meaningful data
+      const isValidResult = this.validateStepResult(result, step);
+
+      if (!isValidResult) {
+        logger.warn(`Step ${step.id} returned empty or invalid result`, {
+          stepId: step.id,
+          layer: step.layer,
+          resultType: typeof result,
+          hasData: result !== null && result !== undefined,
+        });
+
+        return {
+          success: false,
+          error: 'Step returned empty or invalid result',
+          data: result,
+          metadata: {
+            layer: step.layer,
+            duration,
+            model: step.action,
+          },
+        };
+      }
 
       return {
         success: true,
@@ -1553,6 +1830,60 @@ export class LayerManager {
         },
       };
     }
+  }
+
+  /**
+   * Validate step result has meaningful content
+   */
+  private validateStepResult(result: unknown, step: WorkflowStep): boolean {
+    // Null or undefined is invalid
+    if (result === null || result === undefined) {
+      return false;
+    }
+
+    // If result is a LayerResult, check its success and data
+    if (typeof result === 'object' && 'success' in result) {
+      const layerResult = result as { success: boolean; data?: unknown };
+      if (!layerResult.success) {
+        return false;
+      }
+      // Check if data exists and is not empty
+      if (layerResult.data === null || layerResult.data === undefined) {
+        return false;
+      }
+      if (typeof layerResult.data === 'object' && Object.keys(layerResult.data as object).length === 0) {
+        return false;
+      }
+    }
+
+    // For generation tasks, check for output path or data
+    if (step.action.includes('generate')) {
+      if (typeof result === 'object') {
+        const r = result as Record<string, unknown>;
+        return !!(r.outputPath ?? r.data ?? r.imageData ?? r.audioData ?? r.content);
+      }
+    }
+
+    // For analysis tasks, check for content
+    if (step.action.includes('analyze') || step.action.includes('process')) {
+      if (typeof result === 'object') {
+        const r = result as Record<string, unknown>;
+        return !!(r.content ?? r.analysis ?? r.data ?? r.result);
+      }
+    }
+
+    // For string results, check it's not empty
+    if (typeof result === 'string') {
+      return result.trim().length > 0;
+    }
+
+    // For object results, check it's not empty
+    if (typeof result === 'object') {
+      return Object.keys(result as object).length > 0;
+    }
+
+    // Other types are considered valid
+    return true;
   }
 
   /**

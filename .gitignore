@@ -2,6 +2,7 @@
 node_modules/
 
 # Build outputs
+.claude/
 dist/
 build/
 *.tsbuildinfo
@@ -132,7 +133,6 @@ videos/
 
 # Development notes and temporary files
 CLAUDE.md
-CLAUDE.ME
 CHANGELOG.md
 NPM_PACKAGE_TEST.md
 PROJECT_FILES.md
@@ -181,4 +181,7 @@ credentials.json
 # Generated and build artifacts
 lib/
 types/
-docs/generated/
+docs/generated/NEXT_STEPS.md
+
+# Development notes (local only)
+NEXT_STEPS.md

@@ -70,10 +70,15 @@ function showGeminiHelp() {
 
 const program = new Command();
 
+// Read version from package.json
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const packageJson = require('../package.json') as { version: string };
+
 program
   .name('cgmb')
   .description('Claude-Gemini Multimodal Bridge - Enterprise-grade AI integration tool')
-  .version('1.0.0');
+  .version(packageJson.version);
 
 // Server command
 program
@@ -116,7 +121,7 @@ program
       if (envResult.loadedFrom) {
         logger.info('Environment loaded successfully', {
           source: envResult.loadedFrom,
-          hasGeminiKey: !!process.env.GEMINI_API_KEY
+          hasAIStudioKey: !!process.env.AI_STUDIO_API_KEY
         });
       }
 
@@ -241,7 +246,7 @@ program
         await interactiveSetup.runAuthSetupWizard();
       }
       
-      // 認証完了後の明示的な終了
+      // Explicit exit after authentication completion
       logger.info('Authentication setup completed successfully');
       process.exit(0);
       
@@ -345,10 +350,9 @@ program
   .command('detect-paths')
   .description('Detect and show paths for required CLI tools')
   .option('--fix', 'Attempt to fix PATH issues automatically')
-  .action(async (options) => {
-    try {
-      console.log('🔍 Detecting CLI Tool Paths');
-      console.log('===========================');
+          .action(async (options) => {
+          try {
+            console.log('🔍 Detecting CLI Tool Paths');      console.log('===========================');
       
       const tools = [
         { name: 'Claude Code', commands: ['claude', 'claude-code'], env: 'CLAUDE_CODE_PATH' },
@@ -999,8 +1003,8 @@ program
 
       console.log('💡 Auto-detected prompt (using chat mode)');
       
-      // 内部的にgeminiコマンドと同じ処理を実行
-      // ただし-pフラグは自動で設定
+      // Internally execute the same processing as the gemini command
+      // However, the -p flag is set automatically
       options.prompt = prompt;
       await executeGeminiCommand(options);
       
@@ -1035,7 +1039,7 @@ program
     try {
       let prompt = options.prompt;
       
-      // スマート検出: 引数があるけど-pがない場合
+      // Smart detection: When there are arguments but no -p flag
       if (!prompt && promptArgs.length > 0) {
         prompt = promptArgs.join(' ');
         console.log('💡 Auto-detected prompt (tip: use -p for explicit mode)');
@@ -1120,7 +1124,7 @@ program
     }
   });
 
-// 共通のGemini実行関数
+// Common Gemini execution function
 async function executeGeminiCommand(options: any) {
   try {
     if (!options.prompt) {
@@ -1468,7 +1472,9 @@ program
       await loadEnvironmentSmart({ verbose: false });
       
       console.log('🎨 Generating image with AI Studio...');
-      
+      console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+      console.log('   "CGMB generate an image of a futuristic city"\n');
+
       // Add safety prefix if safe mode is enabled
       let safePrompt = prompt;
       if (options.safeMode) {
@@ -1485,8 +1491,8 @@ program
       }
       
       const defaultConfig = {
-        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        claude: { timeout: 300000, code_path: 'claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -1559,10 +1565,12 @@ program
       await loadEnvironmentSmart({ verbose: false });
       
       console.log('🎵 Generating audio with AI Studio...');
-      
+      console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+      console.log('   "CGMB create audio saying Welcome to our podcast"\n');
+
       const defaultConfig = {
-        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        claude: { timeout: 300000, code_path: 'claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -1615,9 +1623,10 @@ program
 // Analyze command
 program
   .command('analyze <files...>')
-  .description('Analyze documents using AI Studio')
+  .description('Analyze documents using optimal AI layer (auto-routes based on file type)')
   .option('-t, --type <type>', 'Analysis type (summary, extract, compare)', 'summary')
   .option('-p, --prompt <prompt>', 'Custom analysis prompt')
+  .option('-l, --layer <layer>', 'Force specific layer (gemini, claude, aistudio, auto)', 'auto')
   .action(async (files, options) => {
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
@@ -1640,26 +1649,28 @@ program
         const pdfUrls = urlFiles.filter((url: string) => url.toLowerCase().endsWith('.pdf'));
         const webUrls = urlFiles.filter((url: string) => !url.toLowerCase().endsWith('.pdf'));
         
-        // Handle PDF URLs with Claude Code layer
+        // Handle PDF URLs with AI Studio layer
         if (pdfUrls.length > 0) {
-          console.log('📄 PDF URL(s) detected - routing to Claude Code for optimal processing...');
-          
+          console.log('📄 PDF URL(s) detected - routing to AI Studio for optimal PDF processing...');
+          console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+          console.log('   "CGMB analyze https://example.com/document.pdf"\n');
+
           // Construct analysis prompt for PDF URLs
           let analysisPrompt: string;
           if (pdfUrls.length === 1) {
             const basePrompt = options.prompt || `Please ${options.type} this PDF document`;
-            analysisPrompt = `${basePrompt} from ${pdfUrls[0]}`;
+            analysisPrompt = `${basePrompt}`;
           } else {
-            analysisPrompt = `Analyze and ${options.type} the PDF documents from these URLs: ${pdfUrls.join(', ')}`;
+            analysisPrompt = `Analyze and ${options.type} these PDF documents`;
           }
           
           console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
           console.log('');
           
-          // Use LayerManager with Claude Code layer for PDF processing
+          // Use LayerManager with AI Studio layer for PDF URL processing
           const layerManager = new LayerManager({
             gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-            claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
+            claude: { code_path: 'claude', timeout: 300000 },
             aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
             cache: { enabled: true, ttl: 3600 },
             logging: { level: 'info' as const }
@@ -1667,10 +1678,17 @@ program
           
           try {
             await layerManager.initializeLayers();
-            const result = await layerManager.executeWithLayer('claude', {
-              type: 'document_analysis',
-              prompt: analysisPrompt,
-              analysis_type: options.type || 'summary'
+            const result = await layerManager.executeWithLayer('aistudio', {
+              type: 'multimodal_processing',
+              files: pdfUrls.map((url: string) => ({ 
+                path: url, 
+                type: 'document'
+              })),
+              instructions: analysisPrompt,
+              options: {
+                analysisType: options.type || 'summary',
+                depth: 'deep'
+              }
             });
             
             console.log('\n📋 Result:');
@@ -1680,20 +1698,45 @@ program
             if (result.metadata) {
               console.log('\n📊 Metadata:');
               console.log(`Processing time: ${result.metadata.duration || 'N/A'}ms`);
-              console.log(`Layer: Claude Code (PDF URL processing)`);
+              console.log(`Layer: AI Studio (PDF URL processing via Gemini File API)`);
             }
           } catch (error) {
             logger.error('PDF URL processing failed', error as Error);
             console.log('❌ Failed to process PDF URL(s)');
-            console.log('💡 Try downloading the PDF manually and using: cgmb analyze local-file.pdf');
-            process.exit(1);
+            console.log('💡 Falling back to Claude Code layer...');
+            
+            // Fallback to Claude Code layer
+            try {
+              const fallbackResult = await layerManager.executeWithLayer('claude', {
+                type: 'document_analysis',
+                prompt: `${analysisPrompt} from ${pdfUrls.join(', ')}`,
+                analysis_type: options.type || 'summary'
+              });
+              
+              console.log('\n📋 Fallback Result (Claude Code):');
+              console.log('═'.repeat(50));
+              console.log(fallbackResult.data || 'Processing completed');
+              
+              if (fallbackResult.metadata) {
+                console.log('\n📊 Metadata:');
+                console.log(`Processing time: ${fallbackResult.metadata.duration || 'N/A'}ms`);
+                console.log(`Layer: Claude Code (Fallback)`);
+              }
+            } catch (fallbackError) {
+              logger.error('Fallback processing also failed', fallbackError as Error);
+              console.log('❌ Both AI Studio and Claude Code processing failed');
+              console.log('💡 Try downloading the PDF manually and using: cgmb analyze local-file.pdf');
+              process.exit(1);
+            }
           }
         }
         
         // Handle regular web URLs with Gemini CLI
         if (webUrls.length > 0) {
           console.log('🔍 Web URL(s) detected - routing to Gemini CLI for current information...');
-          
+          console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+          console.log('   "CGMB search for the latest AI developments"\n');
+
           // Construct analysis prompt for web URLs
           let analysisPrompt: string;
           if (webUrls.length === 1) {
@@ -1785,6 +1828,8 @@ program
       }
 
       console.log('📄 Analyzing documents with AI Studio...');
+      console.log('💡 Tip: For best results, use CGMB within Claude Code:');
+      console.log('   "CGMB analyze the document at /path/to/report.pdf"\n');
       console.log(`📁 Files (${resolvedFiles.length}):`);
       console.log(`📂 Current directory: ${process.cwd()}`);
       resolvedFiles.forEach((file: string, index: number) => {
@@ -1804,25 +1849,60 @@ program
       }
 
       const defaultConfig = {
-        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        claude: { timeout: 300000, code_path: 'claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
       };
       const layerManager = new LayerManager(defaultConfig);
+      
+      // Validate user-specified layer option
+      const validLayers = ['gemini', 'claude', 'aistudio', 'auto'];
+      if (!validLayers.includes(options.layer)) {
+        console.error(`❌ Invalid layer: ${options.layer}`);
+        console.error(`Valid options: ${validLayers.join(', ')}`);
+        process.exit(1);
+      }
+      
+      // Auto-detect file types instead of hardcoding 'document'
+      const fileReferences = resolvedFiles.map((f: string) => {
+        // Use LayerManager's detectFileType method for accurate type detection
+        const detectedType = layerManager.detectFileType(f);
+        return { path: f, type: detectedType };
+      });
+      
       const analysisPrompt = options.prompt || `Please ${options.type} these documents`;
+      
+      // Determine user preferred layer (undefined for auto)
+      const userPreferredLayer = options.layer !== 'auto' ? options.layer : undefined;
+      
+      // Log file analysis for user understanding
+      if (fileReferences.length > 0) {
+        console.log(`\n📁 File Analysis:`);
+        fileReferences.forEach((ref: any) => {
+          console.log(`   ${ref.path} → ${ref.type}`);
+        });
+        
+        if (userPreferredLayer) {
+          console.log(`\n🎯 Layer Override: Using ${userPreferredLayer} layer as requested`);
+        } else {
+          console.log(`\n🤖 Auto-routing: Optimal layer will be selected based on file types`);
+        }
+        console.log('');
+      }
       
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
         () => layerManager.executeWithOptimalLayer({
           prompt: analysisPrompt,
-          files: resolvedFiles.map((f: string) => ({ path: f, type: 'document' as const })),
+          files: fileReferences,
           options: {
             analysisType: options.type,
             depth: 'deep',
-            multiplePDFs: pdfFiles.length > 1
+            multiplePDFs: pdfFiles.length > 1,
+            preferredLayer: userPreferredLayer
           }
         }),
         'analyze-documents',
@@ -1878,8 +1958,8 @@ program
       console.log(`📁 Files: ${files.join(', ')}`);
       
       const defaultConfig = {
-        claude: { timeout: 300000, code_path: '/usr/local/bin/claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-pro', api_key: process.env.GEMINI_API_KEY || '' },
+        claude: { timeout: 300000, code_path: 'claude' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -1959,7 +2039,7 @@ program
       
       console.log('🚀 CGMB System Information');
       console.log('═'.repeat(50));
-      console.log(`Version: 1.0.0`);
+      console.log(`Version: ${packageJson.version}`);
       console.log(`Node.js: ${process.version}`);
       console.log(`Platform: ${process.platform}`);
       console.log(`Architecture: ${process.arch}`);

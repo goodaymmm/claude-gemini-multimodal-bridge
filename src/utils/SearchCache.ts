@@ -50,7 +50,7 @@ export class SearchCache {
   constructor(private options: CacheOptions = {}) {}
 
   /**
-   * 検索結果をキャッシュから取得
+   * Get search results from cache
    */
   async get(query: string, searchEngine: string = 'gemini'): Promise<any | null> {
     const key = this.generateCacheKey(query, searchEngine);
@@ -63,7 +63,7 @@ export class SearchCache {
       return null;
     }
 
-    // 有効期限チェック
+    // Check expiration
     if (Date.now() > entry.expiresAt) {
       this.cache.delete(key);
       this.stats.expiredEntries++;
@@ -77,7 +77,7 @@ export class SearchCache {
       return null;
     }
 
-    // 類似クエリの検索（オプション）
+    // Search for similar query (optional)
     if (!entry && this.options.similarityThreshold) {
       const similarEntry = this.findSimilarEntry(query, searchEngine);
       if (similarEntry) {
@@ -104,7 +104,7 @@ export class SearchCache {
   }
 
   /**
-   * 検索結果をキャッシュに保存
+   * Store search results in cache
    */
   async set(
     query: string, 
@@ -117,7 +117,7 @@ export class SearchCache {
     const ttl = this.options.ttl || this.defaultTTL;
     const expiresAt = timestamp + ttl;
 
-    // キャッシュサイズ制限チェック
+    // Check cache size limit
     if (this.cache.size >= (this.options.maxEntries || this.maxEntries)) {
       this.evictOldestEntries();
     }
@@ -149,35 +149,35 @@ export class SearchCache {
   }
 
   /**
-   * クエリ正規化によるキャッシュキー生成
+   * Generate cache key via query normalization
    */
   private generateCacheKey(query: string, searchEngine: string): string {
-    // クエリ正規化
+    // Query normalization
     const normalizedQuery = this.normalizeQuery(query);
     const dataToHash = `${normalizedQuery}:${searchEngine}`;
     return this.hashString(dataToHash);
   }
 
   /**
-   * クエリの正規化
+   * Normalize query
    */
   private normalizeQuery(query: string): string {
     return query
       .toLowerCase()
       .trim()
-      // 句読点と記号を正規化
+      // Normalize punctuation and symbols
       .replace(/[。、！？]/g, '')
       .replace(/\s+/g, ' ')
-      // 年度の正規化
+      // Normalize year format
       .replace(/202[4-9]年?/g, '2024-2025')
-      // 類似表現の正規化
+      // Normalize similar expressions
       .replace(/について教えて|を説明して|について知りたい/g, 'について')
       .replace(/最新の|最近の|新しい/g, '最新')
       .replace(/具体的に|詳しく|詳細に/g, '詳細');
   }
 
   /**
-   * 類似エントリの検索
+   * Find similar entry
    */
   private findSimilarEntry(query: string, searchEngine: string): CacheEntry | null {
     const normalizedQuery = this.normalizeQuery(query);
@@ -201,7 +201,7 @@ export class SearchCache {
   }
 
   /**
-   * 文字列類似度計算（Jaccard係数）
+   * Calculate string similarity (Jaccard index)
    */
   private calculateSimilarity(str1: string, str2: string): number {
     const tokens1 = new Set(str1.split(/\s+/));
@@ -214,11 +214,11 @@ export class SearchCache {
   }
 
   /**
-   * 古いエントリの削除
+   * Evict oldest entries
    */
   private evictOldestEntries(): void {
     const maxEntries = this.options.maxEntries || this.maxEntries;
-    const evictCount = Math.floor(maxEntries * 0.2); // 20%を削除
+    const evictCount = Math.floor(maxEntries * 0.2); // Remove 20%
 
     const sortedEntries = Array.from(this.cache.entries())
       .sort(([, a], [, b]) => a.timestamp - b.timestamp);
@@ -237,7 +237,7 @@ export class SearchCache {
   }
 
   /**
-   * 期限切れエントリのクリーンアップ
+   * Clean up expired entries
    */
   async cleanup(): Promise<number> {
     const now = Date.now();
@@ -265,7 +265,7 @@ export class SearchCache {
   }
 
   /**
-   * キャッシュクリア
+   * Clear cache
    */
   async clear(): Promise<void> {
     const entryCount = this.cache.size;
@@ -276,7 +276,7 @@ export class SearchCache {
   }
 
   /**
-   * キャッシュ統計情報の取得
+   * Get cache statistics
    */
   getStats(): CacheStats {
     this.updateStorageSize();
@@ -284,7 +284,7 @@ export class SearchCache {
   }
 
   /**
-   * インメモリキャッシュをファイルにエクスポート
+   * Export in-memory cache to file
    */
   async exportToFile(filePath: string): Promise<void> {
     try {
@@ -311,7 +311,7 @@ export class SearchCache {
   }
 
   /**
-   * ファイルからキャッシュをインポート
+   * Import cache from file
    */
   async importFromFile(filePath: string): Promise<void> {
     try {
@@ -353,7 +353,7 @@ export class SearchCache {
   }
 
   /**
-   * ヘルパーメソッド
+   * Helper methods
    */
   private hashString(str: string): string {
     return crypto.createHash('sha256').update(str).digest('hex').substring(0, 16);
@@ -373,10 +373,10 @@ export class SearchCache {
   }
 
   private updateStorageSize(): void {
-    // 概算のメモリ使用量計算
+    // Calculate approximate memory usage
     let size = 0;
     for (const entry of this.cache.values()) {
-      size += JSON.stringify(entry).length * 2; // UTF-16なので2倍
+      size += JSON.stringify(entry).length * 2; // Multiply by 2 for UTF-16
     }
     this.stats.storageSize = size;
   }

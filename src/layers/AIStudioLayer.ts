@@ -1,30 +1,37 @@
-import { spawn } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
 import * as fs from 'fs';
 import { dirname, join } from 'path';
 import * as path from 'path';
-import { GoogleGenAI, Modality } from '@google/genai';
+import { fileURLToPath } from 'url';
+
+// ESM-compatible __dirname and __filename
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// Commented out unused import for safety - Modality may be needed for future multimodal processing
+import { GoogleGenAI /*, Modality */ } from '@google/genai';
 import { 
+  AI_MODELS, 
   AudioAnalysisResult, 
   AudioGenOptions, 
   FileReference, 
   GenerationType, 
   ImageAnalysisResult, 
-  ImageAnalysisType, 
+  ImageAnalysisType,
   ImageGenOptions,
   LayerInterface,
   LayerResult,
   MediaGenResult,
   MultimodalFile,
   MultimodalResult,
-  VideoGenOptions,
-  AI_MODELS
+  VideoGenOptions
 } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { TimeoutManager } from '../utils/TimeoutManager.js';
+import { isPlatformWindows, normalizeCrossPlatformPath, isUrl } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
 
@@ -478,34 +485,45 @@ export class AIStudioLayer implements LayerInterface {
 
   /**
    * Analyze image
+   * Supports OCR mode for enhanced text extraction
    */
   async analyzeImage(imagePath: string, analysisType: ImageAnalysisType): Promise<ImageAnalysisResult> {
     return retry(
       async () => {
-        logger.debug('Analyzing image', { imagePath, analysisType });
+        // OCR is an enhanced text extraction mode
+        const isOCR = analysisType === 'ocr';
+        const effectiveType = isOCR ? 'extract_text' : analysisType;
+
+        logger.debug('Analyzing image', { imagePath, analysisType, isOCR });
 
         const result = await this.executeMCPCommand('analyze_image', {
           image: imagePath,
-          analysis_type: analysisType,
+          analysis_type: effectiveType,
           options: {
             detailed: analysisType === 'detailed',
-            extract_text: analysisType === 'extract_text',
+            extract_text: effectiveType === 'extract_text',
             technical: analysisType === 'technical',
+            // OCR-specific: request structured text blocks
+            ocr_mode: isOCR,
+            include_bounding_boxes: isOCR,
           },
         });
 
         return {
           type: analysisType,
-          description: result.description || 'Image analysis completed',
+          description: isOCR
+            ? 'OCR text extraction completed'
+            : (result.description || 'Image analysis completed'),
           extracted_text: result.extracted_text,
           technical_details: result.technical_details,
           confidence: result.confidence || 0.8,
+          text_blocks: result.text_blocks,
         };
       },
       {
         maxAttempts: this.MAX_RETRIES,
         delay: 3000,
-        operationName: 'analyze-image',
+        operationName: analysisType === 'ocr' ? 'ocr-extraction' : 'analyze-image',
       }
     );
   }
@@ -876,8 +894,8 @@ export class AIStudioLayer implements LayerInterface {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const extension = this.getFileExtension(mediaType);
     const fileName = `generated-${mediaType}-${timestamp}.${extension}`;
-    const outputDir = `./generated-media/${mediaType}`;
-    const outputPath = `${outputDir}/${fileName}`;
+    const outputDir = join(process.cwd(), 'output', mediaType);
+    const outputPath = join(outputDir, fileName);
 
     try {
       // Ensure output directory exists
@@ -1206,79 +1224,86 @@ export class AIStudioLayer implements LayerInterface {
 
   /**
    * Resolve MCP server path with multiple fallback strategies
+   * Priority: ESM __dirname → dev path → local npm → global npm paths
    */
   private resolveMCPServerPath(): string {
     const serverFileName = 'ai-studio-mcp-server.js';
-    
-    // Strategy 1: Development mode (current working directory)
+    const checkedPaths: string[] = [];
+
+    // Strategy 1 (PRIORITY): ESM-compatible __dirname relative path
+    // This works reliably in compiled ESM modules
+    const fromModulePath = join(__dirname, '..', 'mcp-servers', serverFileName);
+    checkedPaths.push(fromModulePath);
+    if (fs.existsSync(fromModulePath)) {
+      logger.debug('Using ESM module relative path', { path: fromModulePath });
+      return fromModulePath;
+    }
+
+    // Strategy 2: Development mode (current working directory)
     const devPath = join(process.cwd(), 'dist', 'mcp-servers', serverFileName);
+    checkedPaths.push(devPath);
     if (fs.existsSync(devPath)) {
       logger.debug('Using development MCP server path', { path: devPath });
       return devPath;
     }
-    
-    // Strategy 2: NPM local install (node_modules)
+
+    // Strategy 3: NPM local install (node_modules)
     const localNpmPath = join(process.cwd(), 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName);
+    checkedPaths.push(localNpmPath);
     if (fs.existsSync(localNpmPath)) {
       logger.debug('Using local npm install MCP server path', { path: localNpmPath });
       return localNpmPath;
     }
-    
-    // Strategy 3: Global npm install via require.resolve
-    try {
-      const packagePath = require.resolve('claude-gemini-multimodal-bridge/package.json');
-      const packageDir = dirname(packagePath);
-      const globalNpmPath = join(packageDir, 'dist', 'mcp-servers', serverFileName);
-      if (fs.existsSync(globalNpmPath)) {
-        logger.debug('Using global npm install MCP server path', { path: globalNpmPath });
-        return globalNpmPath;
-      }
-    } catch (error) {
-      logger.debug('Could not resolve package via require.resolve', { error: (error as Error).message });
-    }
-    
-    // Strategy 4: Search in typical global npm locations
-    const globalPaths = [
-      join(process.env.HOME || process.env.USERPROFILE || '', '.nvm', 'versions', 'node', process.version, 'lib', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
+
+    // Strategy 4: Search in typical global npm locations (cross-platform)
+    // Filter out paths where environment variables are not set to avoid invalid paths
+    const isWindows = process.platform === 'win32';
+    const globalPaths = isWindows ? [
+      // Windows global npm paths - only include if env var exists
+      ...(process.env.APPDATA ? [
+        join(process.env.APPDATA, 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
+      ] : []),
+      ...(process.env.LOCALAPPDATA ? [
+        join(process.env.LOCALAPPDATA, 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
+      ] : []),
+      ...(process.env.USERPROFILE ? [
+        join(process.env.USERPROFILE, 'AppData', 'Roaming', 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
+        // nvm-windows support
+        join(process.env.USERPROFILE, '.nvm', 'versions', 'node', process.version, 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
+      ] : []),
+      // Program Files for system-wide Node.js installations
+      join('C:', 'Program Files', 'nodejs', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
+    ] : [
+      // Unix/macOS global npm paths - only include if env var exists
+      ...(process.env.HOME ? [
+        join(process.env.HOME, '.nvm', 'versions', 'node', process.version, 'lib', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
+      ] : []),
       join('/usr/local/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
-      join('/opt/homebrew/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName)
+      join('/opt/homebrew/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
+      // WSL: Windows npm location accessible from WSL
+      ...(process.env.USER ? [
+        join('/mnt/c/Users', process.env.USER, 'AppData', 'Roaming', 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
+      ] : []),
     ];
-    
+
     for (const globalPath of globalPaths) {
+      checkedPaths.push(globalPath);
       if (fs.existsSync(globalPath)) {
         logger.debug('Using global npm path from search', { path: globalPath });
         return globalPath;
       }
     }
-    
-    // Strategy 5: Check if running from global npm installation (current directory check)
-    const currentDirPath = join(__dirname, '..', 'mcp-servers', serverFileName);
-    if (fs.existsSync(currentDirPath)) {
-      logger.debug('Using current directory relative path', { path: currentDirPath });
-      return currentDirPath;
-    }
-    
-    // Strategy 6: Last resort - try module directory traversal
-    try {
-      const moduleDir = dirname(require.resolve('claude-gemini-multimodal-bridge'));
-      const modulePath = join(moduleDir, 'mcp-servers', serverFileName);
-      if (fs.existsSync(modulePath)) {
-        logger.debug('Using module directory path', { path: modulePath });
-        return modulePath;
-      }
-    } catch (error) {
-      logger.debug('Module directory traversal failed', { error: (error as Error).message });
-    }
-    
-    // If all strategies fail, return the development path as fallback
-    logger.warn('Could not resolve MCP server path, using development fallback', { 
-      fallbackPath: devPath,
+
+    // All strategies failed - throw error with diagnostic info
+    const errorMessage = `MCP server not found. Checked paths:\n${checkedPaths.map(p => `  - ${p}`).join('\n')}\n\nTroubleshooting:\n  1. Run 'npm run build' to compile the MCP server\n  2. Ensure CGMB is properly installed\n  3. Check that dist/mcp-servers/ai-studio-mcp-server.js exists`;
+
+    logger.error('MCP server path resolution failed', {
+      checkedPaths,
       cwd: process.cwd(),
-      __dirname,
-      strategies_tried: ['development', 'local_npm', 'global_npm_resolve', 'global_paths_search', 'current_dir_relative', 'module_traversal']
+      __dirname
     });
-    
-    return devPath;
+
+    throw new Error(errorMessage);
   }
 
   /**
@@ -1295,7 +1320,16 @@ export class AIStudioLayer implements LayerInterface {
       // Clean up old process if exists
       if (this.persistentMCPProcess && !this.persistentMCPProcess.killed) {
         try {
-          this.persistentMCPProcess.kill('SIGTERM');
+          if (isPlatformWindows()) {
+            // Windows: Use taskkill for reliable termination
+            try {
+              execSync(`taskkill /pid ${this.persistentMCPProcess.pid} /T /F`, { stdio: 'ignore' });
+            } catch {
+              this.persistentMCPProcess.kill();
+            }
+          } else {
+            this.persistentMCPProcess.kill('SIGTERM');
+          }
         } catch (error) {
           logger.debug('Error killing old MCP process', { error: (error as Error).message });
         }
@@ -1315,9 +1349,12 @@ export class AIStudioLayer implements LayerInterface {
         throw new Error(`AI Studio MCP server not found at: ${mcpServerPath}`);
       }
       
+      // Windows requires shell: true for proper path resolution and process spawning
+      const isWindowsSpawn = process.platform === 'win32';
       this.persistentMCPProcess = spawn('node', [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
+        shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
         env: {
           ...process.env,
           AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
@@ -1363,7 +1400,9 @@ export class AIStudioLayer implements LayerInterface {
         command,
         hasParams: !!params,
         timeout,
+        timeoutMinutes: Math.round(timeout / 60000),
         usesPersistentProcess: true,
+        paramKeys: params ? Object.keys(params) : []
       });
 
       let output = '';
@@ -1399,6 +1438,13 @@ export class AIStudioLayer implements LayerInterface {
         }
       };
       
+      logger.debug(`[${this.instanceId}] Sending optimized MCP request`, {
+        instanceId: this.instanceId,
+        command,
+        requestId: mcpRequest.id,
+        requestLength: JSON.stringify(mcpRequest).length
+      });
+      
       try {
         process.stdin.write(JSON.stringify(mcpRequest) + '\n');
       } catch (error) {
@@ -1408,21 +1454,39 @@ export class AIStudioLayer implements LayerInterface {
       }
       
       const dataHandler = (data: Buffer) => {
-        output += data.toString();
+        const chunk = data.toString();
+        output += chunk;
         
-        // Try to parse complete responses
-        const lines = output.split('\n');
+        logger.debug(`[${this.instanceId}] Optimized MCP stdout chunk received`, {
+          instanceId: this.instanceId,
+          command,
+          chunkLength: chunk.length,
+          totalOutputLength: output.length
+        });
+        
+        // Try to parse complete responses (handle both Unix \n and Windows \r\n)
+        const lines = output.split(/\r?\n/);
         for (const line of lines) {
           if (line.trim()) {
             try {
               const mcpResponse = JSON.parse(line);
               if (mcpResponse.result || mcpResponse.error) {
-                cleanup(); // 即座にクリーンアップとタイムアウトクリア
-                
-                if (mcpResponse.error) {
-                  reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
-                } else {
-                  resolve(mcpResponse.result); // 即座にresolve（タイムアウト問題の修正）
+                if (!isResolved) {
+                  cleanup(); // Immediate cleanup and timeout clear
+                  
+                  logger.debug(`[${this.instanceId}] MCP response received - immediate resolution`, {
+                    instanceId: this.instanceId,
+                    command,
+                    hasResult: !!mcpResponse.result,
+                    hasError: !!mcpResponse.error,
+                    responseId: mcpResponse.id
+                  });
+                  
+                  if (mcpResponse.error) {
+                    reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
+                  } else {
+                    resolve(mcpResponse.result); // Immediate resolve (timeout issue fix)
+                  }
                 }
                 return;
               }
@@ -1435,13 +1499,22 @@ export class AIStudioLayer implements LayerInterface {
       };
 
       const errorHandler = (data: Buffer) => {
-        errorOutput += data.toString();
+        const chunk = data.toString();
+        errorOutput += chunk;
+        logger.debug(`[${this.instanceId}] Optimized MCP stderr chunk received`, {
+          instanceId: this.instanceId,
+          command,
+          chunkLength: chunk.length,
+          errorContent: chunk.substring(0, 200)
+        });
       };
       
       // Set up timeout with immediate cleanup
       timeoutId = setTimeout(() => {
-        cleanup();
-        reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation completed but response delayed`));
+        if (!isResolved) {
+          cleanup();
+          reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
+        }
       }, timeout);
 
       process.stdout.on('data', dataHandler);
@@ -1453,6 +1526,26 @@ export class AIStudioLayer implements LayerInterface {
    * Execute MCP command
    */
   private async executeMCPCommand(command: string, params: any): Promise<any> {
+    // Normalize file paths in params for cross-platform compatibility
+    // This ensures Windows backslashes are converted to forward slashes before MCP transmission
+    if (params) {
+      if (params.files && Array.isArray(params.files)) {
+        params = {
+          ...params,
+          files: params.files.map((file: any) => ({
+            ...file,
+            path: file.path ? this.normalizeInputPath(file.path) : file.path
+          }))
+        };
+      }
+      if (params.documents && Array.isArray(params.documents)) {
+        params = {
+          ...params,
+          documents: params.documents.map((doc: string) => this.normalizeInputPath(doc))
+        };
+      }
+    }
+
     // Enhanced timeout calculation based on command type and complexity
     // Addresses AI Studio timeout issues from Error4.md analysis
     let timeout = this.DEFAULT_TIMEOUT; // Base: 180 seconds
@@ -1479,10 +1572,13 @@ export class AIStudioLayer implements LayerInterface {
     }
     
     return new Promise<any>((resolve, reject) => {
-      logger.debug('Executing MCP command', {
+      logger.debug(`[${this.instanceId}] Executing MCP command`, {
+        instanceId: this.instanceId,
         command,
         hasParams: !!params,
         timeout,
+        timeoutMinutes: Math.round(timeout / 60000),
+        paramKeys: params ? Object.keys(params) : []
       });
 
       // Use our custom AI Studio MCP server with proper MCP protocol
@@ -1499,9 +1595,27 @@ export class AIStudioLayer implements LayerInterface {
         return;
       }
       
+      // Windows requires shell: true for proper path resolution and process spawning
+      const isWindowsSpawn = process.platform === 'win32';
+
+      // Windows diagnostic log: Environment info before spawn execution
+      logger.info(`[${this.instanceId}] MCP spawn starting`, {
+        instanceId: this.instanceId,
+        command,
+        platform: process.platform,
+        isWindows: isWindowsSpawn,
+        mcpServerPath,
+        cwd: process.cwd(),
+        hasApiKey: !!this.getAIStudioApiKey(),
+        nodeVersion: process.version,
+        timeout,
+        paramKeys: params ? Object.keys(params) : []
+      });
+
       const child = spawn('node', [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
+        shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
         env: {
           ...process.env,
           // New preferred environment variable name
@@ -1512,12 +1626,35 @@ export class AIStudioLayer implements LayerInterface {
         },
       });
 
+      // Diagnostic log after successful spawn
+      logger.info(`[${this.instanceId}] MCP process spawned`, {
+        instanceId: this.instanceId,
+        command,
+        pid: child.pid,
+        connected: child.connected,
+        killed: child.killed
+      });
+
       let output = '';
       let errorOutput = '';
 
+      let isCompleted = false;
       const timeoutId = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error(`AI Studio MCP command timeout after ${timeout}ms`));
+        if (!isCompleted) {
+          isCompleted = true;
+          // Platform-aware process termination
+          if (process.platform === 'win32') {
+            // Windows: Use taskkill for reliable termination
+            try {
+              execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
+            } catch {
+              child.kill();
+            }
+          } else {
+            child.kill('SIGKILL');  // Unix: force kill
+          }
+          reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
+        }
       }, timeout);
 
       // Send MCP request
@@ -1531,72 +1668,168 @@ export class AIStudioLayer implements LayerInterface {
         }
       };
 
+      logger.debug(`[${this.instanceId}] Sending MCP request`, {
+        instanceId: this.instanceId,
+        command,
+        requestId: mcpRequest.id,
+        requestLength: JSON.stringify(mcpRequest).length
+      });
+      
       child.stdin.write(JSON.stringify(mcpRequest) + '\n');
       child.stdin.end();
 
       child.stdout.on('data', (data) => {
-        output += data.toString();
+        const chunk = data.toString();
+        output += chunk;
+        logger.debug(`[${this.instanceId}] MCP stdout chunk received`, {
+          instanceId: this.instanceId,
+          command,
+          chunkLength: chunk.length,
+          totalOutputLength: output.length
+        });
       });
 
       child.stderr.on('data', (data) => {
-        errorOutput += data.toString();
+        const chunk = data.toString();
+        errorOutput += chunk;
+        logger.debug(`[${this.instanceId}] MCP stderr chunk received`, {
+          instanceId: this.instanceId,
+          command,
+          chunkLength: chunk.length,
+          errorContent: chunk.substring(0, 200)
+        });
       });
 
       child.on('close', (code) => {
-        clearTimeout(timeoutId);
-        
-        if (code === 0) {
-          // Immediate resolution pattern for new installations
-          // Process results immediately without waiting for additional processing
-          try {
-            const lines = output.trim().split('\n').filter(line => line.trim());
-            let result = {};
-            
-            for (const line of lines) {
-              try {
-                const mcpResponse = JSON.parse(line);
-                if (mcpResponse.result) {
-                  result = mcpResponse.result;
-                  break;
-                }
-              } catch (parseError) {
-                continue;
-              }
-            }
-            
-            logger.debug(`[${this.instanceId}] MCP command completed successfully - immediate resolution`, {
-              instanceId: this.instanceId,
-              command,
-              outputLength: output.length,
-              code,
-              resultType: typeof result,
-              hasResult: !!result
-            });
-            
-            resolve(result);
-          } catch (parseError) {
-            logger.debug(`[${this.instanceId}] MCP parsing failed, using raw output fallback`, {
-              instanceId: this.instanceId,
-              parseError: parseError instanceof Error ? parseError.message : String(parseError)
-            });
-            resolve({ content: output.trim() });
-          }
-        } else {
-          const error = `AI Studio MCP command failed with code ${code}: ${errorOutput}`;
-          logger.error(`[${this.instanceId}] MCP command failed`, { 
+        if (!isCompleted) {
+          isCompleted = true;
+          clearTimeout(timeoutId);
+          
+          logger.debug(`[${this.instanceId}] MCP process closed with code ${code}`, {
             instanceId: this.instanceId,
-            command, 
-            code, 
-            error: errorOutput 
+            command,
+            code,
+            outputLength: output.length,
+            errorLength: errorOutput.length
           });
-          reject(new Error(error));
+          
+          if (code === 0) {
+            // Immediate resolution pattern for new installations
+            // Process results immediately without waiting for additional processing
+            try {
+              // Handle both Unix \n and Windows \r\n line endings
+              const lines = output.trim().split(/\r?\n/).filter(line => line.trim());
+              let result = {};
+              
+              for (const line of lines) {
+                try {
+                  const mcpResponse = JSON.parse(line);
+                  if (mcpResponse.result) {
+                    const mcpResult = mcpResponse.result;
+
+                    // Handle string responses directly
+                    if (typeof mcpResult === 'string') {
+                      result = { content: mcpResult };
+                      break;
+                    }
+
+                    // Check multiple possible content field names
+                    const content = mcpResult.content
+                      || mcpResult.data
+                      || mcpResult.output
+                      || mcpResult.response
+                      || mcpResult.text;
+
+                    if (content) {
+                      result = { content, ...mcpResult };
+                    } else {
+                      // Return the result object as-is if no content field found
+                      result = mcpResult;
+                    }
+                    break;
+                  }
+                } catch (parseError) {
+                  continue;
+                }
+              }
+
+              // If no valid result found, check for error indicators before using fallback
+              if (Object.keys(result).length === 0) {
+                const trimmedOutput = output.trim();
+
+                // Check for error indicators in output
+                const errorIndicators = ['error', 'Error', 'ERROR', 'failed', 'Failed', 'FAILED', 'exception', 'Exception'];
+                const hasErrorIndicator = errorIndicators.some(indicator => trimmedOutput.includes(indicator));
+
+                if (hasErrorIndicator) {
+                  logger.warn(`[${this.instanceId}] MCP command returned error output`, {
+                    instanceId: this.instanceId,
+                    command,
+                    outputPreview: trimmedOutput.substring(0, 200)
+                  });
+                  reject(new Error(`MCP command ${command} failed: ${trimmedOutput.substring(0, 500)}`));
+                  return;
+                }
+
+                // Only use raw fallback if output looks like valid content
+                if (trimmedOutput) {
+                  result = { content: trimmedOutput, _source: 'raw_fallback' };
+                  logger.debug(`[${this.instanceId}] Using raw output fallback`, {
+                    instanceId: this.instanceId,
+                    command,
+                    outputLength: trimmedOutput.length
+                  });
+                } else {
+                  // Empty output - reject as failure
+                  logger.warn(`[${this.instanceId}] MCP command returned empty output`, {
+                    instanceId: this.instanceId,
+                    command
+                  });
+                  reject(new Error(`MCP command ${command} returned empty result`));
+                  return;
+                }
+              }
+
+              logger.debug(`[${this.instanceId}] MCP command completed successfully - immediate resolution`, {
+                instanceId: this.instanceId,
+                command,
+                outputLength: output.length,
+                code,
+                resultType: typeof result,
+                hasResult: Object.keys(result).length > 0,
+                hasContent: !!(result as Record<string, unknown>).content
+              });
+
+              resolve(result);
+            } catch (parseError) {
+              // Parse failed - reject instead of silent fallback
+              logger.error(`[${this.instanceId}] MCP parsing failed`, {
+                instanceId: this.instanceId,
+                parseError: parseError instanceof Error ? parseError.message : String(parseError),
+                outputPreview: output.substring(0, 200)
+              });
+              reject(new Error(`MCP command ${command} response parsing failed: ${parseError instanceof Error ? parseError.message : String(parseError)}`));
+            }
+          } else {
+            const error = `AI Studio MCP command failed with code ${code}: ${errorOutput}`;
+            logger.error(`[${this.instanceId}] MCP command failed`, { 
+              instanceId: this.instanceId,
+              command, 
+              code, 
+              error: errorOutput 
+            });
+            reject(new Error(error));
+          }
         }
       });
 
       child.on('error', (error) => {
-        clearTimeout(timeoutId); // エラー時も即座にクリア
-        logger.error('MCP command process error', { command, error: error.message });
-        reject(error);
+        if (!isCompleted) {
+          isCompleted = true;
+          clearTimeout(timeoutId);
+          logger.error('MCP command process error', { command, error: error.message });
+          reject(error);
+        }
       });
     });
   }
@@ -1745,11 +1978,14 @@ export class AIStudioLayer implements LayerInterface {
         throw new Error(`${errorMsg} Expected format: starts with "AI", minimum 20 characters. Get a new key from: https://aistudio.google.com/app/apikey`);
       }
 
-      // Check system dependencies
+      // Check system dependencies (cross-platform)
       const { execSync } = await import('child_process');
-      
+      const isWindows = process.platform === 'win32';
+
       try {
-        execSync('which npx', { 
+        // Use 'where' on Windows, 'which' on Unix
+        const checkCommand = isWindows ? 'where npx' : 'which npx';
+        execSync(checkCommand, {
           timeout: 5000,
           stdio: 'ignore'
         });
@@ -1821,17 +2057,30 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Normalize file path for cross-platform MCP communication
+   * Windows backslashes are converted to forward slashes for consistency
+   */
+  private normalizeInputPath(filePath: string): string {
+    if (!filePath) return filePath;
+    // Convert Windows backslashes to forward slashes for cross-platform compatibility
+    return filePath.replace(/\\/g, '/');
+  }
+
+  /**
    * Prepare files for processing
    */
   private async prepareFilesForProcessing(files: (FileReference | MultimodalFile)[]): Promise<any[]> {
     return files.map(file => {
+      // Normalize file path for cross-platform compatibility (Windows backslashes -> forward slashes)
+      const normalizedPath = this.normalizeInputPath(file.path);
+
       // Both types have path, so we can safely access it
       const fileData = {
-        path: file.path,
+        path: normalizedPath,
         type: file.type,
         size: file.size,
       };
-      
+
       // Check if this is a MultimodalFile (has content property)
       if ('content' in file && file.content !== undefined) {
         return {
@@ -2032,64 +2281,77 @@ export class AIStudioLayer implements LayerInterface {
     if (options.width && options.height) {
       const ratio = options.width / options.height;
       // Map to supported aspect ratios
-      if (Math.abs(ratio - 1) < 0.1) return '1:1';
-      if (Math.abs(ratio - 0.75) < 0.1) return '3:4';
-      if (Math.abs(ratio - 1.33) < 0.1) return '4:3';
-      if (Math.abs(ratio - 0.56) < 0.1) return '9:16';
-      if (Math.abs(ratio - 1.78) < 0.1) return '16:9';
+      if (Math.abs(ratio - 1) < 0.1) {return '1:1';}
+      if (Math.abs(ratio - 0.75) < 0.1) {return '3:4';}
+      if (Math.abs(ratio - 1.33) < 0.1) {return '4:3';}
+      if (Math.abs(ratio - 0.56) < 0.1) {return '9:16';}
+      if (Math.abs(ratio - 1.78) < 0.1) {return '16:9';}
     }
     return '1:1'; // Default square
   }
 
   /**
    * Save generated image from base64 data
+   * Returns normalized cross-platform path (forward slashes)
    */
   private async saveGeneratedImage(base64Data: string, format: string = 'png'): Promise<string> {
     const outputDir = join(process.cwd(), 'output', 'images');
     await mkdir(outputDir, { recursive: true });
-    
+
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `generated-image-${timestamp}.${format}`;
-    const outputPath = join(outputDir, filename);
-    
+    const absolutePath = join(outputDir, filename);
+
     const buffer = Buffer.from(base64Data, 'base64');
     await new Promise<void>((resolve, reject) => {
-      const stream = createWriteStream(outputPath);
+      const stream = createWriteStream(absolutePath);
       stream.write(buffer);
       stream.end();
       stream.on('finish', resolve);
       stream.on('error', reject);
     });
-    
-    logger.info('Saved generated image', { outputPath, size: buffer.length });
-    return outputPath;
+
+    // Verify file was written successfully
+    if (!fs.existsSync(absolutePath)) {
+      throw new Error(`Failed to save image: file not created at ${absolutePath}`);
+    }
+
+    // Return normalized path for cross-platform consistency
+    const normalizedPath = normalizeCrossPlatformPath(`output/images/${filename}`);
+    logger.info('Saved generated image', {
+      absolutePath,
+      normalizedPath,
+      size: buffer.length
+    });
+    return normalizedPath;
   }
 
   /**
    * Save generated audio from base64 data
+   * Returns normalized cross-platform path (forward slashes)
    */
   private async saveGeneratedAudio(base64Data: string, format: string = 'wav'): Promise<string> {
     const outputDir = join(process.cwd(), 'output', 'audio');
     await mkdir(outputDir, { recursive: true });
-    
+
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `generated-audio-${timestamp}.${format}`;
-    const outputPath = join(outputDir, filename);
-    
+    const absolutePath = join(outputDir, filename);
+
     // Create proper WAV file with headers if format is wav
     let finalBuffer: Buffer;
     if (format === 'wav') {
       const rawAudioBuffer = Buffer.from(base64Data, 'base64');
-      
+
       logger.debug('Processing audio data for saveGeneratedAudio', {
         rawDataSize: rawAudioBuffer.length,
         format
       });
-      
+
       try {
         // Create WAV file with proper headers using WaveFile library (google_docs.md specification)
         const wav = new WaveFile();
-        
+
         // Google AI Studio returns L16 PCM data (16-bit signed integers)
         // Convert Buffer to Int16Array for WaveFile.fromScratch()
         const pcmSamples = [];
@@ -2098,20 +2360,20 @@ export class AIStudioLayer implements LayerInterface {
           const sample = rawAudioBuffer.readInt16LE(i);
           pcmSamples.push(sample);
         }
-        
+
         // fromScratch expects: channels, sampleRate, bitDepth, PCM samples array
         wav.fromScratch(1, 24000, '16', pcmSamples);
         const wavData = wav.toBuffer();
         finalBuffer = Buffer.from(wavData);
-        
+
         // Validate WAV header
         const riffHeader = finalBuffer.toString('ascii', 0, 4);
         const waveHeader = finalBuffer.toString('ascii', 8, 12);
-        
+
         if (riffHeader !== 'RIFF' || waveHeader !== 'WAVE') {
           throw new Error(`Invalid WAV header: RIFF=${riffHeader}, WAVE=${waveHeader}`);
         }
-        
+
         logger.info('Generated WAV file with proper headers', {
           originalDataSize: rawAudioBuffer.length,
           finalWavSize: finalBuffer.length,
@@ -2119,15 +2381,15 @@ export class AIStudioLayer implements LayerInterface {
           bitDepth: 16,
           channels: 1
         });
-        
+
       } catch (wavError) {
         logger.error('WAV creation failed in saveGeneratedAudio, using manual header', {
           error: (wavError as Error).message
         });
-        
+
         // Fallback to manual WAV header creation
         finalBuffer = this.createManualWavHeader(rawAudioBuffer, 24000, 16, 1);
-        
+
         logger.warn('Used manual WAV header fallback in saveGeneratedAudio', {
           finalWavSize: finalBuffer.length
         });
@@ -2135,17 +2397,28 @@ export class AIStudioLayer implements LayerInterface {
     } else {
       finalBuffer = Buffer.from(base64Data, 'base64');
     }
-    
+
     await new Promise<void>((resolve, reject) => {
-      const stream = createWriteStream(outputPath);
+      const stream = createWriteStream(absolutePath);
       stream.write(finalBuffer);
       stream.end();
       stream.on('finish', resolve);
       stream.on('error', reject);
     });
-    
-    logger.info('Saved generated audio', { outputPath, size: finalBuffer.length });
-    return outputPath;
+
+    // Verify file was written successfully
+    if (!fs.existsSync(absolutePath)) {
+      throw new Error(`Failed to save audio: file not created at ${absolutePath}`);
+    }
+
+    // Return normalized path for cross-platform consistency
+    const normalizedPath = normalizeCrossPlatformPath(`output/audio/${filename}`);
+    logger.info('Saved generated audio', {
+      absolutePath,
+      normalizedPath,
+      size: finalBuffer.length
+    });
+    return normalizedPath;
   }
 
 

@@ -1,6 +1,6 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "Enterprise-grade AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing and advanced multimodal processing capabilities",
   "type": "module",
   "main": "dist/index.js",
@@ -9,8 +9,8 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "CGMB MCP Server v1.0.0 - Enterprise-grade 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
-    "version": "1.0.0",
+    "description": "CGMB MCP Server v1.1.0 - Enterprise-grade 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
+    "version": "1.1.0",
     "command": "cgmb",
     "args": [
       "serve"
@@ -30,7 +30,7 @@
     }
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js",
+    "build": "tsc",
     "dev": "tsx src/index.ts",
     "start": "cgmb serve",
     "serve": "cgmb serve",
@@ -117,7 +117,7 @@
     "eslint": "^8.54.0",
     "rimraf": "^5.0.0",
     "tsx": "^4.6.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.9.3"
   },
   "optionalDependencies": {
     "@google/gemini-cli": "*"

@@ -293,13 +293,11 @@ export class CapabilityDetector {
       // Check authentication status
       const authResult = await this.authVerifier.verifyAIStudioAuth();
       
-      // Check if aistudio-mcp-server is available
-      const mcpServerAvailable = await this.checkAIStudioMCPServer();
-      
+      // MCP server check removed - using built-in MCP server
       return {
-        available: authResult.success || mcpServerAvailable, // Available if either works
+        available: authResult.success,
         authenticated: authResult.success,
-        mcpServerAvailable,
+        mcpServerAvailable: true, // Built-in MCP server always available
       };
       
     } catch (error) {
@@ -307,30 +305,8 @@ export class CapabilityDetector {
       return {
         available: false,
         authenticated: false,
-        mcpServerAvailable: false,
+        mcpServerAvailable: true,
       };
-    }
-  }
-
-  /**
-   * Check if AI Studio MCP server is available
-   */
-  private async checkAIStudioMCPServer(): Promise<boolean> {
-    try {
-      // Try to run aistudio-mcp-server --version
-      execSync('npx -y aistudio-mcp-server --version', { 
-        stdio: 'ignore',
-        timeout: 10000 
-      });
-      return true;
-    } catch {
-      try {
-        // Alternative check
-        execSync('which aistudio-mcp-server', { stdio: 'ignore' });
-        return true;
-      } catch {
-        return false;
-      }
     }
   }
 
@@ -378,9 +354,7 @@ export class CapabilityDetector {
       recommendations.push('Authenticate Gemini: gemini auth or set GEMINI_API_KEY');
     }
     
-    if (services.aistudio === 'missing') {
-      recommendations.push('Install AI Studio MCP: npm install -g aistudio-mcp-server');
-    } else if (services.aistudio === 'available') {
+    if (services.aistudio === 'available') {
       recommendations.push('Set GEMINI_API_KEY for AI Studio access');
     }
     

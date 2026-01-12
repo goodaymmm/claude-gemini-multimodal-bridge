@@ -34,6 +34,8 @@ export class AuthStateManager {
           });
           
           // Return without timestamp
+          // Commented out unused variable for safety - extracted timestamp may be needed for debugging
+          // const { timestamp: _timestamp, ...status } = cached;
           const { timestamp: _timestamp, ...status } = cached;
           return status;
         }
@@ -44,8 +46,8 @@ export class AuthStateManager {
         const result = await this.authVerifier.verifyServiceAuth(service);
         const status = result.status;
         
-        // Update cache
-        this.setAuthStatus(service, status);
+        // Update cache - explicitly mark as ignored promise for fire-and-forget operation
+        void this.setAuthStatus(service, status);
         
         return status;
       },
@@ -328,7 +330,9 @@ export class AuthStateManager {
   private async cleanExpiredEntries(): Promise<void> {
     const expiredServices: string[] = [];
     
-    for (const [service, _status] of this.authCache.entries()) {
+    // Commented out unused variable for safety - status may be needed for future cache validation logic
+    // for (const [service, _status] of this.authCache.entries()) {
+    for (const [service] of this.authCache.entries()) {
       if (!this.isCacheValid(service)) {
         expiredServices.push(service);
       }

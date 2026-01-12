@@ -15,7 +15,7 @@ import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';
-// pdf-parse は extractPDFWithPdfParse() メソッド内で動的に読み込みます（フォールバック時のみ）
+// pdf-parse is dynamically imported within extractPDFWithPdfParse() method (fallback only)
 
 /**
  * DocumentAnalysis tool provides advanced document analysis capabilities
@@ -39,7 +39,7 @@ export class DocumentAnalysis {
     // Create default config for LayerManager
     const defaultConfig = {
       gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-      claude: { code_path: '/usr/local/bin/claude', timeout: 300000 },
+      claude: { code_path: 'claude', timeout: 300000 },
       aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
       cache: { enabled: true, ttl: 3600 },
       logging: { level: 'info' as const },
@@ -273,10 +273,10 @@ Please extract the complete text content while maintaining readability and struc
     try {
       logger.info('Extracting PDF with pdf-parse (fallback)', { pdfPath });
       
-      // pdf-parseを動的に読み込み（Gemini File APIフォールバック時のみ）
+      // Dynamically import pdf-parse (only during Gemini File API fallback)
       let pdfParse;
       try {
-        // ESモジュール環境でのCommonJS動的インポート（テストモード回避のため直接libを使用）
+        // CommonJS dynamic import in ES module environment (using lib directly to avoid test mode)
         pdfParse = (await import('pdf-parse/lib/pdf-parse.js' as any)).default;
       } catch (importError) {
         throw new Error(`PDF processing library not available: ${importError instanceof Error ? importError.message : String(importError)}`);
@@ -289,7 +289,7 @@ Please extract the complete text content while maintaining readability and struc
         version: 'v1.10.100', // Use specific version for compatibility
         pagerender: (pageData: any) => {
           // Enhanced page rendering for Japanese text and better structure
-          let renderOptions = {
+          const renderOptions = {
             normalizeWhitespace: false,
             disableCombineTextItems: false,
             includeMarkedContent: true, // Include tagged content for better structure
@@ -300,7 +300,7 @@ Please extract the complete text content while maintaining readability and struc
               let lastY, text = '';
               let lineSpacing = 0;
               
-              for (let item of textContent.items) {
+              for (const item of textContent.items) {
                 // Improved line break detection for Japanese text
                 if (lastY && Math.abs(lastY - item.transform[5]) > lineSpacing) {
                   // Add line break for significant Y position changes

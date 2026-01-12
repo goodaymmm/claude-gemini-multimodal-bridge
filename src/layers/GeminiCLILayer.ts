@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { join } from 'path';
 import { FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
@@ -34,7 +35,7 @@ export class GeminiCLILayer implements LayerInterface {
 
   // Optimized settings for enterprise reliability
   private readonly DEFAULT_TIMEOUT = 60000; // 60 seconds (extended for quota/network issues)
-  private readonly DEFAULT_MODEL = 'gemini-2.5-pro';
+  private readonly DEFAULT_MODEL = 'gemini-2.5-flash'; // Explicit model for reliable API calls
 
   constructor() {
     this.authVerifier = new AuthVerifier();
@@ -313,23 +314,55 @@ export class GeminiCLILayer implements LayerInterface {
       }
     }
     
-    const args = ['-p', prompt];
-    
-    if (options.model && options.model !== this.DEFAULT_MODEL) {
-      args.push('-m', options.model);
-    }
+    const isWindows = process.platform === 'win32';
 
     return new Promise<string>((resolve, reject) => {
-      logger.debug('Executing Gemini CLI', {
-        command: this.geminiPath,
-        args,
-        promptLength: prompt.length
-      });
+      let child;
 
-      const child = spawn(this.geminiPath, args, { 
-        stdio: ['ignore', 'pipe', 'pipe'] 
-      });
-      
+      // Build args: Use positional prompt (Gemini CLI v0.22.5+ recommended approach)
+      // Note: -y is YOLO mode (auto-approval) - REQUIRED for non-interactive execution
+      // Note: -p is deprecated, use positional argument instead
+      const args: string[] = ['-y'];  // YOLO mode for non-interactive execution
+
+      // Only add model flag if explicitly specified and not 'auto'
+      if (options.model && options.model !== 'auto') {
+        args.push('-m', options.model);
+      }
+
+      // Add prompt as positional argument at the end (required format for Gemini CLI v0.22.5+)
+      // Note: With shell: true, Node.js handles quoting automatically
+      // Manual quoting causes double-quoting issues on Windows
+      args.push(prompt);
+
+      if (isWindows) {
+        // Windows: Use shell: true to let Node.js handle .cmd file execution
+        // This avoids double-quoting issues with cmd.exe /c pattern
+        logger.debug('Executing Gemini CLI (Windows)', {
+          command: this.geminiPath,
+          argsCount: args.length,
+          promptLength: prompt.length
+        });
+
+        child = spawn(this.geminiPath, args, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          shell: true,
+          windowsHide: true
+        });
+      } else {
+        // Unix: Use array-based spawn without shell
+        logger.debug('Executing Gemini CLI (Unix)', {
+          command: this.geminiPath,
+          args,
+          promptLength: prompt.length
+        });
+
+        child = spawn(this.geminiPath, args, {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+      }
+
+      // Note: stdin is set to 'ignore', so no need to call stdin.end()
+
       let stdout = '';
       let stderr = '';
       
@@ -379,23 +412,32 @@ export class GeminiCLILayer implements LayerInterface {
         reject(new Error(`Gemini CLI spawn error: ${err.message}`));
       });
       
-      // Set timeout with graceful termination
+      // Set timeout with graceful termination (cross-platform)
       const timeout = setTimeout(() => {
         logger.warn('Gemini CLI timeout reached, terminating process', {
           timeoutMs: this.DEFAULT_TIMEOUT,
-          promptLength: prompt.length
+          promptLength: prompt.length,
+          platform: process.platform
         });
-        
-        // Try graceful termination first
-        child.kill('SIGTERM');
-        
+
+        // Try graceful termination first (cross-platform)
+        if (isWindows) {
+          child.kill(); // Windows: kill() without signal
+        } else {
+          child.kill('SIGTERM'); // Unix: SIGTERM for graceful termination
+        }
+
         // Force kill after 2 seconds if still running
         setTimeout(() => {
           if (!child.killed) {
-            child.kill('SIGKILL');
+            if (isWindows) {
+              child.kill(); // Windows: kill() is the only option
+            } else {
+              child.kill('SIGKILL'); // Unix: SIGKILL for force termination
+            }
           }
         }, 2000);
-        
+
         reject(new Error(`Gemini CLI timeout after ${this.DEFAULT_TIMEOUT / 1000}s. This may be due to quota limits or network issues.`));
       }, this.DEFAULT_TIMEOUT);
       
@@ -411,26 +453,76 @@ export class GeminiCLILayer implements LayerInterface {
   }
 
   /**
-   * Find Gemini CLI executable path
+   * Find Gemini CLI executable path (cross-platform)
+   * Enhanced for Windows PATH resolution (GitHub Issue #2170)
    */
   private async findGeminiPath(): Promise<string | undefined> {
-    const possiblePaths = [
+    const { execSync } = await import('child_process');
+    const isWindows = process.platform === 'win32';
+
+    // 1. Check environment variable first (highest priority)
+    if (process.env.GEMINI_CLI_PATH) {
+      try {
+        execSync(`"${process.env.GEMINI_CLI_PATH}" --version`, { stdio: 'ignore', timeout: 5000 });
+        logger.debug('Found Gemini CLI from GEMINI_CLI_PATH', { path: process.env.GEMINI_CLI_PATH });
+        return process.env.GEMINI_CLI_PATH;
+      } catch {
+        logger.debug('GEMINI_CLI_PATH set but command failed', { path: process.env.GEMINI_CLI_PATH });
+      }
+    }
+
+    // 2. Windows: Use 'where' command to find full path (most reliable)
+    if (isWindows) {
+      try {
+        const result = execSync('where gemini 2>nul', { encoding: 'utf8', timeout: 5000 });
+        const firstPath = result.split('\n')[0]?.trim();
+        if (firstPath) {
+          logger.debug('Found Gemini CLI via where command', { path: firstPath });
+          return firstPath;
+        }
+      } catch {
+        logger.debug('where gemini command failed, trying fallback paths');
+      }
+    }
+
+    // 3. Platform-specific paths
+    const possiblePaths = isWindows ? [
+      'gemini',
+      'gemini.cmd',
+      join(process.env.APPDATA || '', 'npm', 'gemini.cmd'),
+      join(process.env.LOCALAPPDATA || '', 'npm', 'gemini.cmd'),
+      join(process.env.USERPROFILE || '', 'AppData', 'Roaming', 'npm', 'gemini.cmd'),
+      // nvm-windows support
+      ...(process.env.NVM_HOME ? [
+        join(process.env.NVM_HOME, process.version, 'gemini.cmd'),
+        join(process.env.NVM_HOME, process.version.replace('v', ''), 'gemini.cmd'),
+      ] : []),
+      // Node.js default installation paths
+      join(process.env.ProgramFiles || '', 'nodejs', 'gemini.cmd'),
+      join(process.env['ProgramFiles(x86)'] || '', 'nodejs', 'gemini.cmd'),
+    ] : [
       'gemini',
       '/usr/local/bin/gemini',
       '/opt/homebrew/bin/gemini',
+      join(process.env.HOME || '', '.nvm', 'versions', 'node', process.version, 'bin', 'gemini'),
     ];
 
-    for (const path of possiblePaths) {
+    for (const geminiPath of possiblePaths) {
       try {
-        const { execSync } = await import('child_process');
-        execSync(`${path} --version`, { stdio: 'ignore', timeout: 5000 });
-        logger.debug('Found Gemini CLI at', { path });
-        return path;
+        // Use quotes for Windows paths with spaces
+        const cmd = isWindows ? `"${geminiPath}" --version` : `${geminiPath} --version`;
+        execSync(cmd, { stdio: 'ignore', timeout: 5000 });
+        logger.debug('Found Gemini CLI at', { path: geminiPath });
+        return geminiPath;
       } catch {
         continue;
       }
     }
 
+    logger.warn('Gemini CLI not found in any known location', {
+      platform: process.platform,
+      checkedPaths: possiblePaths
+    });
     return undefined;
   }
 

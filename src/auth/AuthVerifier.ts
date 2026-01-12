@@ -1,3 +1,4 @@
+import { commandExists } from '../utils/platformUtils.js';
 import { execSync } from 'child_process';
 import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
@@ -137,7 +138,7 @@ export class AuthVerifier {
           
           // Add failure info to error message
           const failureInfo = this.authCache.getFailureInfo('gemini');
-          if (failureInfo && failureInfo.nextRetryTime) {
+          if (failureInfo?.nextRetryTime) {
             result.error += ` (Failure #${failureInfo.count}, retry after ${failureInfo.nextRetryTime.toLocaleTimeString()})`;
           }
           
@@ -189,7 +190,7 @@ export class AuthVerifier {
         const fallback1 = process.env.GOOGLE_AI_STUDIO_API_KEY;
         const fallback2 = process.env.GEMINI_API_KEY; // Deprecated
         
-        const apiKey = preferredKey || fallback1 || fallback2;
+        const apiKey = preferredKey ?? fallback1 ?? fallback2;
         
         // Enhanced logging for debugging authentication chain
         logger.debug('AI Studio authentication verification', {
@@ -244,7 +245,7 @@ export class AuthVerifier {
           
           // Add failure info to error message
           const failureInfo = this.authCache.getFailureInfo('aistudio');
-          if (failureInfo && failureInfo.nextRetryTime) {
+          if (failureInfo?.nextRetryTime) {
             result.error += ` (Failure #${failureInfo.count}, retry after ${failureInfo.nextRetryTime.toLocaleTimeString()})`;
           }
           
@@ -274,36 +275,10 @@ export class AuthVerifier {
           };
         }
 
-        // Check if aistudio-mcp-server is available with enhanced error reporting
-        const hasAIStudioMCP = await this.checkAIStudioMCPAvailable();
-        
-        if (!hasAIStudioMCP) {
-          logger.warn('AI Studio MCP server not available, but API key is valid', {
-            apiKeyStatus: 'valid',
-            mcpServerStatus: 'not available',
-            solution: 'Install aistudio-mcp-server package',
-            installCommand: 'npm install -g aistudio-mcp-server'
-          });
-          
-          return {
-            success: false,
-            status: {
-              isAuthenticated: true, // API key is valid
-              method: 'api_key',
-              userInfo: {
-                planType: 'free',
-              },
-            },
-            error: 'AI Studio MCP server not available (but API key is valid)',
-            requiresAction: true,
-            actionInstructions: 'Install AI Studio MCP: npm install -g aistudio-mcp-server',
-          };
-        }
-
+        // MCP server check removed - using built-in MCP server (src/mcp-servers/ai-studio-mcp-server.ts)
         logger.info('AI Studio authentication verification successful', {
           method: 'api_key',
           keySource: preferredKey ? 'AI_STUDIO_API_KEY' : fallback1 ? 'GOOGLE_AI_STUDIO_API_KEY' : 'GEMINI_API_KEY',
-          mcpServerAvailable: true,
           status: 'ready'
         });
 
@@ -523,41 +498,19 @@ export class AuthVerifier {
   }
 
   /**
-   * Check if AI Studio MCP server is available
-   */
-  private async checkAIStudioMCPAvailable(): Promise<boolean> {
-    try {
-      // Try to find aistudio-mcp-server
-      execSync('npx -y aistudio-mcp-server --version', { 
-        stdio: 'ignore',
-        timeout: 5000 
-      });
-      return true;
-    } catch {
-      try {
-        // Alternative check
-        execSync('which aistudio-mcp-server', { stdio: 'ignore' });
-        return true;
-      } catch {
-        return false;
-      }
-    }
-  }
-
-  /**
    * Check if Claude Code is installed
    */
   private async checkClaudeCodeInstalled(): Promise<boolean> {
+    // Cross-platform check using platformUtils
+    if (commandExists('claude')) {
+      return true;
+    }
+    // Fallback: try running claude --version
     try {
-      execSync('which claude', { stdio: 'ignore' });
+      execSync('claude --version', { stdio: 'ignore', timeout: 5000 });
       return true;
     } catch {
-      try {
-        execSync('claude --version', { stdio: 'ignore' });
-        return true;
-      } catch {
-        return false;
-      }
+      return false;
     }
   }
 
@@ -640,7 +593,7 @@ export class AuthVerifier {
       
       if (result.success) {
         const method = result.status.method;
-        const user = result.status.userInfo?.email || 'authenticated user';
+        const user = result.status.userInfo?.email ?? 'authenticated user';
         return `✅ ${service}: Authenticated via ${method} (${user})`;
       } else {
         return `❌ ${service}: ${result.error}`;

@@ -20,12 +20,20 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
 import { AI_MODELS } from '../core/types.js';
+import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
-// pdf-parse は extractPDFText() メソッド内で動的に読み込みます
+// pdf-parse is dynamically imported within the extractPDFText() method
+
+// Read version from package.json
+const require = createRequire(import.meta.url);
+const packageJson = require('../../package.json') as { version: string };
+const VERSION = packageJson.version;
 
 
 // Input validation schemas
@@ -113,10 +121,8 @@ class AIStudioMCPServer {
     this.server = new Server(
       {
         name: 'ai-studio-mcp-server',
-        version: '1.1.0',
-        description: 'Professional AI content generation server for Google AI Studio. Provides safe, policy-compliant image generation, audio synthesis, and document processing capabilities.',
-        author: 'CGMB Development Team',
-        license: 'MIT',
+        version: VERSION,
+        // Note: author and license info in package.json
       },
       {
         capabilities: {
@@ -444,7 +450,7 @@ class AIStudioMCPServer {
     try {
       // Sanitize the prompt to replace problematic words  
       // Translation is now handled by GeminiCLI in AIStudioLayer
-      let sanitizedPrompt = sanitizePrompt(params.prompt);
+      const sanitizedPrompt = sanitizePrompt(params.prompt);
       // Log sanitization for debugging if needed
       if (params.prompt !== sanitizedPrompt) {
         console.error(`[AI Studio MCP] Prompt sanitized: "${params.prompt}" → "${sanitizedPrompt}"`);
@@ -508,20 +514,28 @@ class AIStudioMCPServer {
       }
 
       // Save the generated image if we have data
-      let savedFilePath = null;
+      let savedFilePath: string | null = null;
+      let savedAbsolutePath: string | null = null;
       let fileSize = 0;
       if (imageData) {
         const outputDir = path.join(process.cwd(), 'output', 'images');
         await fsPromises.mkdir(outputDir, { recursive: true });
-        
+
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const filename = `generated-image-${timestamp}.png`;
-        savedFilePath = path.join('output', 'images', filename);
-        const absolutePath = path.join(outputDir, filename);
-        
+        savedAbsolutePath = path.join(outputDir, filename);
+
         const buffer = Buffer.from(imageData, 'base64');
-        await fsPromises.writeFile(absolutePath, buffer);
+        await fsPromises.writeFile(savedAbsolutePath, buffer);
+
+        // Verify file was written
+        if (!fs.existsSync(savedAbsolutePath)) {
+          throw new Error(`Failed to write image file: ${savedAbsolutePath}`);
+        }
+
         fileSize = buffer.length;
+        // Use normalized cross-platform path (forward slashes)
+        savedFilePath = normalizeCrossPlatformPath(`output/images/${filename}`);
       }
 
       return {
@@ -546,7 +560,7 @@ To retrieve this file, use:
         downloadUrl: null,
         file: savedFilePath ? {
           path: savedFilePath,
-          absolutePath: path.resolve(savedFilePath),
+          absolutePath: savedAbsolutePath,
           size: fileSize,
           format: 'png',
           createdAt: new Date().toISOString()
@@ -649,39 +663,76 @@ To retrieve this file, use:
     const params = MultimodalProcessSchema.parse(args);
     
     try {
+      console.error(`Processing multimodal request with ${params.files.length} files`);
       const parts: any[] = [{ text: params.instructions }];
 
       // Process each file
       for (const file of params.files) {
-        if (!fs.existsSync(file.path)) {
-          console.warn(`File not found: ${file.path}`);
-          continue;
-        }
-
-        const fileData = fs.readFileSync(file.path);
-        const mimeType = this.getMimeType(file.path);
-
-        if (mimeType.startsWith('image/')) {
-          parts.push({
-            inlineData: {
-              data: fileData.toString('base64'),
-              mimeType
-            }
-          });
-        } else if (mimeType === 'application/pdf') {
-          // Extract text from PDF instead of treating as binary
-          const extractedText = await this.extractPDFText(file.path);
-          parts.push({
-            text: `File: ${file.path}\n${extractedText}`
-          });
+        console.error(`Processing file: ${file.path}`);
+        
+        // Check if the path is a URL
+        const isUrl = file.path.startsWith('http://') || file.path.startsWith('https://');
+        
+        if (isUrl) {
+          console.error(`Detected URL: ${file.path}`);
+          const mimeType = this.getMimeTypeFromUrl(file.path);
+          console.error(`URL detected as MIME type: ${mimeType}`);
+          
+          if (mimeType === 'application/pdf') {
+            // Use File API to upload PDF URL for native processing
+            console.error(`Uploading PDF URL to Gemini File API: ${file.path}`);
+            const uploadedFile = await this.uploadPDFUrlWithFileAPI(file.path);
+            parts.push({
+              fileData: {
+                fileUri: uploadedFile.uri,
+                mimeType: 'application/pdf'
+              }
+            });
+          } else {
+            console.warn(`Unsupported URL type: ${mimeType} for ${file.path}`);
+            // For now, add as text reference
+            parts.push({
+              text: `URL: ${file.path} (Type: ${mimeType})`
+            });
+          }
         } else {
-          // For other text files, add as text content
-          parts.push({
-            text: `File: ${file.path}\nContent: ${fileData.toString('utf-8')}`
-          });
+          // Handle local files (existing logic)
+          if (!fs.existsSync(file.path)) {
+            console.warn(`File not found: ${file.path}`);
+            continue;
+          }
+
+          const fileData = fs.readFileSync(file.path);
+          const mimeType = this.getMimeType(file.path);
+          console.error(`File detected as MIME type: ${mimeType}`);
+
+          if (mimeType.startsWith('image/')) {
+            parts.push({
+              inlineData: {
+                data: fileData.toString('base64'),
+                mimeType
+              }
+            });
+          } else if (mimeType === 'application/pdf') {
+            // Use File API to upload PDF for native processing
+            console.error(`Uploading PDF to Gemini File API: ${file.path}`);
+            const uploadedFile = await this.uploadPDFWithFileAPI(file.path);
+            parts.push({
+              fileData: {
+                fileUri: uploadedFile.uri,
+                mimeType: 'application/pdf'
+              }
+            });
+          } else {
+            // For other text files, add as text content
+            parts.push({
+              text: `File: ${file.path}\nContent: ${fileData.toString('utf-8')}`
+            });
+          }
         }
       }
 
+      console.error(`Sending request to Gemini with ${parts.length} parts (instructions + ${parts.length - 1} files)`);
       const response = await this.genAI.models.generateContent({
         model: params.model || 'gemini-2.5-flash',
         contents: parts,
@@ -690,6 +741,7 @@ To retrieve this file, use:
         },
       });
 
+      console.error(`Received response from Gemini, response length: ${response.candidates?.[0]?.content?.parts?.[0]?.text?.length || 0} characters`);
       return {
         content: [
           {
@@ -713,7 +765,7 @@ To retrieve this file, use:
   }
 
   private async analyzeDocuments(args: any) {
-    // Simple document analysis implementation
+    // Enhanced document analysis implementation with File API support
     const { documents, instructions, options = {} } = args;
     
     try {
@@ -726,15 +778,32 @@ To retrieve this file, use:
           continue;
         }
 
-        const docData = fs.readFileSync(docPath, 'utf-8');
-        parts.push({
-          text: `Document: ${docPath}\nContent: ${docData}`
-        });
+        const mimeType = this.getMimeType(docPath);
+        console.error(`Document detected as MIME type: ${mimeType}`);
+
+        if (mimeType === 'application/pdf') {
+          // Use File API to upload PDF for native processing with OCR support
+          console.error(`Uploading PDF to Gemini File API for OCR processing: ${docPath}`);
+          const uploadedFile = await this.uploadPDFWithFileAPI(docPath);
+          parts.push({
+            fileData: {
+              fileUri: uploadedFile.uri,
+              mimeType: 'application/pdf'
+            }
+          });
+        } else {
+          // For text files, read as UTF-8
+          const docData = fs.readFileSync(docPath, 'utf-8');
+          parts.push({
+            text: `Document: ${docPath}\nContent: ${docData}`
+          });
+        }
       }
 
+      console.error(`Sending document analysis request to Gemini with ${parts.length} parts`);
       const response = await this.genAI.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: parts.map(part => part.text).join('\n'),
+        model: options.model || 'gemini-2.5-flash',
+        contents: parts,
         config: {
           responseModalities: [Modality.TEXT],
         },
@@ -780,16 +849,45 @@ To retrieve this file, use:
   }
 
   /**
-   * Extract text from PDF using pdf-parse (動的読み込み)
+   * Get MIME type from URL by examining the file extension
+   */
+  private getMimeTypeFromUrl(url: string): string {
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+      const ext = path.extname(pathname).toLowerCase();
+      
+      const mimeTypes: { [key: string]: string } = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.pdf': 'application/pdf',
+        '.txt': 'text/plain',
+        '.md': 'text/markdown',
+        '.json': 'application/json'
+      };
+      
+      return mimeTypes[ext] || 'application/octet-stream';
+    } catch (error) {
+      console.warn(`Failed to parse URL: ${url}`, error);
+      return 'application/octet-stream';
+    }
+  }
+
+  /**
+   * Extract text from PDF using pdf-parse (dynamic import)
    */
   private async extractPDFText(filePath: string): Promise<string> {
     try {
-      console.log(`[MCP Server] Extracting text from PDF: ${filePath}`);
+      console.error(`[MCP Server] Extracting text from PDF: ${filePath}`);
       
-      // pdf-parseを動的に読み込み（PDFファイル処理時のみ）
+      // Dynamically import pdf-parse (only during PDF file processing)
       let pdfParse;
       try {
-        // ESモジュール環境でのCommonJS動的インポート（テストモード回避のため直接libを使用）
+        // CommonJS dynamic import in ES module environment (using lib directly to avoid test mode)
         pdfParse = (await import('pdf-parse/lib/pdf-parse.js' as any)).default;
       } catch (importError) {
         throw new Error(`PDF processing library not available: ${importError instanceof Error ? importError.message : String(importError)}`);
@@ -803,7 +901,7 @@ To retrieve this file, use:
 
       const extractedText = data.text.trim();
       
-      console.log(`[MCP Server] PDF extraction completed`, {
+      console.error(`[MCP Server] PDF extraction completed`, {
         filePath,
         textLength: extractedText.length,
         pageCount: data.numpages,
@@ -984,7 +1082,7 @@ To retrieve this file, use:
       
       // Determine file type and additional metadata
       let fileType = 'document';
-      let metadata: any = {};
+      const metadata: any = {};
       
       if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(fileExtension)) {
         fileType = 'image';
@@ -1054,15 +1152,14 @@ To retrieve this file, use:
       // Save the generated audio
       const outputDir = path.join(process.cwd(), 'output', 'audio');
       await fsPromises.mkdir(outputDir, { recursive: true });
-      
+
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = `generated-audio-${timestamp}.wav`;
-      const savedFilePath = path.join('output', 'audio', filename);
       const absolutePath = path.join(outputDir, filename);
-      
+
       // Create proper WAV file with headers using WaveFile library
       const rawAudioBuffer = Buffer.from(audioData, 'base64');
-      
+
       // Google AI Studio returns L16 PCM data (16-bit signed integers)
       // Convert Buffer to Int16Array for WaveFile.fromScratch()
       const pcmSamples = [];
@@ -1071,17 +1168,25 @@ To retrieve this file, use:
         const sample = rawAudioBuffer.readInt16LE(i);
         pcmSamples.push(sample);
       }
-      
+
       // Create WAV file with proper headers per google_docs.md specification
       const wav = new WaveFile();
       wav.fromScratch(1, 24000, '16', pcmSamples);
-      
+
       // Get complete WAV file buffer with headers
       const wavBuffer = wav.toBuffer();
-      
+
       // Write to disk
       await fsPromises.writeFile(absolutePath, wavBuffer);
+
+      // Verify file was written
+      if (!fs.existsSync(absolutePath)) {
+        throw new Error(`Failed to write audio file: ${absolutePath}`);
+      }
+
       const fileSize = wavBuffer.length;
+      // Use normalized cross-platform path (forward slashes)
+      const savedFilePath = normalizeCrossPlatformPath(`output/audio/${filename}`);
 
       return {
         content: [
@@ -1102,7 +1207,7 @@ To retrieve this file, use:
         audioData,
         file: {
           path: savedFilePath,
-          absolutePath: path.resolve(savedFilePath),
+          absolutePath: absolutePath,
           size: fileSize,
           format: 'wav',
           createdAt: new Date().toISOString()
@@ -1124,6 +1229,120 @@ To retrieve this file, use:
     }
   }
 
+  /**
+   * Upload PDF using Gemini File API for native processing
+   * Supports OCR and complex PDF layouts
+   */
+  private async uploadPDFWithFileAPI(pdfPath: string): Promise<any> {
+    try {
+      console.error(`Starting PDF upload via File API: ${pdfPath}`);
+      
+      // Check file size (50MB limit)
+      const stats = fs.statSync(pdfPath);
+      const fileSizeMB = stats.size / (1024 * 1024);
+      if (fileSizeMB > 50) {
+        throw new Error(`PDF file too large: ${fileSizeMB.toFixed(1)}MB (max 50MB)`);
+      }
+      
+      // Read file as binary data
+      const fileData = fs.readFileSync(pdfPath);
+      
+      // Upload the file using GoogleGenAI files API
+      const uploadResult = await this.genAI.files.upload({
+        file: pdfPath,
+        config: {
+          mimeType: 'application/pdf',
+          displayName: path.basename(pdfPath)
+        }
+      });
+      
+      console.error(`PDF uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
+      
+      // Wait for processing to complete
+      let file = uploadResult;
+      let waitTime = 0;
+      const maxWaitTime = 120000; // 2 minutes max wait
+      
+      while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
+        console.error(`Waiting for PDF processing... (${waitTime / 1000}s)`);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        waitTime += 2000;
+        
+        file = await this.genAI.files.get({ name: file.name! });
+        console.error(`PDF processing state: ${file.state}`);
+      }
+      
+      if (file.state !== 'ACTIVE') {
+        throw new Error(`PDF processing failed or timed out. Final state: ${file.state}`);
+      }
+      
+      console.error(`PDF ready for processing: ${file.name} (${fileSizeMB.toFixed(1)}MB)`);
+      
+      return {
+        uri: file.uri,
+        name: file.name,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes
+      };
+      
+    } catch (error) {
+      console.error(`Failed to upload PDF via File API: ${pdfPath}`, error);
+      throw new Error(`PDF upload failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Upload PDF URL using Gemini File API for native processing
+   * Supports OCR and complex PDF layouts via URL
+   */
+  private async uploadPDFUrlWithFileAPI(pdfUrl: string): Promise<any> {
+    try {
+      console.error(`Starting PDF URL upload via File API: ${pdfUrl}`);
+      
+      // Upload the URL directly using GoogleGenAI files API
+      const uploadResult = await this.genAI.files.upload({
+        file: pdfUrl,  // Pass URL as file parameter
+        config: {
+          mimeType: 'application/pdf',
+          displayName: path.basename(new URL(pdfUrl).pathname) || 'url-document.pdf'
+        }
+      });
+      
+      console.error(`PDF URL uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
+      
+      // Wait for processing to complete
+      let file = uploadResult;
+      let waitTime = 0;
+      const maxWaitTime = 120000; // 2 minutes max wait
+      
+      while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
+        console.error(`Waiting for PDF URL processing... (${waitTime / 1000}s)`);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        waitTime += 2000;
+        
+        file = await this.genAI.files.get({ name: file.name! });
+        console.error(`PDF URL processing state: ${file.state}`);
+      }
+      
+      if (file.state !== 'ACTIVE') {
+        throw new Error(`PDF URL processing failed or timed out. Final state: ${file.state}`);
+      }
+      
+      console.error(`PDF URL ready for processing: ${file.name} (from ${pdfUrl})`);
+      
+      return {
+        uri: file.uri,
+        name: file.name,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes
+      };
+      
+    } catch (error) {
+      console.error(`Failed to upload PDF URL via File API: ${pdfUrl}`, error);
+      throw new Error(`PDF URL upload failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
@@ -1131,8 +1350,26 @@ To retrieve this file, use:
   }
 }
 
-// CLI execution
-if (import.meta.url === `file://${process.argv[1]}`) {
+// CLI execution - Windows compatible path comparison
+// On Windows: import.meta.url = 'file:///M:/path/...' but process.argv[1] = 'M:\path\...'
+function isMainModule(): boolean {
+  try {
+    const currentFile = fileURLToPath(import.meta.url);
+    const executedFile = process.argv[1];
+    if (!executedFile) {
+      return true; // Fallback: assume main module
+    }
+    // Normalize both paths for cross-platform comparison
+    const normalizedCurrent = currentFile.replace(/\\/g, '/').toLowerCase();
+    const normalizedExecuted = executedFile.replace(/\\/g, '/').toLowerCase();
+    return normalizedCurrent === normalizedExecuted;
+  } catch {
+    // Fallback: assume main module if we can't determine
+    return true;
+  }
+}
+
+if (isMainModule()) {
   const server = new AIStudioMCPServer();
   server.run().catch((error) => {
     console.error('Server error:', error);

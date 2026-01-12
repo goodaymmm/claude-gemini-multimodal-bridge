@@ -1,4 +1,5 @@
 import { execSync, spawn } from 'child_process';
+import { join } from 'path';
 import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
 
 // Task interface for better type safety
@@ -16,6 +17,7 @@ interface ClaudeCodeTask {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
+import { isPlatformWindows } from '../utils/platformUtils.js';
 
 /**
  * ClaudeCodeLayer handles direct Claude Code execution with enhanced authentication support
@@ -393,13 +395,14 @@ export class ClaudeCodeLayer implements LayerInterface {
         stdio: 'pipe',
         cwd: process.cwd(),
         env: process.env,
+        shell: isPlatformWindows()
       });
 
       let output = '';
       let errorOutput = '';
 
       const timeoutId = setTimeout(() => {
-        child.kill('SIGKILL');
+        isPlatformWindows() ? child.kill() : child.kill('SIGKILL');
         reject(new Error(`Claude Code execution timeout after ${timeout}ms`));
       }, timeout);
 
@@ -439,10 +442,19 @@ export class ClaudeCodeLayer implements LayerInterface {
    * Find Claude Code executable path
    */
   private async findClaudeCodePath(): Promise<string | undefined> {
+    // Platform-specific path candidates
+    const isWindows = process.platform === 'win32';
+    const appDataPath = process.env.APPDATA || '';
+
     const possiblePaths = [
       'claude',
       'claude-original',
-      '/usr/local/bin/claude',
+      // Windows paths (npm global install location)
+      ...(isWindows && appDataPath ? [
+        join(appDataPath, 'npm', 'claude.cmd'),
+        join(appDataPath, 'npm', 'claude'),
+      ] : []),
+      // Unix paths
       '/usr/local/bin/claude-original',
       '/opt/homebrew/bin/claude',
       '/opt/homebrew/bin/claude-original',
@@ -460,7 +472,8 @@ export class ClaudeCodeLayer implements LayerInterface {
 
     // Try system PATH
     try {
-      const output = execSync('which claude 2>/dev/null || where claude 2>nul', {
+      const cmd = isWindows ? 'where claude' : 'which claude 2>/dev/null';
+      const output = execSync(cmd, {
         encoding: 'utf8',
         stdio: 'pipe',
         timeout: 5000,
