@@ -1,47 +1,920 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>CGMB — Claude-Gemini Multimodal Bridge</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="CGMB v1.1.0 - Enterprise-grade AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing" />
+  <meta name="theme-color" content="#0f0f23" />
+  <title>CGMB - Claude-Gemini Multimodal Bridge</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;max-width:920px;margin:40px auto;padding:0 16px;line-height:1.6}
-    .tag{display:inline-block;padding:6px 10px;border:1px solid #ddd;border-radius:999px;margin-bottom:14px}
-    h1{line-height:1.2;margin:10px 0 6px}
-    .grid{display:grid;grid-template-columns:1fr;gap:14px}
-    img{max-width:100%;border:1px solid #eee;border-radius:14px}
-    code{background:#f6f8fa;padding:2px 6px;border-radius:6px}
-    .btn{display:inline-block;padding:10px 14px;border-radius:10px;border:1px solid #ddd;text-decoration:none;color:#111}
-    .row{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 26px}
-    .muted{color:#555}
+    :root {
+      --bg-primary: #0f0f23;
+      --bg-secondary: #1a1a2e;
+      --bg-card: #16213e;
+      --text-primary: #e2e8f0;
+      --text-muted: #94a3b8;
+      --accent-purple: #a855f7;
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --accent-green: #22c55e;
+      --accent-orange: #f97316;
+      --border-color: #334155;
+      --gradient-1: #667eea;
+      --gradient-2: #764ba2;
+      --gradient-3: #6366f1;
+      --gradient-4: #8b5cf6;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Hero Section */
+    .hero {
+      position: relative;
+      padding: 80px 0 60px;
+      text-align: center;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(-45deg, var(--gradient-1), var(--gradient-2), var(--gradient-3), var(--gradient-4));
+      background-size: 400% 400%;
+      animation: gradientShift 15s ease infinite;
+      opacity: 0.15;
+      z-index: 0;
+    }
+
+    @keyframes gradientShift {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-logo {
+      width: 128px;
+      height: auto;
+      margin-bottom: 16px;
+    }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4rem);
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue), var(--accent-cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+      letter-spacing: -0.02em;
+    }
+
+    .hero-tagline {
+      font-size: 1.1rem;
+      font-style: italic;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+
+    .hero-subtitle {
+      font-size: clamp(1rem, 2.5vw, 1.25rem);
+      color: var(--text-muted);
+      max-width: 700px;
+      margin: 0 auto 24px;
+    }
+
+    .badges-row {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .badges-row img {
+      height: 22px;
+    }
+
+    .cta-row {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 24px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 28px;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+      color: white;
+      border: none;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(139, 92, 246, 0.3);
+    }
+
+    .btn-secondary {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg-card);
+      border-color: var(--accent-purple);
+    }
+
+    .btn-sponsor {
+      background: linear-gradient(135deg, #ea4aaa, #f97316);
+      color: white;
+      border: none;
+    }
+
+    .btn-sponsor:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(234, 74, 170, 0.3);
+    }
+
+    /* Sections */
+    section {
+      padding: 60px 0;
+    }
+
+    .section-title {
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      font-weight: 700;
+      margin-bottom: 32px;
+      color: var(--text-primary);
+      text-align: center;
+    }
+
+    /* Why CGMB */
+    .why-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+    }
+
+    .why-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 28px;
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+
+    .why-card:hover {
+      transform: translateY(-4px);
+      border-color: var(--accent-purple);
+      box-shadow: 0 12px 40px rgba(139, 92, 246, 0.15);
+    }
+
+    .why-card .icon {
+      font-size: 2.5rem;
+      margin-bottom: 16px;
+    }
+
+    .why-card h3 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--text-primary);
+    }
+
+    .why-card p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    /* What's New */
+    .whats-new-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .new-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      transition: all 0.2s ease;
+    }
+
+    .new-item:hover {
+      border-color: var(--accent-cyan);
+    }
+
+    .new-item .icon {
+      font-size: 1.5rem;
+      flex-shrink: 0;
+    }
+
+    .new-item h4 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--text-primary);
+    }
+
+    .new-item p {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    /* Architecture */
+    .architecture {
+      text-align: center;
+    }
+
+    .arch-flow {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin: 32px 0;
+    }
+
+    .arch-box {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 16px 24px;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .arch-box.highlight {
+      background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(59, 130, 246, 0.2));
+      border-color: var(--accent-purple);
+    }
+
+    .arch-arrow {
+      color: var(--accent-cyan);
+      font-size: 1.5rem;
+    }
+
+    .arch-branches {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .arch-table {
+      width: 100%;
+      max-width: 800px;
+      margin: 32px auto 0;
+      border-collapse: collapse;
+    }
+
+    .arch-table th,
+    .arch-table td {
+      padding: 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .arch-table th {
+      background: var(--bg-secondary);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .arch-table td {
+      color: var(--text-muted);
+    }
+
+    .arch-table .layer-icon {
+      font-size: 1.25rem;
+      margin-right: 8px;
+    }
+
+    .arch-table .timeout {
+      color: var(--accent-cyan);
+      font-weight: 600;
+      text-align: center;
+    }
+
+    /* Usage Examples */
+    .usage-section {
+      background: var(--bg-secondary);
+      border-radius: 16px;
+      padding: 32px;
+      border: 1px solid var(--border-color);
+    }
+
+    .code-block {
+      background: #0d1117;
+      border-radius: 12px;
+      padding: 24px;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.9rem;
+      overflow-x: auto;
+      border: 1px solid #30363d;
+    }
+
+    .code-block .comment {
+      color: #8b949e;
+    }
+
+    .code-block .string {
+      color: #a5d6ff;
+    }
+
+    .code-line {
+      margin-bottom: 8px;
+    }
+
+    .code-line:last-child {
+      margin-bottom: 0;
+    }
+
+    /* Models Table */
+    .models-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--bg-secondary);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .models-table th,
+    .models-table td {
+      padding: 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .models-table th {
+      background: var(--bg-card);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .models-table td {
+      color: var(--text-muted);
+    }
+
+    .models-table code {
+      background: #0d1117;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      color: #58a6ff;
+    }
+
+    .models-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* Performance */
+    .performance-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+
+    .perf-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 32px;
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+
+    .perf-card:hover {
+      transform: translateY(-4px);
+      border-color: var(--accent-green);
+      box-shadow: 0 12px 40px rgba(34, 197, 94, 0.15);
+    }
+
+    .perf-number {
+      font-size: clamp(2.5rem, 5vw, 3.5rem);
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--accent-green), var(--accent-cyan));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+
+    .perf-label {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    /* Install */
+    .install-section {
+      background: var(--bg-secondary);
+      border-radius: 16px;
+      padding: 32px;
+      border: 1px solid var(--border-color);
+    }
+
+    .install-code {
+      background: #0d1117;
+      border-radius: 12px;
+      padding: 20px 24px;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 1rem;
+      color: #f0f6fc;
+      overflow-x: auto;
+      border: 1px solid #30363d;
+    }
+
+    .install-code .prompt {
+      color: #7ee787;
+      user-select: none;
+    }
+
+    .install-note {
+      margin-top: 16px;
+      padding: 16px;
+      background: rgba(34, 197, 94, 0.1);
+      border-radius: 8px;
+      border-left: 3px solid var(--accent-green);
+    }
+
+    .install-note p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 8px;
+    }
+
+    .install-note ul {
+      list-style: none;
+      padding-left: 0;
+    }
+
+    .install-note li {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      margin-bottom: 4px;
+    }
+
+    .install-note li::before {
+      content: '✅ ';
+    }
+
+    /* Media Grid */
+    .media-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .media-grid img {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      transition: all 0.3s ease;
+    }
+
+    .media-grid img:hover {
+      border-color: var(--accent-purple);
+      box-shadow: 0 8px 32px rgba(139, 92, 246, 0.2);
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border-color);
+      padding: 48px 0;
+      margin-top: 40px;
+      text-align: center;
+    }
+
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 32px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .footer-section h4 {
+      font-size: 0.875rem;
+      color: var(--text-primary);
+      margin-bottom: 12px;
+    }
+
+    .footer-section a {
+      display: block;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.875rem;
+      margin-bottom: 8px;
+      transition: color 0.2s;
+    }
+
+    .footer-section a:hover {
+      color: var(--accent-purple);
+    }
+
+    .footer-credit {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      margin-top: 24px;
+    }
+
+    .footer-credit a {
+      color: var(--accent-purple);
+      text-decoration: none;
+    }
+
+    .footer-star {
+      margin-top: 16px;
+      font-style: italic;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .hero {
+        padding: 60px 0 40px;
+      }
+
+      section {
+        padding: 40px 0;
+      }
+
+      .arch-flow {
+        flex-direction: column;
+      }
+
+      .arch-arrow {
+        transform: rotate(90deg);
+      }
+
+      .arch-branches {
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .performance-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .arch-table {
+        font-size: 0.875rem;
+      }
+
+      .arch-table th,
+      .arch-table td {
+        padding: 12px 8px;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="tag">MCP Router for Claude Code ↔ Gemini CLI ↔ Google AI Studio</div>
-  <h1>CGMB</h1>
-  <p class="muted">Claude-Gemini Multimodal Bridge — search, reason, and generate (image/audio/PDF) in one workflow.</p>
+  <!-- Hero -->
+  <header class="hero">
+    <div class="container hero-content">
+      <img src="./cgmb_logo1_subtitle_MCP_128.png" alt="CGMB Logo" class="hero-logo" />
+      <h1>Claude-Gemini Multimodal Bridge</h1>
+      <p class="hero-tagline">Unifying the Power of AI.</p>
+      <p class="hero-subtitle">
+        An MCP bridge that seamlessly integrates Claude Code, Gemini CLI, and Google AI Studio
+      </p>
 
-  <div class="row">
-    <a class="btn" href="https://github.com/goodaymmm/claude-gemini-multimodal-bridge">GitHub</a>
-  </div>
+      <div class="badges-row">
+        <img src="https://img.shields.io/badge/npm-v1.1.0-CB3837?style=flat-square&logo=npm" alt="npm version" />
+        <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License" />
+        <img src="https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js" />
+        <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
+      </div>
+      <div class="badges-row">
+        <img src="https://img.shields.io/badge/MCP-Compatible-00D4AA?style=flat-square" alt="MCP Compatible" />
+        <img src="https://img.shields.io/badge/Gemini-8E75B2?style=flat-square&logo=google-gemini&logoColor=white" alt="Gemini" />
+        <img src="https://img.shields.io/badge/Claude-191919?style=flat-square&logo=anthropic&logoColor=white" alt="Claude" />
+      </div>
+      <div class="badges-row">
+        <img src="https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows" />
+        <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS" />
+        <img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux" />
+      </div>
 
-  <h2>Install</h2>
-  <p><code>npm install -g claude-gemini-multimodal-bridge</code></p>
+      <div class="cta-row">
+        <a href="https://github.com/goodaymmm/claude-gemini-multimodal-bridge" class="btn btn-primary">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+          GitHub
+        </a>
+        <a href="https://www.npmjs.com/package/claude-gemini-multimodal-bridge" class="btn btn-secondary">
+          NPM Package
+        </a>
+        <a href="https://github.com/sponsors/goodaymmm" class="btn btn-sponsor">
+          💖 Sponsor
+        </a>
+      </div>
+    </div>
+  </header>
 
-  <h2>What it does</h2>
-  <ul>
-    <li><b>Gemini CLI</b> → web search & quick retrieval</li>
-    <li><b>Google AI Studio</b> → multimodal generation (image/audio) + document handling</li>
-    <li><b>Claude Code</b> → deep reasoning and coding workflows</li>
-  </ul>
+  <main class="container">
+    <!-- Why CGMB -->
+    <section>
+      <h2 class="section-title">🤔 Why CGMB?</h2>
+      <div class="why-grid">
+        <div class="why-card">
+          <div class="icon">🔄</div>
+          <h3>Multi-Model Orchestration</h3>
+          <p>Optimally integrates Claude's <strong>reasoning power</strong>, Gemini CLI's <strong>search capabilities</strong>, and AI Studio's <strong>generation power</strong></p>
+        </div>
+        <div class="why-card">
+          <div class="icon">⚡</div>
+          <h3>Zero Configuration</h3>
+          <p>Complete with a single <code>npm install</code>. Tedious setup is automated</p>
+        </div>
+        <div class="why-card">
+          <div class="icon">🎯</div>
+          <h3>MCP Standard Compliant</h3>
+          <p>Follows the Anthropic Model Context Protocol. Enterprise-grade reliability with <strong>95% self-healing</strong></p>
+        </div>
+      </div>
+    </section>
 
-  <h2>Media</h2>
-  <p class="muted">Add your architecture / image / audio screenshots here (replace file names).</p>
-  <div class="grid">
-    <img src="./architecture.png" alt="Architecture" />
-    <img src="./image-demo.png" alt="Image generation demo" />
-    <img src="./audio-demo.png" alt="Audio generation demo" />
-  </div>
+    <!-- What's New -->
+    <section>
+      <h2 class="section-title">✨ What's New in v1.1.0</h2>
+      <div class="whats-new-grid">
+        <div class="new-item">
+          <span class="icon">🪟</span>
+          <div>
+            <h4>Full Windows Support</h4>
+            <p>Native support for both CLI and MCP</p>
+          </div>
+        </div>
+        <div class="new-item">
+          <span class="icon">📝</span>
+          <div>
+            <h4>Enhanced OCR Processing</h4>
+            <p>Automatic text extraction from scanned PDFs</p>
+          </div>
+        </div>
+        <div class="new-item">
+          <span class="icon">🚀</span>
+          <div>
+            <h4>Latest Gemini Models</h4>
+            <p>Support for gemini-2.5-flash, gemini-3-flash</p>
+          </div>
+        </div>
+        <div class="new-item">
+          <span class="icon">🔐</span>
+          <div>
+            <h4>OAuth Authentication</h4>
+            <p>File-based auth compatible with Claude Code</p>
+          </div>
+        </div>
+        <div class="new-item">
+          <span class="icon">🌐</span>
+          <div>
+            <h4>Auto Translation</h4>
+            <p>Japanese to English for image generation</p>
+          </div>
+        </div>
+        <div class="new-item">
+          <span class="icon">📊</span>
+          <div>
+            <h4>Smart Routing</h4>
+            <p>PDF URLs to AI Studio, web pages to Gemini CLI</p>
+          </div>
+        </div>
+      </div>
+    </section>
 
-  <p class="muted" style="margin-top:22px">
-    Tip: Put screenshots in <code>docs/</code> as <code>architecture.png</code>, <code>image-demo.png</code>, <code>audi 
+    <!-- Architecture -->
+    <section class="architecture">
+      <h2 class="section-title">🏗️ Architecture</h2>
+      <div class="arch-flow">
+        <div class="arch-box">Claude Code</div>
+        <span class="arch-arrow">→</span>
+        <div class="arch-box highlight">CGMB</div>
+        <span class="arch-arrow">→</span>
+        <div class="arch-branches">
+          <div class="arch-box">Gemini CLI</div>
+          <div class="arch-box">Claude Code</div>
+          <div class="arch-box">AI Studio</div>
+        </div>
+      </div>
+
+      <table class="arch-table">
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Specialization</th>
+            <th>Timeout</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="layer-icon">🔍</span>Gemini CLI</td>
+            <td>Web search, real-time information</td>
+            <td class="timeout">30s</td>
+          </tr>
+          <tr>
+            <td><span class="layer-icon">🧠</span>Claude Code</td>
+            <td>Complex reasoning, code analysis</td>
+            <td class="timeout">300s</td>
+          </tr>
+          <tr>
+            <td><span class="layer-icon">🎨</span>AI Studio</td>
+            <td>Image generation, audio synthesis, OCR</td>
+            <td class="timeout">120s</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Usage Examples -->
+    <section>
+      <h2 class="section-title">💡 Usage Examples</h2>
+      <div class="usage-section">
+        <p style="color: var(--text-muted); margin-bottom: 16px;">Use the <strong>"CGMB" keyword</strong> in Claude Code:</p>
+        <div class="code-block">
+          <div class="code-line"><span class="comment"># 🎨 Image generation</span></div>
+          <div class="code-line"><span class="string">"CGMB generate an image of a futuristic city"</span></div>
+          <div class="code-line" style="margin-top: 16px;"><span class="comment"># 📄 Document analysis (use absolute paths)</span></div>
+          <div class="code-line"><span class="string">"CGMB analyze the document at /full/path/to/report.pdf"</span></div>
+          <div class="code-line" style="margin-top: 16px;"><span class="comment"># 🔍 Web search</span></div>
+          <div class="code-line"><span class="string">"CGMB search for the latest AI news"</span></div>
+          <div class="code-line" style="margin-top: 16px;"><span class="comment"># 🎵 Audio generation</span></div>
+          <div class="code-line"><span class="string">"CGMB create audio saying 'Welcome to our podcast'"</span></div>
+          <div class="code-line" style="margin-top: 16px;"><span class="comment"># 📝 OCR-enabled PDF analysis</span></div>
+          <div class="code-line"><span class="string">"CGMB analyze this scanned PDF document with OCR"</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Models Used -->
+    <section>
+      <h2 class="section-title">🤖 Models Used</h2>
+      <table class="models-table">
+        <thead>
+          <tr>
+            <th>Purpose</th>
+            <th>Model ID</th>
+            <th>Layer</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>🔍 Web Search</td>
+            <td><code>gemini-3-flash</code></td>
+            <td>Gemini CLI</td>
+          </tr>
+          <tr>
+            <td>🎨 Image Generation</td>
+            <td><code>gemini-2.5-flash-image</code></td>
+            <td>AI Studio</td>
+          </tr>
+          <tr>
+            <td>🎵 Audio Generation</td>
+            <td><code>gemini-2.5-flash-preview-tts</code></td>
+            <td>AI Studio</td>
+          </tr>
+          <tr>
+            <td>📄 Document Processing</td>
+            <td><code>gemini-2.5-flash</code></td>
+            <td>AI Studio</td>
+          </tr>
+          <tr>
+            <td>📝 OCR / Text Extraction</td>
+            <td><code>gemini-2.5-flash</code></td>
+            <td>AI Studio</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Performance -->
+    <section>
+      <h2 class="section-title">📈 Performance</h2>
+      <div class="performance-grid">
+        <div class="perf-card">
+          <div class="perf-number">80%</div>
+          <div class="perf-label">Authentication Overhead Reduction</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-number">60-80%</div>
+          <div class="perf-label">Search Cache Hit Rate</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-number">95%</div>
+          <div class="perf-label">Automatic Error Recovery Rate</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Install -->
+    <section>
+      <h2 class="section-title">🚀 Quick Start</h2>
+      <div class="install-section">
+        <div class="install-code">
+          <span class="prompt">$ </span>npm install -g claude-gemini-multimodal-bridge
+        </div>
+        <div class="install-note">
+          <p>💡 The postinstall script automatically:</p>
+          <ul>
+            <li>Installs Gemini CLI</li>
+            <li>Sets up Claude Code MCP integration</li>
+            <li>Creates .env template</li>
+            <li>Verifies system requirements</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Screenshots -->
+    <section>
+      <h2 class="section-title">📸 Screenshots</h2>
+      <div class="media-grid">
+        <img src="./architecture.png" alt="Architecture Diagram" />
+        <img src="./image-demo.png" alt="Image Generation Demo" />
+        <img src="./audio-demo.png" alt="Audio Generation Demo" />
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div class="footer-links">
+        <div class="footer-section">
+          <h4>📦 Project</h4>
+          <a href="https://github.com/goodaymmm/claude-gemini-multimodal-bridge">GitHub</a>
+          <a href="https://www.npmjs.com/package/claude-gemini-multimodal-bridge">NPM</a>
+          <a href="https://github.com/goodaymmm/claude-gemini-multimodal-bridge/issues">Issues</a>
+        </div>
+        <div class="footer-section">
+          <h4>🔧 Related Tools</h4>
+          <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>
+          <a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a>
+          <a href="https://aistudio.google.com/">Google AI Studio</a>
+          <a href="https://modelcontextprotocol.io/">MCP</a>
+        </div>
+        <div class="footer-section">
+          <h4>📜 Legal</h4>
+          <a href="https://github.com/goodaymmm/claude-gemini-multimodal-bridge/blob/main/LICENSE">MIT License</a>
+          <a href="https://ai.google.dev/gemini-api/terms">Google AI Terms</a>
+          <a href="https://www.anthropic.com/terms">Claude Terms</a>
+        </div>
+      </div>
+      <div class="footer-credit">
+        Made with ❤️ by <a href="https://github.com/goodaymmm">goodaymmm</a>
+      </div>
+      <div class="footer-star">
+        ⭐ If this project helped you, please give it a star!
+      </div>
+      <div style="margin-top: 24px;">
+        <a href="https://github.com/sponsors/goodaymmm" class="btn btn-sponsor" style="padding: 10px 20px; font-size: 0.9rem;">
+          💖 Sponsor this project
+        </a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
