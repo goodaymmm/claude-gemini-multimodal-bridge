@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
+import { DEFAULT_ANTIGRAVITY_MODEL } from './core/types.js';
 import { logger } from './utils/logger.js';
 import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
 import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
@@ -28,7 +29,7 @@ function showChatHelp() {
   console.log('  cgmb c "your question"');
   console.log('');
   console.log('🔧 Advanced usage:');
-  console.log('  cgmb chat "question" --model gemini-2.5-flash');
+  console.log('  cgmb chat "question" --model gemini-3.6-flash-low');
   console.log('  cgmb chat "question" --fast');
   console.log('');
   console.log('🌐 Web search is automatic - just ask about current events!');
@@ -964,7 +965,7 @@ program
   .alias('c')
   .description('Chat with Gemini (user-friendly interface)')
   .argument('[prompt...]', 'Your question or prompt')
-  .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
+  .option('-m, --model <model>', 'Antigravity model to use (see `agy models`)', DEFAULT_ANTIGRAVITY_MODEL)
   .option('--fast', 'Use fast path for better performance')
   .action(async (promptArgs, options) => {
     try {
@@ -1031,8 +1032,8 @@ program
   .command('gemini')
   .description('⚠️  ADVANCED: Direct Gemini CLI access (troubleshooting only - use cgmb chat instead)')
   .argument('[prompt...]', 'Direct prompt (auto-detects if -p missing)')
-  .option('-p, --prompt <text>', 'Explicit prompt for Gemini CLI')
-  .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
+  .option('-p, --prompt <text>', 'Explicit prompt for Antigravity CLI')
+  .option('-m, --model <model>', 'Antigravity model to use (see `agy models`)', DEFAULT_ANTIGRAVITY_MODEL)
   .option('-f, --file <path>', 'File to analyze with prompt')
   .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
   .action(async (promptArgs, options) => {
@@ -1148,7 +1149,7 @@ async function executeGeminiCommand(options: any) {
       logger.info('Using fast path (direct Gemini CLI call)...');
       
       const args = ['gemini'];
-      if (options.model && options.model !== 'gemini-2.5-pro') {
+      if (options.model && options.model !== DEFAULT_ANTIGRAVITY_MODEL) {
         args.push('-m', options.model);
       }
       args.push('-p', options.prompt);
@@ -1752,7 +1753,7 @@ program
           // Execute via Gemini CLI for web content
           const geminiOptions = {
             prompt: analysisPrompt,
-            model: 'gemini-2.5-pro',
+            model: DEFAULT_ANTIGRAVITY_MODEL,
             fast: false
           };
           

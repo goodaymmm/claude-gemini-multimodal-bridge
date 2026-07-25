@@ -765,3 +765,42 @@ export const AI_MODELS = {
 
 // Type for AI model values
 export type AIModelName = typeof AI_MODELS[keyof typeof AI_MODELS];
+
+// ===================================
+// Antigravity CLI (agy) Models
+// ===================================
+
+/**
+ * Models served by the Antigravity CLI (`agy`).
+ *
+ * IMPORTANT: this is a DIFFERENT catalogue from AI_MODELS above. AI_MODELS
+ * targets the AI Studio / Gemini API and is unaffected by the CLI migration.
+ * The authoritative source for the list below is the output of `agy models`;
+ * never invent an ID. Verified against agy v1.1.7 on 2026-07-25.
+ */
+export const ANTIGRAVITY_MODELS = [
+  'gemini-3.6-flash-high',
+  'gemini-3.6-flash-medium',
+  'gemini-3.6-flash-low',
+  'gemini-3.5-flash-high',
+  'gemini-3.5-flash-medium',
+  'gemini-3.5-flash-low',
+  'gemini-3.1-pro-high',
+  'gemini-3.1-pro-low',
+  'claude-sonnet-4-6',
+  'claude-opus-4-6-thinking',
+  'gpt-oss-120b-medium',
+] as const;
+
+export type AntigravityModelName = typeof ANTIGRAVITY_MODELS[number];
+
+/** Default model for search / translation through the Antigravity CLI. */
+export const DEFAULT_ANTIGRAVITY_MODEL: AntigravityModelName = 'gemini-3.6-flash-low';
+
+/**
+ * Model IDs that were valid for the retired Gemini CLI but do not exist in
+ * Antigravity. Configs, .env files and saved CLI flags in the wild still carry
+ * these, so they are mapped onto the default instead of being sent to `agy`,
+ * which would reject them.
+ */
+export const RETIRED_GEMINI_CLI_MODEL_PATTERN = /^gemini-(1\.|2\.|pro|3-flash|3-pro)/i;

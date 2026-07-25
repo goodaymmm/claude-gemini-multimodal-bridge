@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { join } from 'path';
-import { FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult } from '../core/types.js';
+import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
@@ -41,7 +41,8 @@ export class AntigravityCLILayer implements LayerInterface {
   // Antigravity responds slower than the old Gemini CLI, so the default budget is higher.
   private readonly DEFAULT_TIMEOUT = Number.parseInt(process.env.ANTIGRAVITY_TIMEOUT ?? '', 10) || 90000;
   // Model IDs must exist in `agy models` output. `gemini-2.5-*` no longer does.
-  private readonly DEFAULT_MODEL = (process.env.ANTIGRAVITY_MODEL ?? '').trim() || 'gemini-3.6-flash-low';
+  private readonly DEFAULT_MODEL =
+    this.normalizeModel((process.env.ANTIGRAVITY_MODEL ?? '').trim(), DEFAULT_ANTIGRAVITY_MODEL);
   // Older builds silently emit nothing on a non-TTY stdout (upstream antigravity-cli#76).
   private readonly MIN_AGY_VERSION = '1.1.7';
 
@@ -175,14 +176,14 @@ export class AntigravityCLILayer implements LayerInterface {
                 layer: 'gemini' as const,
                 duration: Date.now() - startTime,
                 cache_hit: true,
-                model: task.model ?? this.DEFAULT_MODEL,
+                model: this.normalizeModel(task.model, this.DEFAULT_MODEL),
               }
             };
           }
         }
 
         const result = await this.executeAntigravityCLI(prompt, {
-          model: task.model ?? this.DEFAULT_MODEL
+          model: this.normalizeModel(task.model, this.DEFAULT_MODEL)
         });
 
         const duration = Date.now() - startTime;
@@ -205,7 +206,7 @@ export class AntigravityCLILayer implements LayerInterface {
             layer: 'gemini' as const,
             duration,
             cache_hit: false,
-            model: task.model ?? this.DEFAULT_MODEL,
+            model: this.normalizeModel(task.model, this.DEFAULT_MODEL),
             search_enabled: task.useSearch !== false,
           }
         };
@@ -455,6 +456,31 @@ export class AntigravityCLILayer implements LayerInterface {
         }
       }, this.DEFAULT_TIMEOUT + 5000);
     });
+  }
+
+  /**
+   * Map a requested model onto something Antigravity actually serves.
+   *
+   * Callers still carry Gemini CLI era IDs (`gemini-2.5-pro`, `gemini-3-flash`, ...)
+   * in saved configs, .env files and CLI defaults. Forwarding those to `agy` yields
+   * a hard failure, so they are downgraded to the default with a warning instead.
+   */
+  private normalizeModel(requested: string | undefined, fallback: string): string {
+    const model = (requested ?? '').trim();
+
+    if (!model || model === 'auto') {
+      return fallback;
+    }
+
+    if (RETIRED_GEMINI_CLI_MODEL_PATTERN.test(model)) {
+      logger.warn(
+        `Model "${model}" belongs to the retired Gemini CLI and is not served by Antigravity. ` +
+        `Falling back to "${fallback}". Run \`agy models\` for the current catalogue.`
+      );
+      return fallback;
+    }
+
+    return model;
   }
 
   /**
