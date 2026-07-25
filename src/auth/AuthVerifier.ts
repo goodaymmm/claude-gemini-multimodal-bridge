@@ -2,6 +2,7 @@ import { commandExists } from '../utils/platformUtils.js';
 import { execSync } from 'child_process';
 import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
+import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';
 import { AuthCache } from './AuthCache.js';
@@ -130,7 +131,7 @@ export class AuthVerifier {
             },
             error: 'Gemini not authenticated',
             requiresAction: true,
-            actionInstructions: 'Run "gemini auth" for OAuth (recommended) or set GEMINI_API_KEY environment variable',
+            actionInstructions: 'Run `agy` once interactively and complete the Google sign-in (tokens are stored in the OS keyring)',
           };
           
           // Cache failed authentication with exponential backoff
@@ -156,7 +157,7 @@ export class AuthVerifier {
             },
             error: `Gemini verification failed: ${(error as Error).message}`,
             requiresAction: true,
-            actionInstructions: 'Install Gemini CLI: npm install -g @google/gemini-cli && gemini auth',
+            actionInstructions: `Install the Antigravity CLI (${AGY_INSTALL_HINT}), then run \`agy\` once to sign in`,
           };
           
           return result;

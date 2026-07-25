@@ -1,10 +1,10 @@
-import { execSync, spawn } from 'child_process';
 import { AuthenticationError, AuthErrorCode, AuthStatus } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { AGY_INSTALL_HINT, findAntigravityBinary, probeAntigravityAuth } from '../utils/antigravityCli.js';
 
 /**
  * OAuthManager handles OAuth flow management and Gemini CLI authentication
@@ -27,9 +27,36 @@ export class OAuthManager {
           return cached;
         }
 
-        // Check OAuth authentication file first
+        // Priority 1: ask the Antigravity CLI itself.
+        // `agy` stores its OAuth tokens in the OS keyring, so there is no
+        // credential file to inspect and no `agy auth` subcommand. `agy models`
+        // round-trips to the server, so it succeeds only when authenticated.
+        const binary = await findAntigravityBinary();
+        if (binary) {
+          const probe = await probeAntigravityAuth(binary.path);
+          if (probe.authenticated) {
+            const status: AuthStatus = {
+              isAuthenticated: true,
+              method: 'oauth',
+              userInfo: {
+                planType: 'free',
+                email: undefined,
+                quotaRemaining: undefined
+              }
+            };
+
+            this.updateCache('gemini', status);
+            return status;
+          }
+
+          logger.debug('Antigravity CLI present but not authenticated', { error: probe.error });
+        }
+
+        // Priority 2: legacy Gemini CLI OAuth credentials.
+        // Only meaningful on machines that still have the retired CLI installed;
+        // kept so an in-progress migration does not lose a working setup.
         const oauthFile = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
-        
+
         if (fs.existsSync(oauthFile)) {
           try {
             const creds = JSON.parse(fs.readFileSync(oauthFile, 'utf8'));
@@ -108,7 +135,7 @@ export class OAuthManager {
         logger.info('Starting OAuth authentication flow...');
         
         try {
-          // Spawn gemini auth command
+          // Guide the user through Antigravity CLI sign-in
           const result = await this.executeGeminiAuth();
           
           if (result) {
@@ -129,7 +156,7 @@ export class OAuthManager {
             AuthErrorCode.OAUTH_FLOW_FAILED,
             {
               method: 'oauth',
-              instructions: 'Run "gemini auth" manually or set GEMINI_API_KEY environment variable',
+              instructions: 'Run `agy` in a terminal and complete the Google sign-in',
               canRetry: true
             }
           );
@@ -285,58 +312,49 @@ export class OAuthManager {
   }
 
   /**
-   * Execute gemini auth command
+   * Guide the user through Antigravity CLI sign-in.
+   *
+   * The Antigravity CLI has no `auth` subcommand: signing in happens on the
+   * first interactive launch, which opens a browser and writes the tokens to the
+   * OS keyring. There is nothing to drive non-interactively, so instruct the
+   * user and then re-probe.
    */
   private async executeGeminiAuth(): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-      logger.info('Executing: gemini auth');
-      
-      const child = spawn('gemini', ['auth'], {
-        stdio: 'inherit', // Allow user interaction
-      });
+    const binary = await findAntigravityBinary();
 
-      const timeout = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error('Authentication timeout'));
-      }, 120000); // 2 minutes timeout
-
-      child.on('close', (code) => {
-        clearTimeout(timeout);
-        
-        if (code === 0) {
-          resolve(true);
-        } else {
-          reject(new Error(`Authentication failed with exit code: ${code}`));
+    if (!binary) {
+      throw new AuthenticationError(
+        `Antigravity CLI (agy) is not installed. Install it with: ${AGY_INSTALL_HINT}`,
+        'gemini',
+        AuthErrorCode.OAUTH_FLOW_FAILED,
+        {
+          method: 'oauth',
+          instructions: AGY_INSTALL_HINT,
+          canRetry: true,
         }
-      });
+      );
+    }
 
-      child.on('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-    });
+    const probe = await probeAntigravityAuth(binary.path);
+    if (probe.authenticated) {
+      return true;
+    }
+
+    logger.info(
+      'Antigravity CLI is installed but not signed in. ' +
+      'Run `agy` in a terminal, complete the Google sign-in, then re-run this command.',
+      { error: probe.error }
+    );
+
+    return false;
   }
 
   /**
-   * Check if Gemini CLI is available on system (cross-platform)
+   * Check whether the search-layer CLI is available on this system.
+   * Resolves against the Antigravity CLI (`agy`), not the retired Gemini CLI.
    */
   private async checkGeminiCLIAvailable(): Promise<boolean> {
-    const isWindows = process.platform === 'win32';
-    const checkCommand = isWindows ? 'where gemini' : 'which gemini';
-
-    try {
-      execSync(checkCommand, { stdio: 'ignore', timeout: 5000 });
-      return true;
-    } catch {
-      // Fallback: try running gemini directly
-      try {
-        const geminiCmd = isWindows ? 'gemini.cmd --version' : 'gemini --version';
-        execSync(geminiCmd, { stdio: 'ignore', timeout: 5000 });
-        return true;
-      } catch {
-        return false;
-      }
-    }
+    return (await findAntigravityBinary()) !== undefined;
   }
 
   /**

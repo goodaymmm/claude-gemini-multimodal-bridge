@@ -121,18 +121,24 @@ export function normalizeOutputPath(relativePath: string): string {
 
 /**
  * Get default executable path for a tool
- * @param tool - Tool name (gemini, claude)
+ *
+ * Note: 'gemini' names the search-layer CLI slot, which is now served by the
+ * Antigravity CLI (`agy`). Gemini CLI was discontinued for individual accounts
+ * on 2026-06-18. For full resolution (env overrides, version guard) prefer
+ * findAntigravityBinary() in utils/antigravityCli.ts.
+ *
+ * @param tool - Tool slot ('gemini' = search CLI, 'claude' = Claude Code)
  * @returns Default path or just the command name
  */
 export function getDefaultExecutablePath(tool: 'gemini' | 'claude'): string {
   if (isWindows) {
     // On Windows, rely on PATH resolution
-    return tool === 'gemini' ? 'gemini' : 'claude';
+    return tool === 'gemini' ? 'agy' : 'claude';
   }
 
   // Unix defaults
   const unixDefaults: Record<string, string[]> = {
-    gemini: ['/usr/local/bin/gemini', '/opt/homebrew/bin/gemini'],
+    gemini: ['agy', `${process.env.HOME ?? ''}/.local/bin/agy`, '/usr/local/bin/agy', '/opt/homebrew/bin/agy'],
     claude: ['claude', '/opt/homebrew/bin/claude']
   };
 
@@ -143,7 +149,7 @@ export function getDefaultExecutablePath(tool: 'gemini' | 'claude'): string {
     }
   }
 
-  return tool;
+  return tool === 'gemini' ? 'agy' : tool;
 }
 
 /**

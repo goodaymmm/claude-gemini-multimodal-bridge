@@ -1,10 +1,10 @@
 import { spawn } from 'child_process';
-import { join } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { SearchCache } from '../utils/SearchCache.js';
+import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLeast } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
  * Task interface for better type safety
@@ -43,8 +43,6 @@ export class AntigravityCLILayer implements LayerInterface {
   // Model IDs must exist in `agy models` output. `gemini-2.5-*` no longer does.
   private readonly DEFAULT_MODEL =
     this.normalizeModel((process.env.ANTIGRAVITY_MODEL ?? '').trim(), DEFAULT_ANTIGRAVITY_MODEL);
-  // Older builds silently emit nothing on a non-TTY stdout (upstream antigravity-cli#76).
-  private readonly MIN_AGY_VERSION = '1.1.7';
 
   constructor() {
     this.authVerifier = new AuthVerifier();
@@ -325,15 +323,22 @@ export class AntigravityCLILayer implements LayerInterface {
   private async executeAntigravityCLI(prompt: string, options: { model?: string } = {}): Promise<string> {
     // Lazy load agy path on first use
     if (this.agyPath === 'agy') {
-      const resolvedPath = await this.findAntigravityPath();
-      if (resolvedPath) {
-        this.agyPath = resolvedPath;
+      const binary = await findAntigravityBinary();
+      if (binary) {
+        this.agyPath = binary.path;
+        if (binary.version !== undefined) {
+          this.agyVersion = binary.version;
+        }
+      } else {
+        throw new Error(
+          `Antigravity CLI (agy) not found. Install it with: ${AGY_INSTALL_HINT}`
+        );
       }
     }
 
-    if (this.agyVersion && !this.isVersionAtLeast(this.agyVersion, this.MIN_AGY_VERSION)) {
+    if (this.agyVersion && !isVersionAtLeast(this.agyVersion, MIN_AGY_VERSION)) {
       throw new Error(
-        `Antigravity CLI ${this.agyVersion} is too old (minimum ${this.MIN_AGY_VERSION}). ` +
+        `Antigravity CLI ${this.agyVersion} is too old (minimum ${MIN_AGY_VERSION}). ` +
         `Older builds return an empty response with exit code 0 when stdout is not a TTY, ` +
         `which silently breaks CGMB. Update with \`agy update\`.`
       );
@@ -488,168 +493,6 @@ export class AntigravityCLILayer implements LayerInterface {
    */
   private extractPrompt(task: AntigravityTask): string {
     return task.prompt ?? task.request ?? task.input ?? '';
-  }
-
-  /**
-   * Compare dotted version strings, e.g. isVersionAtLeast('1.1.7', '1.1.7') === true
-   */
-  private isVersionAtLeast(actual: string, minimum: string): boolean {
-    const toParts = (v: string): number[] =>
-      v.trim().replace(/^v/i, '').split('.').map(part => parseInt(part, 10) || 0);
-
-    const actualParts = toParts(actual);
-    const minimumParts = toParts(minimum);
-    const length = Math.max(actualParts.length, minimumParts.length);
-
-    for (let i = 0; i < length; i++) {
-      const a = actualParts[i] ?? 0;
-      const b = minimumParts[i] ?? 0;
-      if (a !== b) {
-        return a > b;
-      }
-    }
-
-    return true;
-  }
-
-  /**
-   * Probe a candidate binary and capture its reported version.
-   * Returns undefined when the candidate is not runnable.
-   */
-  private async probeVersion(candidate: string): Promise<string | undefined> {
-    try {
-      // This module is ESM: `require` is not available here, so import explicitly.
-      // execFileSync (argv array, no shell) so paths containing spaces resolve and
-      // shell metacharacters in an env-var value are never interpreted.
-      const { execFileSync } = await import('child_process');
-      const output = execFileSync(candidate, ['--version'], {
-        encoding: 'utf8',
-        timeout: 5000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      return output.trim().split('\n')[0]?.trim();
-    } catch {
-      return undefined;
-    }
-  }
-
-  /**
-   * True when a path plausibly points at the Antigravity CLI rather than some other
-   * binary. Used to reject a stale GEMINI_CLI_PATH that still points at Gemini CLI.
-   */
-  private looksLikeAgyBinary(candidate: string): boolean {
-    const base = candidate.replace(/\\/g, '/').split('/').pop() ?? candidate;
-    return /^agy(\.(exe|cmd|bat))?$/i.test(base);
-  }
-
-  /**
-   * Find the Antigravity CLI executable (cross-platform).
-   *
-   * Resolution order:
-   *   1. ANTIGRAVITY_CLI_PATH
-   *   2. GEMINI_CLI_PATH (deprecated, kept for backward compatibility)
-   *   3. `where`/`which agy`
-   *   4. Known install locations
-   */
-  private async findAntigravityPath(): Promise<string | undefined> {
-    const { execSync } = await import('child_process');
-    const isWindows = process.platform === 'win32';
-
-    const envCandidates: Array<{ value: string; source: string; legacy: boolean }> = [];
-    if (process.env.ANTIGRAVITY_CLI_PATH) {
-      envCandidates.push({
-        value: process.env.ANTIGRAVITY_CLI_PATH,
-        source: 'ANTIGRAVITY_CLI_PATH',
-        legacy: false,
-      });
-    }
-    if (process.env.GEMINI_CLI_PATH) {
-      envCandidates.push({
-        value: process.env.GEMINI_CLI_PATH,
-        source: 'GEMINI_CLI_PATH (deprecated)',
-        legacy: true,
-      });
-    }
-
-    for (const candidate of envCandidates) {
-      // On upgraded machines GEMINI_CLI_PATH still points at the old Gemini CLI,
-      // which answers `--version` happily. Adopting it here would either trip the
-      // minimum-version guard or invoke the wrong binary outright, and it would
-      // short-circuit the search for a real agy on PATH. Only honour the legacy
-      // variable when it actually names the agy executable.
-      if (candidate.legacy && !this.looksLikeAgyBinary(candidate.value)) {
-        logger.warn(
-          'GEMINI_CLI_PATH does not point at the Antigravity CLI and was ignored. ' +
-          'Set ANTIGRAVITY_CLI_PATH to the `agy` executable instead.',
-          { path: candidate.value }
-        );
-        continue;
-      }
-
-      const version = await this.probeVersion(candidate.value);
-      if (version) {
-        this.agyVersion = version;
-        logger.debug('Found Antigravity CLI from environment variable', {
-          path: candidate.value,
-          source: candidate.source,
-          version,
-        });
-        if (candidate.legacy) {
-          logger.warn('GEMINI_CLI_PATH is deprecated. Set ANTIGRAVITY_CLI_PATH instead.');
-        }
-        return candidate.value;
-      }
-      logger.debug('Environment variable set but command failed', {
-        path: candidate.value,
-        source: candidate.source,
-      });
-    }
-
-    // 2. Locate via the platform's path lookup command
-    try {
-      const lookup = isWindows ? 'where agy 2>nul' : 'which agy 2>/dev/null';
-      const result = execSync(lookup, { encoding: 'utf8', timeout: 5000 });
-      const firstPath = result.split('\n')[0]?.trim();
-      if (firstPath) {
-        const version = await this.probeVersion(firstPath);
-        if (version) {
-          this.agyVersion = version;
-          logger.debug('Found Antigravity CLI via path lookup', { path: firstPath, version });
-          return firstPath;
-        }
-      }
-    } catch {
-      logger.debug('Path lookup for agy failed, trying fallback paths');
-    }
-
-    // 3. Known install locations (official installer targets)
-    const possiblePaths = isWindows ? [
-      'agy',
-      join(process.env.LOCALAPPDATA ?? '', 'agy', 'bin', 'agy.exe'),
-      join(process.env.USERPROFILE ?? '', 'AppData', 'Local', 'agy', 'bin', 'agy.exe'),
-      join(process.env.USERPROFILE ?? '', '.local', 'bin', 'agy.exe'),
-    ] : [
-      'agy',
-      join(process.env.HOME ?? '', '.local', 'bin', 'agy'),
-      '/usr/local/bin/agy',
-      '/opt/homebrew/bin/agy',
-    ];
-
-    for (const candidate of possiblePaths) {
-      const version = await this.probeVersion(candidate);
-      if (version) {
-        this.agyVersion = version;
-        logger.debug('Found Antigravity CLI at', { path: candidate, version });
-        return candidate;
-      }
-    }
-
-    logger.warn('Antigravity CLI (agy) not found in any known location', {
-      platform: process.platform,
-      checkedPaths: possiblePaths,
-      install: 'https://antigravity.google/docs/cli/install',
-    });
-    return undefined;
   }
 
   /**

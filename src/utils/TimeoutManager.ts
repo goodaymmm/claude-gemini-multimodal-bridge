@@ -160,7 +160,8 @@ export class TimeoutManager {
       // Check for typical fresh installation indicators
       const indicators = [
         // No previous authentication cache
-        !process.env.HOME || !require('fs').existsSync(require('path').join(process.env.HOME, '.config', 'gemini')),
+        // Antigravity CLI keeps its state under ~/.gemini/antigravity-cli
+        !process.env.HOME || !require('fs').existsSync(require('path').join(process.env.HOME, '.gemini', 'antigravity-cli')),
         // No local CGMB cache/config
         !require('fs').existsSync(require('path').join(process.cwd(), 'logs')),
         // Environment variables suggest fresh setup

@@ -3,6 +3,7 @@ import { AvailableCapabilities, EnhancementPlan } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
+import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
  * CapabilityDetector automatically detects available services on the system
@@ -244,40 +245,42 @@ export class CapabilityDetector {
    */
   private async detectGeminiCLI(): Promise<AvailableCapabilities['geminiCLI']> {
     try {
-      // Check if Gemini CLI is installed
-      const geminiPath = await this.findExecutablePath('gemini');
-      if (!geminiPath) {
+      // The search layer runs on the Antigravity CLI (`agy`) since Gemini CLI was
+      // discontinued for individual accounts on 2026-06-18. Detecting the old
+      // binary here would report the layer as missing on a correctly migrated
+      // machine, and ClaudeProxy gates enhancement on this result.
+      const binary = await findAntigravityBinary();
+      if (!binary) {
         return {
           available: false,
           authenticated: false,
         };
       }
 
-      // Get version
-      let version: string | undefined;
-      try {
-        const output = execSync('gemini --version', { 
-          encoding: 'utf8', 
-          timeout: 5000,
-          stdio: 'pipe'
+      if (!binary.versionSupported) {
+        logger.warn('Antigravity CLI is older than the supported minimum', {
+          version: binary.version,
+          minimum: MIN_AGY_VERSION,
         });
-        version = output.trim();
-      } catch {
-        // Version command might not be available
+        return {
+          available: false,
+          authenticated: false,
+          ...(binary.version === undefined ? {} : { version: binary.version }),
+          path: binary.path,
+        };
       }
 
-      // Check authentication status
-      const authResult = await this.authVerifier.verifyGeminiAuth();
-      
+      const auth = await probeAntigravityAuth(binary.path);
+
       return {
         available: true,
-        version,
-        authenticated: authResult.success,
-        path: geminiPath,
+        ...(binary.version === undefined ? {} : { version: binary.version }),
+        authenticated: auth.authenticated,
+        path: binary.path,
       };
-      
+
     } catch (error) {
-      logger.debug('Gemini CLI detection failed', { error: (error as Error).message });
+      logger.debug('Antigravity CLI detection failed', { error: (error as Error).message });
       return {
         available: false,
         authenticated: false,
@@ -349,9 +352,9 @@ export class CapabilityDetector {
     }
     
     if (services.gemini === 'missing') {
-      recommendations.push('Install Gemini CLI: npm install -g @google/gemini-cli');
+      recommendations.push(`Install Antigravity CLI: ${AGY_INSTALL_HINT}`);
     } else if (services.gemini === 'available') {
-      recommendations.push('Authenticate Gemini: gemini auth or set GEMINI_API_KEY');
+      recommendations.push('Authenticate Antigravity: run `agy` once and complete the Google sign-in');
     }
     
     if (services.aistudio === 'available') {

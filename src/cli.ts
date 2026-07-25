@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
 import { DEFAULT_ANTIGRAVITY_MODEL } from './core/types.js';
+import { AGY_INSTALL_HINT } from './utils/antigravityCli.js';
 import { logger } from './utils/logger.js';
 import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
 import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
@@ -401,7 +402,7 @@ program
           }
           
           if (options.fix && tool.name === 'Gemini CLI') {
-            console.log(`     💡 Install with: npm install -g @google/gemini-cli`);
+            console.log(`     💡 Install with: ${AGY_INSTALL_HINT}`);
           }
         }
       }
@@ -1015,7 +1016,7 @@ program
       if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
         logger.error('❌ Chat API Error', error as Error);
         logger.info('🔧 This looks like an authentication issue:');
-        logger.info('   • Try OAuth: gemini auth');
+        logger.info('   • Sign in: run `agy` in a terminal');
         logger.info('   • Check status: cgmb auth-status --verbose');
       } else {
         logger.error('❌ Chat command failed', error as Error);
@@ -1087,14 +1088,14 @@ program
       if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
         logger.error('❌ API Function Call Error', error as Error);
         logger.info('🔧 This error usually indicates an authentication issue:');
-        logger.info('   1. Try OAuth authentication: gemini auth');
+        logger.info('   1. Sign in: run `agy` in a terminal');
         logger.info('   2. Check API key configuration');
         logger.info('   3. Verify Gemini CLI version: gemini --version');
         logger.info('   4. Check status: cgmb auth-status --verbose');
       } else if (errorMessage.includes('UNAUTHENTICATED') || errorMessage.includes('API_KEY')) {
         logger.error('❌ Authentication Error', error as Error);
         logger.info('🔧 Fix authentication:');
-        logger.info('   • OAuth (recommended): gemini auth');
+        logger.info('   • Sign in (recommended): run `agy` in a terminal');
         logger.info('   • Check status: cgmb auth-status');
       } else if (errorMessage.includes('quota exceeded') || errorMessage.includes('Quota exceeded') || errorMessage.includes('Resource exhausted')) {
         logger.error('❌ Gemini CLI Service Quota Exceeded', error as Error);
@@ -1107,7 +1108,7 @@ program
         logger.error('❌ Gemini CLI Not Found', error as Error);
         logger.info('🔧 Install Gemini CLI:');
         logger.info('   • Run setup: cgmb setup');
-        logger.info('   • Manual install: npm install -g @google/gemini-cli');
+        logger.info(`   • Manual install: ${AGY_INSTALL_HINT}`);
       } else if (errorMessage.includes('timeout')) {
         logger.error('❌ Request Timeout', error as Error);
         logger.info('💡 Try:');

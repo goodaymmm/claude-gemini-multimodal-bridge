@@ -4,6 +4,7 @@ import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';
 import { AuthVerifier } from './AuthVerifier.js';
 import { AuthStateManager } from './AuthStateManager.js';
+import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
 
 /**
  * InteractiveSetup provides user-guided authentication setup wizard
@@ -182,8 +183,8 @@ export class InteractiveSetup {
     } catch (error) {
       console.log(`⚠️  OAuth authentication not available: ${(error as Error).message}`);
       console.log('\n📋 To set up OAuth authentication:');
-      console.log('   1. Install Gemini CLI: npm install -g @google/gemini-cli');
-      console.log('   2. Run: gemini auth');
+      console.log(`   1. Install Antigravity CLI: ${AGY_INSTALL_HINT}`);
+      console.log('   2. Run: agy   (completes Google sign-in on first launch)');
       console.log('   3. Follow browser authentication flow');
       console.log('   4. Grant permissions when prompted\n');
     }
@@ -245,26 +246,15 @@ export class InteractiveSetup {
       return currentStatus;
     }
 
+    // AI Studio talks to the Gemini API over an API key. It does NOT share
+    // credentials with the search-layer CLI: Antigravity keeps its OAuth tokens
+    // in the OS keyring and they are not accepted by the Gemini API. Treating a
+    // signed-in CLI as proof of AI Studio access reported success for setups
+    // that could not actually call the API.
     console.log('ℹ️  AI Studio authentication:');
-    console.log('   - If Gemini OAuth is working: AI Studio will work automatically');
-    console.log('   - Otherwise: Uses the same API key as Gemini CLI\n');
-    
-    // First check if Gemini OAuth is available (shared authentication)
-    const geminiStatus = await this.authVerifier.verifyGeminiAuth();
-    if (geminiStatus.success && geminiStatus.status.method === 'oauth') {
-      console.log('✅ Using shared authentication from Gemini OAuth');
-      return {
-        success: true,
-        status: {
-          isAuthenticated: true,
-          method: 'oauth',
-          userInfo: geminiStatus.status.userInfo,
-        },
-        requiresAction: false,
-      };
-    }
-    
-    const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_AI_STUDIO_API_KEY;
+    console.log('   - Requires an API key (independent of the Antigravity CLI sign-in)\n');
+
+    const apiKey = process.env.AI_STUDIO_API_KEY ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_AI_STUDIO_API_KEY;
     
     if (!apiKey) {
       console.log('⚠️  No API key found - AI Studio requires API key if OAuth not available');
@@ -468,7 +458,7 @@ If automatic installation fails, follow these steps:
 npm install -g @anthropic-ai/claude-code
 
 3b. Install Gemini CLI:
-npm install -g @google/gemini-cli
+<see https://antigravity.google/docs/cli/install>
 
 3c. Setup authentication:
 cgmb auth --interactive
