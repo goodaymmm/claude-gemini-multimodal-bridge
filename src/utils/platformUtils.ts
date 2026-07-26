@@ -130,7 +130,7 @@ export function getDefaultExecutablePath(tool: 'gemini' | 'claude'): string {
     claude: ['claude', '/opt/homebrew/bin/claude']
   };
 
-  const paths = unixDefaults[tool] || [];
+  const paths = unixDefaults[tool] ?? [];
   for (const p of paths) {
     if (existsSync(p)) {
       return p;

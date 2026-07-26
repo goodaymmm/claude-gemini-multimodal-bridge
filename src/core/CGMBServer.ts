@@ -928,7 +928,7 @@ export class CGMBServer {
     // Fallback to adaptive routing
     return this.layerManager.processMultimodal(
       request.prompt,
-      request.files || [],
+      request.files ?? [],
       'analysis',
       request.options
     );
@@ -962,7 +962,7 @@ export class CGMBServer {
 
     // URL Detection - check for URLs in the prompt and file paths
     const urlRegex = /https?:\/\/[^\s]+/g;
-    const urlsInPrompt = prompt.match(urlRegex) || [];
+    const urlsInPrompt = prompt.match(urlRegex) ?? [];
     
     // Also check file paths for URLs
     const fileArray = Array.isArray(files) ? files : [];
@@ -1066,7 +1066,7 @@ Solutions:
     // Extract file paths embedded in the prompt text (like URL detection above)
     // Fix: Support both uppercase and lowercase drive letters (M:\ and m:\)
     const filePathRegex = /(?:[A-Za-z]:\\[^\s"'<>|]+\.[a-zA-Z0-9]+|\/(?!https?:)[^\s"'<>|]+\.[a-zA-Z0-9]+|\.\.?\/[^\s"'<>|]+\.[a-zA-Z0-9]+)/gi;
-    const localPathsInPrompt = prompt.match(filePathRegex) || [];
+    const localPathsInPrompt = prompt.match(filePathRegex) ?? [];
 
     if (localPathsInPrompt.length > 0) {
       logger.info('Local file paths detected in prompt', { paths: localPathsInPrompt });

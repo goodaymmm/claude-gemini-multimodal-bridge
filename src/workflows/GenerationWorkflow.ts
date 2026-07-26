@@ -1027,7 +1027,7 @@ export class GenerationWorkflow extends BaseWorkflow {
       async () => {
         logger.info('Starting image generation workflow', {
           prompt: prompt.substring(0, 100),
-          options: options || {},
+          options: options ?? {},
           workflowId: this.id,
         });
 
@@ -1059,7 +1059,7 @@ export class GenerationWorkflow extends BaseWorkflow {
       async () => {
         logger.info('Starting video generation workflow', {
           prompt: prompt.substring(0, 100),
-          options: options || {},
+          options: options ?? {},
           workflowId: this.id,
         });
 

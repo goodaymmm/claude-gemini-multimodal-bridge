@@ -574,7 +574,7 @@ export class ConversionWorkflow extends BaseWorkflow {
         input: {
           files: conversion.files,
           outputFormat: conversion.targetFormat,
-          options: conversion.options || {},
+          options: conversion.options ?? {},
         },
         dependsOn: [],
       });
@@ -632,7 +632,7 @@ export class ConversionWorkflow extends BaseWorkflow {
           input: {
             content: '{{extract_content}}',
             outputFormat: targetFormat,
-            options: options || {},
+            options: options ?? {},
           },
           dependsOn: ['extract_content'],
         },

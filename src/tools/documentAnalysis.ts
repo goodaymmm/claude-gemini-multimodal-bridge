@@ -122,8 +122,8 @@ export class DocumentAnalysis {
       documents: [documentPath],
       analysis_type: 'summary',
       options: {
-        depth: options?.depth || 'medium',
-        extractMetadata: options?.extractImages || false,
+        depth: options?.depth ?? 'medium',
+        extractMetadata: options?.extractImages ?? false,
       },
     });
   }
@@ -506,7 +506,11 @@ Please extract the complete text content while maintaining readability and struc
       path.extname(doc).toLowerCase() === '.pdf'
     );
     
-    if (hasPDFs || (args.options?.extractMetadata) || (args.options?.structured)) {
+    // Explicit `=== true` rather than `??`: this is a condition, not a default.
+    // Both flags are optional booleans, so `||` is what the logic wants -- a
+    // `false` must fall through to the next check, which `??` would stop.
+    // Comparing keeps the meaning and takes the rule out of the picture.
+    if (hasPDFs || args.options?.extractMetadata === true || args.options?.structured === true) {
       layers.add('aistudio');
     }
     
@@ -750,7 +754,7 @@ Please extract the complete text content while maintaining readability and struc
       request: 'Organize and structure the extracted data into a comprehensive format',
       inputs: {
         extractions: extractions,
-        dataTypes: args.options?.extractionType?.split(',') || [],
+        dataTypes: args.options?.extractionType?.split(',') ?? [],
       },
     });
     

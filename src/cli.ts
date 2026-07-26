@@ -6,8 +6,8 @@ import { DEFAULT_ANTIGRAVITY_MODEL } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
-import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
-import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
+import { getEnvironmentStatus, loadEnvironmentSmart } from './utils/envLoader.js';
+import { getManualSetupInstructions, getMCPStatus, setupCGMBMCP } from './utils/mcpConfigManager.js';
 import path from 'path';
 import { dirname as pathDirname, join as pathJoin } from 'path';
 import { fileURLToPath as toPath } from 'url';
@@ -2048,9 +2048,9 @@ program
       const fileRefs = files.map((file: string) => {
         const ext = path.extname(file).toLowerCase();
         let type: string = 'document';
-        if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) type = 'image';
-        else if (['.pdf'].includes(ext)) type = 'pdf';
-        else if (['.mp3', '.wav', '.m4a'].includes(ext)) type = 'audio';
+        if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) {type = 'image';}
+        else if (['.pdf'].includes(ext)) {type = 'pdf';}
+        else if (['.mp3', '.wav', '.m4a'].includes(ext)) {type = 'audio';}
         return { path: file, type };
       });
       

@@ -84,7 +84,7 @@ class Logger {
         console: !productionMode || debugMode, // Always show console in debug mode
         json: productionMode && !debugMode,
       };
-      Logger.instance = new Logger(config || defaultConfig);
+      Logger.instance = new Logger(config ?? defaultConfig);
     }
     return Logger.instance;
   }

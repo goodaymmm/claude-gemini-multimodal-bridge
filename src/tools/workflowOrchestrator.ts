@@ -161,11 +161,11 @@ export class WorkflowOrchestrator {
         action: step.action,
         layer: step.layer,
         input: step.input,
-        dependsOn: step.dependsOn || [],
+        dependsOn: step.dependsOn ?? [],
         timeout: 120000, // 2 minutes per step
       })),
-      parallel: options?.parallel || false,
-      continueOnError: options?.continueOnError || false,
+      parallel: options?.parallel ?? false,
+      continueOnError: options?.continueOnError ?? false,
       timeout: options?.timeout || this.MAX_WORKFLOW_DURATION,
     };
     
@@ -285,7 +285,7 @@ export class WorkflowOrchestrator {
         const sortedSteps = this.topologicalSort(workflow.steps);
         
         // Group steps by execution phase (for parallel execution)
-        const executionPhases = this.groupStepsByPhase(sortedSteps, workflow.parallel || false);
+        const executionPhases = this.groupStepsByPhase(sortedSteps, workflow.parallel ?? false);
         
         // Estimate resources for each step
         const resourceEstimates = await this.estimateResources(sortedSteps);

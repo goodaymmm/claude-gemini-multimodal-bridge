@@ -313,7 +313,7 @@ export class MCPConfigManager {
       logger.info('Generated CGMB configuration', {
         command: cgmbConfig.command,
         args: cgmbConfig.args,
-        env: Object.keys(cgmbConfig.env || {})
+        env: Object.keys(cgmbConfig.env ?? {})
       });
       
       // Add CGMB configuration to existing config
@@ -351,7 +351,7 @@ export class MCPConfigManager {
         success: true,
         message: `Successfully ${action} CGMB configuration in Claude Code`,
         configPath,
-        backupPath: backupPath !== null ? backupPath : undefined,
+        backupPath: backupPath ?? undefined,
         action
       };
 
@@ -430,7 +430,7 @@ export class MCPConfigManager {
         success: true,
         message: 'Successfully removed CGMB configuration from Claude Code',
         configPath,
-        backupPath: backupPath !== null ? backupPath : undefined,
+        backupPath: backupPath ?? undefined,
         action: 'updated'
       };
 
@@ -622,8 +622,8 @@ export async function setupCGMBMCP(options: {
   }
   
   return manager.addCGMBConfiguration({
-    force: options.force || false,
-    dryRun: options.dryRun || false
+    force: options.force ?? false,
+    dryRun: options.dryRun ?? false
   });
 }
 

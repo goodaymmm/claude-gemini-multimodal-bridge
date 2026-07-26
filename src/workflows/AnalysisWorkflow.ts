@@ -386,7 +386,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
       input: {
         prompt: `Perform ${analysisType} analysis of the extracted content. Identify themes, patterns, and key insights.`,
         context: 'Multimodal: {{extract_multimodal_content}}, Documents: {{extract_document_content}}',
-        depth: options?.depth || 'medium',
+        depth: options?.depth ?? 'medium',
       },
       dependsOn: ['extract_multimodal_content', 'extract_document_content'].filter(dep => 
         steps.some(step => step.id === dep)

@@ -49,7 +49,7 @@ export class SmartEnvLoader {
     }
 
     const { verbose = false } = options;
-    const searchPaths = options.searchPaths || await this.getDefaultSearchPaths();
+    const searchPaths = options.searchPaths ?? await this.getDefaultSearchPaths();
     
     this.loadResult = {
       success: false,
@@ -94,7 +94,7 @@ export class SmartEnvLoader {
             if (verbose) {
               logger.info('Successfully loaded .env file', { 
                 path: envPath,
-                variablesLoaded: Object.keys(result.parsed || {}).length
+                variablesLoaded: Object.keys(result.parsed ?? {}).length
               });
             }
             

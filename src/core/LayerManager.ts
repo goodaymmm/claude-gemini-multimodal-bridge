@@ -276,7 +276,7 @@ export class LayerManager {
       const result = await antigravityLayer.execute({
         type: 'text_processing',
         prompt,
-        files: files || [],
+        files: files ?? [],
         useSearch: true // Enable search by default for current information
       });
 
@@ -733,7 +733,7 @@ export class LayerManager {
     // NEW: Check for file paths embedded in prompt (Windows + Unix)
     // If paths found, this is not a simple prompt - needs file processing
     const filePathRegex = /(?:[A-Za-z]:\\[^\s"'<>|]+\.[a-zA-Z0-9]+|\/(?!https?:)[^\s"'<>|]+\.[a-zA-Z0-9]+|\.\.?\/[^\s"'<>|]+\.[a-zA-Z0-9]+)/gi;
-    const embeddedPaths = prompt.match(filePathRegex) || [];
+    const embeddedPaths = prompt.match(filePathRegex) ?? [];
 
     if (embeddedPaths.length > 0) {
       logger.debug('File paths detected in prompt - not simple', { paths: embeddedPaths });
@@ -837,7 +837,7 @@ export class LayerManager {
           action: 'analyze',
           prompt,
           files,
-          options: options || {}
+          options: options ?? {}
         });
 
         // Convert to WorkflowResult format
@@ -870,7 +870,7 @@ export class LayerManager {
     const executionPlan = await this.createWorkflowPlan(workflow, {
       prompt,
       files,
-      options: options || {},
+      options: options ?? {},
     });
 
     // Execute the workflow
@@ -878,7 +878,7 @@ export class LayerManager {
       executionPlan,
       { prompt, files },
       {
-        executionMode: options?.execution_mode || 'adaptive',
+        executionMode: options?.execution_mode ?? 'adaptive',
         timeout: options?.timeout || 300000,
       }
     );
@@ -949,7 +949,7 @@ export class LayerManager {
     };
 
     return this.executeWorkflow(executionPlan, { documents, analysisType }, {
-      executionMode: options?.execution_mode || 'sequential',
+      executionMode: options?.execution_mode ?? 'sequential',
       timeout: options?.timeout || 300000,
     });
   }
@@ -1676,7 +1676,7 @@ export class LayerManager {
       visiting.add(step.id);
 
       // Visit dependencies first
-      const dependencies = step.dependsOn || [];
+      const dependencies = step.dependsOn ?? [];
       for (const depId of dependencies) {
         const depStep = steps.find(s => s.id === depId);
         if (depStep) {
@@ -1703,7 +1703,7 @@ export class LayerManager {
     while (processed.size < steps.length) {
       const currentLevel = steps.filter(step => {
         if (processed.has(step.id)) {return false;}
-        const dependencies = step.dependsOn || [];
+        const dependencies = step.dependsOn ?? [];
         return dependencies.every(dep => processed.has(dep));
       });
 

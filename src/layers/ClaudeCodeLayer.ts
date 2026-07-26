@@ -192,7 +192,7 @@ export class ClaudeCodeLayer implements LayerInterface {
             result = await this.synthesizeResponse(task);
             break;
           case 'workflow':
-            const workflowResult = await this.orchestrateWorkflow(task.workflow || task);
+            const workflowResult = await this.orchestrateWorkflow(task.workflow ?? task);
             result = workflowResult.summary || 'Workflow completed';
             break;
           default:
@@ -229,7 +229,7 @@ export class ClaudeCodeLayer implements LayerInterface {
       async () => {
         logger.debug('Executing complex reasoning task', {
           promptLength: task.prompt?.length || 0,
-          depth: task.depth || 'medium',
+          depth: task.depth ?? 'medium',
           domain: task.domain,
         });
 

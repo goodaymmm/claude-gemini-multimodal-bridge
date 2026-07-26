@@ -31,7 +31,7 @@ import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { TimeoutManager } from '../utils/TimeoutManager.js';
-import { isPlatformWindows, normalizeCrossPlatformPath, isUrl } from '../utils/platformUtils.js';
+import { isPlatformWindows, isUrl, normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
 
@@ -567,7 +567,7 @@ export class AIStudioLayer implements LayerInterface {
     logger.info('Generating image using GeminiCLI translation + MCP pattern', {
       promptLength: prompt.length,
       model: AI_MODELS.IMAGE_GENERATION,
-      quality: options.quality || 'standard'
+      quality: options.quality ?? 'standard'
     });
 
     const startTime = Date.now();
@@ -693,8 +693,8 @@ export class AIStudioLayer implements LayerInterface {
       const mcpResult = await this.executeMCPCommand('generate_image', {
         prompt: processedPrompt,
         numberOfImages: options.numberOfImages || 1,
-        aspectRatio: options.aspectRatio || '1:1',
-        personGeneration: options.personGeneration || 'ALLOW',
+        aspectRatio: options.aspectRatio ?? '1:1',
+        personGeneration: options.personGeneration ?? 'ALLOW',
         model: AI_MODELS.IMAGE_GENERATION
       });
 
@@ -746,7 +746,7 @@ export class AIStudioLayer implements LayerInterface {
   async generateAudio(text: string, options: Partial<AudioGenOptions> = {}): Promise<MediaGenResult> {
     logger.info('Generating audio using MCP command (unified timeout pattern)', {
       textLength: text.length,
-      voice: options.voice || 'Kore',
+      voice: options.voice ?? 'Kore',
       format: 'wav',
       model: AI_MODELS.AUDIO_GENERATION
     });
@@ -757,7 +757,7 @@ export class AIStudioLayer implements LayerInterface {
       // Use MCP command (matches working timeout pattern from image/PDF analysis)
       const mcpResult = await this.executeMCPCommand('generate_audio', {
         text,
-        voice: options.voice || 'Kore',
+        voice: options.voice ?? 'Kore',
         model: AI_MODELS.AUDIO_GENERATION
       });
 
@@ -780,14 +780,14 @@ export class AIStudioLayer implements LayerInterface {
           model: AI_MODELS.AUDIO_GENERATION,
           settings: options,
           cost: this.calculateGenerationCost('audio', options),
-          voice: options.voice || 'Kore'
+          voice: options.voice ?? 'Kore'
         },
         media: {
           type: 'audio',
           data: audioData,
           metadata: {
             format: 'wav',
-            voice: options.voice || 'Kore'
+            voice: options.voice ?? 'Kore'
           }
         }
       };
@@ -2061,7 +2061,7 @@ export class AIStudioLayer implements LayerInterface {
    * Windows backslashes are converted to forward slashes for consistency
    */
   private normalizeInputPath(filePath: string): string {
-    if (!filePath) return filePath;
+    if (!filePath) {return filePath;}
     // Convert Windows backslashes to forward slashes for cross-platform compatibility
     return filePath.replace(/\\/g, '/');
   }

@@ -118,7 +118,7 @@ export class MultimodalProcess {
         prompt: instructions,
         files: [file],
         workflow: this.detectWorkflowType([file], instructions),
-        options: options || {},
+        options: options ?? {},
       }
     );
   }
@@ -455,13 +455,13 @@ export class MultimodalProcess {
           workflowType: args.workflow,
           files,
           instructions: args.prompt,
-          options: args.options || {},
+          options: args.options ?? {},
         };
 
         logger.info('Executing multimodal workflow', {
           workflowType: args.workflow,
           fileCount: files.length,
-          optionsSet: Object.keys(args.options || {}).length,
+          optionsSet: Object.keys(args.options ?? {}).length,
         });
 
         // Execute through layer manager with intelligent routing

@@ -41,7 +41,7 @@ export class TimeoutManager {
       baseTimeout,
       multiplier,
       finalTimeout,
-      environmentType: options.environmentType || 'standard'
+      environmentType: options.environmentType ?? 'standard'
     });
 
     let timeoutId: NodeJS.Timeout | undefined;
@@ -70,7 +70,7 @@ export class TimeoutManager {
           });
           reject(new Error(
             `Operation "${options.name}" timed out after ${finalTimeout}ms ` +
-            `(${Math.round(elapsed/1000)}s elapsed, environment: ${options.environmentType || 'standard'})`
+            `(${Math.round(elapsed/1000)}s elapsed, environment: ${options.environmentType ?? 'standard'})`
           ));
         }, finalTimeout);
       });

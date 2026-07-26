@@ -173,7 +173,7 @@ export class IntelligentRouter {
       default:
         // Fall back to prompt analysis
         const result = this.determineSearchStrategy(prompt);
-        return result !== null ? result : true; // Default to true as per Gemini's recommendation
+        return result ?? true; // Default to true as per Gemini's recommendation
     }
   }
 }
@@ -194,6 +194,6 @@ export class LLMBasedRouter {
     
     // For now, fall back to heuristic approach
     const result = IntelligentRouter.determineSearchStrategy(prompt);
-    return result !== null ? result : true;
+    return result ?? true;
   }
 }
