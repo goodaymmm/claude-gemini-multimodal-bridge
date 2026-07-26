@@ -558,6 +558,18 @@ describe('inlined file safety', () => {
       'ASCII data behind a UTF-16 BOM must be refused however far the signature is shifted'
     );
 
+    // Japanese UTF-16 must be accepted. A byte-ratio heuristic added in an
+    // earlier round rejected it: U+4E2D (中) is bytes 2D 4E, both printable
+    // ASCII, and a normal Japanese document measured 48% such units.
+    const japanese = join(dir, 'japanese-utf16.txt');
+    writeFileSync(japanese, Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('中文文書テストです。これは正当な日本語の文書です。', 'utf16le'),
+    ]));
+    const jpBuilt = layer.extractPrompt(
+      { prompt: 'x', files: [{ path: japanese, type: 'text' }] }, dir);
+    assert.match(jpBuilt, /正当な日本語の文書/, 'Japanese UTF-16 must not be treated as binary');
+
     // Genuine UTF-16 text must still be accepted.
     const realUtf16 = join(dir, 'real-utf16.txt');
     writeFileSync(realUtf16, Buffer.concat([

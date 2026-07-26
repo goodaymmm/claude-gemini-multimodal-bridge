@@ -117,18 +117,21 @@ function decodeAsText(buffer: Buffer): string | undefined {
     return undefined;
   }
 
-  // Container signatures are searched in a short leading window, not just at
-  // offset 0.
+  // How far to search for a container signature depends on the encoding.
   //
-  // Matching only offset 0 of the body was still evadable: `FF FE 41 00` in
-  // front of `%PDF-1.4` decodes as valid UTF-16 with no control characters or
-  // surrogates, and pushes the signature to offset 2 where nothing looked. The
-  // window is deliberately tiny -- prose that happens to contain "%PDF" later
-  // in the file is unaffected.
-  const MAGIC_SEARCH_WINDOW = 8;
+  // For UTF-8, offset 0 is enough: a real PDF or ZIP starts with its
+  // signature, and scanning further would reject prose that merely mentions
+  // "%PDF-1.4" -- which a document about file formats legitimately does.
+  //
+  // A UTF-16 BOM is the evasion vector, because ASCII data behind one decodes
+  // to plausible-looking code points and any padding shifts the signature past
+  // a fixed offset. Genuine UTF-16 text cannot contain a contiguous ASCII
+  // signature (its bytes are interleaved with 0x00 or script bytes), so a wide
+  // scan there costs nothing and closes the hole.
+  const magicWindow = encoding === 'utf16le' ? 4096 : 0;
   for (const magic of BINARY_MAGIC) {
     for (const region of [buffer, body]) {
-      const limit = Math.min(MAGIC_SEARCH_WINDOW, region.length - magic.length);
+      const limit = Math.min(magicWindow, region.length - magic.length);
       for (let offset = 0; offset <= limit; offset++) {
         if (magic.every((byte, i) => region[offset + i] === byte)) {
           return undefined;
@@ -150,7 +153,6 @@ function decodeAsText(buffer: Buffer): string | undefined {
     // behind a UTF-16 BOM decodes to control characters and unpaired
     // surrogates rather than to NUL bytes.
     let control = 0;
-    let asciiPairs = 0;
 
     for (const char of text) {
       const code = char.codePointAt(0) ?? 0;
@@ -160,27 +162,25 @@ function decodeAsText(buffer: Buffer): string | undefined {
       if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d && code !== 0x0c) {
         control++;
       }
-      // Both halves printable ASCII means two ASCII bytes were read as one
-      // UTF-16 unit -- the signature of ASCII data wearing a UTF-16 BOM.
-      const low = code & 0xff;
-      const high = code >> 8;
-      if (low >= 0x20 && low <= 0x7e && high >= 0x20 && high <= 0x7e) {
-        asciiPairs++;
-      }
     }
 
     if (text.length > 0 && control / text.length >= 0.02) {
       return undefined;
     }
 
-    // Chasing signature offsets is a losing game: any fixed magic window can be
-    // evaded by shifting the payload one code unit further. This checks the
-    // property that made the evasion possible instead. Genuine UTF-16LE text
-    // has high bytes that are mostly 0x00 (Latin) or in script ranges, so a
-    // high proportion of ASCII/ASCII pairs means the file is not UTF-16 at all.
-    if (text.length >= 8 && asciiPairs / text.length >= 0.3) {
-      return undefined;
-    }
+    // No byte-ratio heuristic here, deliberately.
+    //
+    // An earlier version rejected content where both halves of a UTF-16 code
+    // unit were printable ASCII, on the theory that this marks ASCII data
+    // wearing a UTF-16 BOM. It does -- but it equally marks ordinary CJK text:
+    // U+4E2D (中) is bytes 2D 4E, both printable. A normal Japanese document
+    // measured 48% such units and was refused outright.
+    //
+    // Byte statistics cannot separate the two cases: ASCII pairs decode into
+    // the same CJK ranges that genuine CJK text occupies. Container detection
+    // above is the control that remains, and a crafted file that evades it
+    // yields a wrong summary rather than anything executable -- a far smaller
+    // cost than rejecting every CJK document.
 
     return text;
   }
@@ -967,15 +967,16 @@ export class AntigravityCLILayer implements LayerInterface {
         );
       }
 
-      // One file descriptor for validation and reading.
+      // One file descriptor, and every check bound to that handle.
       //
-      // Previously the path was resolved with realpathSync, checked, then
-      // re-opened by statSync and again by readFileSync. Between those calls a
-      // concurrent process could swap notes.txt for a symlink to a secret: the
-      // name and root checks had already passed against the old target, and the
-      // new one was what got read and transmitted. A file that grew after the
-      // stat could likewise defeat the size limit. Opening once and using the
-      // same handle for fstat and the bounded read removes the window.
+      // Two rounds of narrowing led here. Validating the path with realpathSync
+      // and then re-opening it left a window in which a concurrent process
+      // could swap the file -- or an ancestor directory -- for a symlink to a
+      // secret: the name and root checks had passed against the old target
+      // while open() followed the new one. Checking fstat and reading through
+      // the same descriptor closes the fstat/read race, and re-deriving the
+      // real path *from the open handle* closes the resolve/open race, because
+      // that path describes the object actually opened.
       let fd: number;
       try {
         fd = openSync(resolvedPath, 'r');
@@ -995,6 +996,30 @@ export class AntigravityCLILayer implements LayerInterface {
           );
         }
 
+        // Re-verify against what was actually opened, not what was resolved
+        // earlier. A swap between resolve and open changes this result.
+        const openedPath = realpathSync(resolvedPath);
+        if (openedPath !== resolvedPath) {
+          throw new Error(
+            `${basename(file.path)} changed while it was being opened; refusing to send it.`
+          );
+        }
+
+        const openedRelative = relativePath(workspaceRoot, openedPath);
+        if (openedRelative.startsWith('..') || isAbsolute(openedRelative)) {
+          throw new Error(
+            `Refusing to send ${basename(file.path)}: it resolves to ${openedPath}, ` +
+            `outside the workspace root ${workspaceRoot}.`
+          );
+        }
+
+        if (SECRET_FILE_PATTERNS.some(pattern => pattern.test(basename(openedPath)))) {
+          throw new Error(
+            `Refusing to send ${basename(openedPath)} to the Antigravity CLI: it matches a ` +
+            `credential file pattern.`
+          );
+        }
+
         if (stats.size > MAX_INLINED_FILE_BYTES) {
           throw new Error(
             `${basename(file.path)} is ${stats.size} bytes, over the ` +
@@ -1003,18 +1028,40 @@ export class AntigravityCLILayer implements LayerInterface {
           );
         }
 
-        // Read one byte past the limit so growth between fstat and read is
-        // detected rather than silently truncated.
+        // Read to EOF, one byte past the limit.
+        //
+        // readSync may return fewer bytes than requested before EOF -- normal
+        // on network and FUSE filesystems -- so a single call could hand the
+        // model the first fragment of a document and report success. Loop until
+        // it returns 0.
         const buffer = Buffer.allocUnsafe(MAX_INLINED_FILE_BYTES + 1);
-        const read = readSync(fd, buffer, 0, buffer.length, 0);
+        let total = 0;
+        for (;;) {
+          const read = readSync(fd, buffer, total, buffer.length - total, total);
+          if (read === 0) {
+            break;
+          }
+          total += read;
+          if (total >= buffer.length) {
+            break;
+          }
+        }
 
-        if (read > MAX_INLINED_FILE_BYTES) {
+        if (total > MAX_INLINED_FILE_BYTES) {
           throw new Error(
             `${basename(file.path)} grew past the ${MAX_INLINED_FILE_BYTES}-byte limit while being read.`
           );
         }
 
-        bytes = Buffer.from(buffer.subarray(0, read));
+        if (total !== stats.size) {
+          // Shrunk or grew mid-read: the content is not what was validated.
+          throw new Error(
+            `${basename(file.path)} changed size while being read ` +
+            `(expected ${stats.size} bytes, read ${total}); refusing to send it.`
+          );
+        }
+
+        bytes = Buffer.from(buffer.subarray(0, total));
       } finally {
         closeSync(fd);
       }

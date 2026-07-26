@@ -1025,9 +1025,15 @@ program
         const result = await processor.processSingleFile(
           options.file,
           options.prompt,
-          { timeout: parseInt(options.timeout) }
+          { timeout: parseInt(options.timeout) },
+          { trustedWorkspaceRoot: commonParentDirectory([options.file]) }
         );
-        
+
+        if (!result.success) {
+          logger.error('❌ File processing test failed', new Error(result.error ?? 'unknown error'));
+          process.exit(1);
+        }
+
         logger.info('✅ File processing test completed successfully!');
         logger.info(`Result: ${result.content.substring(0, 200)}...`);
         logger.info(`Processing time: ${result.processing_time}ms`);
@@ -1043,7 +1049,12 @@ program
           workflow: 'analysis',
           options: { timeout: parseInt(options.timeout) }
         });
-        
+
+        if (!result.success) {
+          logger.error('❌ Text processing test failed', new Error(result.error ?? 'unknown error'));
+          process.exit(1);
+        }
+
         logger.info('✅ Text processing test completed successfully!');
         logger.info(`Result: ${result.content.substring(0, 200)}...`);
         logger.info(`Processing time: ${result.processing_time}ms`);
@@ -1479,18 +1490,27 @@ program
       
       const files = options.files ? options.files.map((path: string) => ({ path, type: 'document' })) : [];
       
-      const result = await processor.processMultimodal({
-        prompt: options.prompt,
-        files,
-        workflow: options.workflow,
-        options: {
-          layer_priority: options.strategy === 'claude-first' ? 'claude' :
-                         options.strategy === 'gemini-first' ? 'antigravity' :
-                         options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
-          detailed: true
-        }
-      });
-      
+      const result = await processor.processMultimodal(
+        {
+          prompt: options.prompt,
+          files,
+          workflow: options.workflow,
+          options: {
+            layer_priority: options.strategy === 'claude-first' ? 'claude' :
+                           options.strategy === 'gemini-first' ? 'antigravity' :
+                           options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
+            detailed: true
+          }
+        },
+        { trustedWorkspaceRoot: commonParentDirectory(files.map((f: FileReference) => f.path)) }
+      );
+
+      if (!result.success) {
+        logger.error('❌ Multimodal processing failed', new Error(result.error ?? 'unknown error'));
+        console.error(result.content || 'Processing failed');
+        process.exit(1);
+      }
+
       logger.info('✅ Multimodal processing completed');
       console.log('\n📋 Result:');
       console.log('═'.repeat(50));

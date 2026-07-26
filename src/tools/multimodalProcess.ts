@@ -115,16 +115,20 @@ export class MultimodalProcess {
   async processSingleFile(
     filePath: string,
     instructions: string,
-    options?: ProcessingOptions
+    options?: ProcessingOptions,
+    context: ExecutionContext = {}
   ): Promise<MultimodalProcessResult> {
     const file = await this.createFileReference(filePath);
-    
-    return this.processMultimodal({
-      prompt: instructions,
-      files: [file],
-      workflow: this.detectWorkflowType([file], instructions),
-      options: options || {},
-    });
+
+    return this.processMultimodal(
+      {
+        prompt: instructions,
+        files: [file],
+        workflow: this.detectWorkflowType([file], instructions),
+        options: options || {},
+      },
+      context
+    );
   }
 
   /**
