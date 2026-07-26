@@ -1823,9 +1823,6 @@ export class LayerManager {
     });
 
     try {
-      // Get the appropriate layer
-      const layer = await this.getLayerAsync(step.layer);
-      
       // Prepare the execution parameters
       const executionParams = {
         type: this.mapActionToTaskType(step.action),
