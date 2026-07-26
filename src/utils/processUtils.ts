@@ -1,4 +1,6 @@
 import { execFileSync } from 'child_process';
+import { realpathSync } from 'fs';
+import { isAbsolute, join, relative, resolve } from 'path';
 
 /**
  * Safe, shell-free invocation of external commands on every platform.
@@ -31,17 +33,52 @@ export interface SpawnTarget {
 
 const isWindows = (): boolean => process.platform === 'win32';
 
+/**
+ * True when a discovered executable must not be run.
+ *
+ * Windows `where` lists the current directory before PATH -- verified: with an
+ * agy.cmd present, `where agy` returns it ahead of the real installation. Any
+ * discovery that trusts result[0] therefore executes whatever the working tree
+ * contains, inheriting the full environment including API keys. The path is
+ * canonicalised first so a symlink or junction cannot point back inside.
+ */
+export function isUntrustedBinaryLocation(candidate: string): boolean {
+  const cwd = realpathOrSelf(resolve(process.cwd()));
+  const resolved = realpathOrSelf(resolve(candidate));
+  const rel = relative(cwd, resolved);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function realpathOrSelf(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return target;
+  }
+}
+
 /** Quote a single argument for a cmd.exe command line. */
 function quoteForCmd(value: string): string {
   return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
 }
 
+/** Absolute path to the platform's command-lookup helper. */
+function lookupHelper(): string {
+  return isWindows()
+    ? join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'where.exe')
+    : '/usr/bin/which';
+}
+
 /**
- * Resolve a bare command name to a concrete path on Windows.
+ * Resolve a bare command name to a concrete, trusted path on Windows.
  *
  * Needed because a bare name may resolve to a `.cmd` shim, which has to be
- * detected before deciding how to launch it. Returns the input unchanged when
- * it already looks like a path, when resolution fails, or off Windows.
+ * detected before deciding how to launch it.
+ *
+ * Every candidate is filtered. Returning result[0] unconditionally meant a
+ * `claude.cmd` committed to a repository was executed by the auth probe and the
+ * version probe -- both of which run during server start-up, before the user
+ * asks for anything, and both inheriting the environment.
  */
 export function resolveWindowsCommand(command: string): string {
   if (!isWindows() || /[\\/]/.test(command) || /\.[a-z]+$/i.test(command)) {
@@ -49,14 +86,22 @@ export function resolveWindowsCommand(command: string): string {
   }
 
   try {
-    const output = execFileSync('where', [command], {
+    const output = execFileSync(lookupHelper(), [command], {
       encoding: 'utf8',
       timeout: 5000,
       stdio: 'pipe',
       windowsHide: true,
     });
-    const first = output.split('\n')[0]?.trim();
-    return first === undefined || first === '' ? command : first;
+
+    for (const line of output.split('\n')) {
+      const candidate = line.trim();
+      if (candidate === '' || isUntrustedBinaryLocation(candidate)) {
+        continue;
+      }
+      return candidate;
+    }
+
+    return command;
   } catch {
     return command;
   }

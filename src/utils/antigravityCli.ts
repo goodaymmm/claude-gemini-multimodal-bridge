@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
-import { isAbsolute as isAbsolutePath, join, relative as relativePath, resolve as resolvePath } from 'path';
+import { join } from 'path';
+import { isUntrustedBinaryLocation } from './processUtils.js';
 import { logger } from './logger.js';
 
 /**
@@ -175,23 +176,6 @@ async function probeVersion(candidate: string): Promise<string | undefined> {
   }
 }
 
-/**
- * True when a discovered path must not be executed.
- *
- * Windows `where` searches the current directory before PATH, and CreateProcess
- * does the same for a bare command name. Verified: with an `agy.cmd` in the
- * working directory, `where agy` returns it ahead of the real installation. A
- * repository containing that file would therefore run its own binary as soon as
- * CGMB was invoked from that directory -- with the full environment, API keys
- * included. Anything at or under the working directory is refused.
- */
-export function isUntrustedBinaryLocation(candidate: string): boolean {
-  const resolved = resolvePath(candidate);
-  const cwd = resolvePath(process.cwd());
-  const rel = relativePath(cwd, resolved);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolutePath(rel));
-}
-
 function candidateInstallPaths(): string[] {
   return process.platform === 'win32'
     ? [
@@ -299,22 +283,41 @@ export async function findAntigravityBinary(
 
   // 3. Platform path lookup (async: see runCommand)
   try {
-    // Absolute path for the lookup helper itself.
-    //
-    // A planted where.exe in the working directory did NOT take precedence in
-    // testing -- Node resolves a bare name against PATH, not cwd, when
-    // shell:false -- but naming the system copy removes any dependence on that
-    // behaviour holding across Node versions and platforms.
+    // Absolute path for the lookup helper itself. (A planted where.exe did not
+    // take precedence in testing -- Node resolves bare names against PATH, not
+    // cwd, with shell:false -- but naming the system copy removes any
+    // dependence on that behaviour.)
     const lookupCommand = isWindows
-      ? join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'where.exe')
-      : 'which';
+      ? join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'where.exe')
+      : '/usr/bin/which';
     const lookup = await runCommand(lookupCommand, ['agy'], 5000);
-    const firstPath = lookup.code === 0 ? lookup.stdout.split('\n')[0]?.trim() : undefined;
-    if (firstPath) {
-      const version = await probeVersion(firstPath);
+
+    // EVERY result is checked before it is executed.
+    //
+    // This probed result[0] directly. `where agy` lists the current directory
+    // first -- measured -- so an agy.exe committed to a repository was run by
+    // the version probe, which server dependency verification reaches
+    // automatically, with the full environment including API keys.
+    //
+    // A previous commit claimed this filter was in place. It was not: the
+    // edit silently failed to match and I did not verify it.
+    const found = lookup.code === 0
+      ? lookup.stdout.split('\n').map(line => line.trim()).filter(Boolean)
+      : [];
+
+    for (const candidate of found) {
+      if (isUntrustedBinaryLocation(candidate)) {
+        logger.warn(
+          'Ignoring an agy candidate inside the working directory; a binary there is not trusted.',
+          { path: candidate }
+        );
+        continue;
+      }
+
+      const version = await probeVersion(candidate);
       if (version) {
-        logger.debug('Found Antigravity CLI via path lookup', { path: firstPath, version });
-        return finish(toBinary(firstPath, version));
+        logger.debug('Found Antigravity CLI via path lookup', { path: candidate, version });
+        return finish(toBinary(candidate, version));
       }
     }
   } catch {

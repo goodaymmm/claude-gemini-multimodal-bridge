@@ -7,7 +7,6 @@ import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  isUntrustedBinaryLocation,
   isVersionAtLeast,
   looksLikeAgyBinary,
   MIN_AGY_VERSION,
@@ -15,7 +14,7 @@ import {
 import { LayerTypeSchema, TargetLayerSchema, narrowTrustedRoot, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer, isInlinableTextFile } from '../dist/layers/AntigravityCLILayer.js';
-import { buildSpawnTarget } from '../dist/utils/processUtils.js';
+import { buildSpawnTarget, isUntrustedBinaryLocation } from '../dist/utils/processUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === 'win32';
