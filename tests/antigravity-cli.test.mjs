@@ -364,6 +364,89 @@ describe('workspace isolation', () => {
   });
 });
 
+describe('AI Studio failure does not become a fabricated success', () => {
+  // The end-to-end form of the getFallbackOrder unit test below. Codex asked
+  // for exactly this: fail AI Studio for real and prove the request dies there
+  // rather than sliding to a layer that cannot read the files and answering
+  // from the prompt alone.
+
+  /** Replace a manager's layers with recording stubs. */
+  function stubLayers(manager, { aistudio, claude, antigravity }) {
+    const calls = { aistudio: [], claude: [], antigravity: [] };
+
+    const make = (name, behaviour) => ({
+      initialize: async () => {},
+      isAvailable: async () => true,
+      execute: async task => {
+        calls[name].push(task);
+        return behaviour(task);
+      },
+    });
+
+    manager.aiStudioLayer = make('aistudio', aistudio);
+    manager.claudeLayer = make('claude', claude);
+    manager.antigravityLayer = make('antigravity', antigravity);
+
+    // getXLayerAsync() caches a promise; seed it so the real constructors are
+    // never reached (they would want credentials and a subprocess).
+    manager.aiStudioLayerPromise = Promise.resolve(manager.aiStudioLayer);
+    manager.claudeLayerPromise = Promise.resolve(manager.claudeLayer);
+    manager.antigravityLayerPromise = Promise.resolve(manager.antigravityLayer);
+
+    manager.layerInitialized.aistudio = true;
+    manager.layerInitialized.claude = true;
+    manager.layerInitialized.antigravity = true;
+
+    return calls;
+  }
+
+  const succeed = data => () => ({ success: true, data, metadata: { layer: 'stub', duration: 1 } });
+  const fail = message => () => { throw new Error(message); };
+
+  it('fails a file-carrying request instead of routing it to a layer that cannot read files', async () => {
+    const manager = new LayerManager();
+    const calls = stubLayers(manager, {
+      aistudio: fail('AI Studio quota exceeded'),
+      claude: succeed('I have reviewed the documents.'),
+      antigravity: succeed('here is a search result'),
+    });
+
+    await assert.rejects(
+      () => manager.executeWithOptimalLayer({
+        type: 'multimodal',
+        prompt: 'Summarise the attached report',
+        files: [{ path: '/tmp/report.pdf', type: 'document' }],
+      }),
+      /cannot process files|no fallback layer can process files/i,
+      'the request must fail rather than be answered without the file'
+    );
+
+    assert.deepEqual(calls.claude, [], 'Claude must not be handed a file-carrying task');
+    assert.deepEqual(calls.antigravity, [], 'the search layer must not be handed one either');
+    assert.equal(calls.aistudio.length, 1, 'AI Studio should have been the one attempt');
+  });
+
+  it('still falls back normally for a text-only request', async () => {
+    // The guard must be scoped to files. If it also stopped text fallback it
+    // would take out the layer redundancy the router exists to provide.
+    const manager = new LayerManager();
+    const calls = stubLayers(manager, {
+      aistudio: fail('AI Studio down'),
+      claude: succeed('answered by Claude'),
+      antigravity: fail('agy down'),
+    });
+
+    const result = await manager.executeWithOptimalLayer({
+      type: 'text_processing',
+      prompt: 'Explain the difference between TCP and UDP',
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.data, 'answered by Claude');
+    assert.equal(calls.claude.length, 1, 'Claude must still be reachable for text');
+  });
+});
+
 describe('credential files never reach the AI Studio egress', () => {
   // Being able to read a file locally is not the same authorisation as sending
   // it to Google. AI Studio's MCP server readFileSync()s whatever path it is

@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { join } from 'path';
-import { isUntrustedBinaryLocation } from './processUtils.js';
+import { buildSpawnTarget, isUntrustedBinaryLocation, SpawnTarget } from './processUtils.js';
 import { logger } from './logger.js';
 
 /**
@@ -82,9 +82,25 @@ async function runCommand(
   timeoutMs: number
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
-    const child = spawn(command, args, {
+    // Go through buildSpawnTarget rather than spawning the path directly.
+    //
+    // A raw spawn cannot launch a .cmd or .bat shim on Windows -- it fails with
+    // EINVAL, which this function's caller then reports as "agy is not
+    // installed". An agy delivered as a batch shim was therefore undetectable,
+    // and the diagnosis pointed at the wrong problem. buildSpawnTarget already
+    // knows to route those through cmd.exe.
+    let target: SpawnTarget;
+    try {
+      target = buildSpawnTarget(command, args);
+    } catch (error) {
+      reject(error as Error);
+      return;
+    }
+
+    const child = spawn(target.file, target.args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      ...target.spawnOptions,
     });
 
     let stdout = '';
@@ -92,15 +108,44 @@ async function runCommand(
     let timedOut = false;
     let settled = false;
 
+    const settleTimedOut = (): void => {
+      if (settled) { return; }
+      settled = true;
+      clearTimeout(timer);
+
+      // Let go of the child's pipes and its handle.
+      //
+      // A grandchild inherits the write ends, so after the shim is killed the
+      // orphan keeps them open -- and an open pipe keeps this process's event
+      // loop alive. Probing a wedged agy therefore stopped the MCP server from
+      // ever exiting. Destroying the streams and unref'ing the child releases
+      // the loop; the orphan is already being SIGKILLed above.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref();
+
+      resolve({ stdout, stderr, code: null, timedOut: true });
+    };
+
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
+
       // Escalate only if the process is genuinely still alive. `child.killed`
       // only means a signal was delivered, so it cannot be used for this.
       setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) {
           child.kill('SIGKILL');
         }
+
+        // Settle on the timeout rather than waiting for 'close'.
+        //
+        // 'close' fires when the child's stdio streams close, and a grandchild
+        // inherits those pipes. Killing a cmd.exe shim therefore leaves the
+        // real process holding them open, and this promise never resolved at
+        // all -- the probe hung indefinitely instead of reporting a timeout,
+        // which is the exact failure the stdin work was meant to end.
+        settleTimedOut();
       }, 2000).unref();
     }, timeoutMs);
     timer.unref();
