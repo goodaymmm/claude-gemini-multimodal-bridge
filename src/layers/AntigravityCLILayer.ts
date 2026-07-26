@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
-import { closeSync, fstatSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { basename, isAbsolute, join, relative as relativePath } from 'path';
+import { basename, join } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
@@ -12,224 +12,6 @@ import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLe
 /**
  * Task interface for better type safety
  */
-/** Upper bound on inlined content from any single file. */
-const MAX_INLINED_FILE_CHARS = 100000;
-
-/**
- * Byte-level ceiling, checked with stat() before the file is opened.
- *
- * The character limit can only be applied after decoding, which is too late to
- * prevent the read itself from stalling the event loop. 4 bytes per character
- * is a generous allowance for UTF-8 so this never rejects a file the character
- * limit would have accepted.
- */
-const MAX_INLINED_FILE_BYTES = MAX_INLINED_FILE_CHARS * 4;
-
-/**
- * Upper bound across all inlined files in one request.
- *
- * A per-file cap alone let several documents add up without limit. The prompt
- * now travels on stdin so the 32767-character Windows command-line limit no
- * longer applies, but an unbounded prompt still wastes tokens and can exceed
- * the model's context, so the total stays capped.
- */
-const MAX_TOTAL_INLINED_CHARS = 200000;
-
-/**
- * Formats known to be binary. Everything else is decided by inspecting the
- * bytes.
- *
- * A closed allowlist was the wrong shape: it rejected .ts, .py, .sh, .sql,
- * .conf and extensionless files such as Dockerfile, LICENSE and .gitignore --
- * ordinary inputs for a developer tool. Naming what cannot be text is both
- * shorter and safer, because the content check below is the real gate.
- */
-const BINARY_FILE_EXTENSIONS = new Set([
-  'pdf', 'doc', 'docx', 'odt', 'rtf', 'pages',
-  'xls', 'xlsx', 'ods', 'numbers', 'ppt', 'pptx', 'odp', 'key',
-  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tiff', 'ico', 'psd',
-  'mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg', 'wma',
-  'mp4', 'mov', 'avi', 'webm', 'mkv', 'flv', 'wmv',
-  'zip', 'gz', 'tar', 'bz2', 'xz', '7z', 'rar',
-  'exe', 'dll', 'so', 'dylib', 'bin', 'class', 'jar', 'wasm',
-  'sqlite', 'db', 'woff', 'woff2', 'ttf', 'otf', 'eot',
-]);
-
-/** Leading bytes that identify common binary containers. */
-const BINARY_MAGIC: ReadonlyArray<readonly number[]> = [
-  [0x25, 0x50, 0x44, 0x46],        // %PDF
-  [0x50, 0x4b, 0x03, 0x04],        // ZIP / OOXML
-  [0x89, 0x50, 0x4e, 0x47],        // PNG
-  [0xff, 0xd8, 0xff],              // JPEG
-  [0x47, 0x49, 0x46, 0x38],        // GIF8
-  [0x1f, 0x8b],                    // gzip
-  [0x7f, 0x45, 0x4c, 0x46],        // ELF
-  [0x4d, 0x5a],                    // PE/MZ
-  [0xd0, 0xcf, 0x11, 0xe0],        // legacy Office
-];
-
-/**
- * True when a file's name does not mark it as a known binary format.
- *
- * Deliberately ignores FileReference.type: it is caller-supplied and arrives
- * from MCP input, so trusting it let a PDF labelled type:'text' through to be
- * read as UTF-8 and answered from mojibake. This is only a cheap first pass --
- * decodeAsText() inspects the actual bytes and is the real gate.
- */
-export function isInlinableTextFile(file: FileReference): boolean {
-  // basename() handles both separators, so no path parsing here.
-  const name = basename(file.path).toLowerCase();
-  const lastDot = name.lastIndexOf('.');
-
-  // No extension (Dockerfile, LICENSE) or a leading-dot name (.gitignore) is
-  // not a reason to reject: the byte check decides.
-  if (lastDot <= 0) {
-    return true;
-  }
-
-  return !BINARY_FILE_EXTENSIONS.has(name.slice(lastDot + 1));
-}
-
-/**
- * Decode raw bytes as text, or return undefined when they are not text.
- *
- * Works on the Buffer, and the BOM only selects a decoder -- it is never an
- * approval. Treating a BOM as proof let a binary with three bytes prepended
- * skip the magic, NUL and control-density checks entirely, and accepting a
- * UTF-16 BOM while still decoding as UTF-8 turned a legitimate document into
- * mojibake that the model answered as though it were prose.
- */
-function decodeAsText(buffer: Buffer): string | undefined {
-  if (buffer.length === 0) {
-    return '';
-  }
-
-  let encoding: BufferEncoding = 'utf8';
-  let body = buffer;
-
-  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
-    body = buffer.subarray(3);
-  } else if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
-    encoding = 'utf16le';
-    body = buffer.subarray(2);
-  } else if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
-    // Node cannot decode big-endian UTF-16; refuse rather than mangle it.
-    return undefined;
-  }
-
-  // How far to search for a container signature depends on the encoding.
-  //
-  // For UTF-8, offset 0 is enough: a real PDF or ZIP starts with its
-  // signature, and scanning further would reject prose that merely mentions
-  // "%PDF-1.4" -- which a document about file formats legitimately does.
-  //
-  // A UTF-16 BOM is the evasion vector, because ASCII data behind one decodes
-  // to plausible-looking code points and any padding shifts the signature past
-  // a fixed offset. Genuine UTF-16 text cannot contain a contiguous ASCII
-  // signature (its bytes are interleaved with 0x00 or script bytes), so a wide
-  // scan there costs nothing and closes the hole.
-  const magicWindow = encoding === 'utf16le' ? 4096 : 0;
-  for (const magic of BINARY_MAGIC) {
-    for (const region of [buffer, body]) {
-      const limit = Math.min(magicWindow, region.length - magic.length);
-      for (let offset = 0; offset <= limit; offset++) {
-        if (magic.every((byte, i) => region[offset + i] === byte)) {
-          return undefined;
-        }
-      }
-    }
-  }
-
-  if (encoding === 'utf16le') {
-    // An odd byte count cannot be UTF-16: decoding would silently drop the
-    // last byte.
-    if (body.length % 2 !== 0) {
-      return undefined;
-    }
-
-    const text = body.toString('utf16le');
-
-    // Validate the decoded code points, not the raw bytes: arbitrary binary
-    // behind a UTF-16 BOM decodes to control characters and unpaired
-    // surrogates rather than to NUL bytes.
-    let control = 0;
-
-    for (const char of text) {
-      const code = char.codePointAt(0) ?? 0;
-      if (code === 0 || (code >= 0xd800 && code <= 0xdfff)) {
-        return undefined;
-      }
-      if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d && code !== 0x0c) {
-        control++;
-      }
-    }
-
-    if (text.length > 0 && control / text.length >= 0.02) {
-      return undefined;
-    }
-
-    // No byte-ratio heuristic here, deliberately.
-    //
-    // An earlier version rejected content where both halves of a UTF-16 code
-    // unit were printable ASCII, on the theory that this marks ASCII data
-    // wearing a UTF-16 BOM. It does -- but it equally marks ordinary CJK text:
-    // U+4E2D (中) is bytes 2D 4E, both printable. A normal Japanese document
-    // measured 48% such units and was refused outright.
-    //
-    // Byte statistics cannot separate the two cases: ASCII pairs decode into
-    // the same CJK ranges that genuine CJK text occupies. Container detection
-    // above is the control that remains, and a crafted file that evades it
-    // yields a wrong summary rather than anything executable -- a far smaller
-    // cost than rejecting every CJK document.
-
-    return text;
-  }
-
-  // UTF-8: every byte is checked, not just a prefix -- a text header followed
-  // by a binary tail used to pass because only the first 8KB was sampled.
-  let control = 0;
-  for (const byte of body) {
-    if (byte === 0) {
-      return undefined;
-    }
-    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x0c) {
-      control++;
-    }
-  }
-  if (body.length > 0 && control / body.length >= 0.02) {
-    return undefined;
-  }
-
-  const text = body.toString('utf8');
-
-  // A fatal decode check: re-encoding a valid string round-trips. Mojibake
-  // from invalid UTF-8 does not.
-  if (!Buffer.from(text, 'utf8').equals(body)) {
-    return undefined;
-  }
-
-  return text;
-}
-
-/**
- * Files that must never be inlined into a prompt.
- *
- * Inlining sends contents to Antigravity's servers, so a mistaken or
- * manipulated path turns "analyse this file" into credential exfiltration that
- * looks like normal operation. `processFiles` classifies .env as 'config' and
- * rejects it today, but this guard sits at the point of actual disclosure so
- * the protection does not depend on every caller filtering first -- and it
- * still covers names that pass a type filter, such as secrets.txt.
- */
-const SECRET_FILE_PATTERNS = [
-  /^\.env(\..*)?$/i,
-  /^\.npmrc$/i,
-  /^\.netrc$/i,
-  /^id_(rsa|dsa|ecdsa|ed25519)$/i,
-  /^credentials(\..*)?$/i,
-  /^secrets?\.[a-z0-9]+$/i,
-  /\.(pem|key|pfx|p12|keystore|jks)$/i,
-];
 
 interface AntigravityTask {
   type?: string;
@@ -396,10 +178,7 @@ export class AntigravityCLILayer implements LayerInterface {
   /**
    * Main execution method
    */
-  async execute(
-    task: AntigravityTask,
-    options: { workspaceRoot?: string; workspaceBase?: string } = {}
-  ): Promise<LayerResult> {
+  async execute(task: AntigravityTask): Promise<LayerResult> {
     const startTime = Date.now();
 
     // Ensure initialization
@@ -407,16 +186,30 @@ export class AntigravityCLILayer implements LayerInterface {
       await this.initialize();
     }
 
+    // This layer is text-prompt only, and says so before doing any work.
+    //
+    // It used to silently drop task.files and answer from the prompt alone, so
+    // `cgmb analyze` falling back from AI Studio asked the CLI to summarise
+    // documents it had never been given -- a confident non-answer reported as
+    // success. Passing paths cannot work either: agy runs in an empty scratch
+    // directory with no access to the caller's files, by design. Failing here
+    // is the honest outcome; file work belongs to the AI Studio layer.
+    if (task.files && task.files.length > 0) {
+      throw new Error(
+        'The Antigravity CLI layer cannot process files; it accepts a text prompt only. ' +
+        'Use the AI Studio layer for documents and media (for example `cgmb analyze <file>`).'
+      );
+    }
+
     return safeExecute(
       async () => {
         logger.info('Executing Antigravity CLI task', {
           taskType: task.type ?? 'general',
           useSearch: task.useSearch !== false,
-          hasFiles: !!(task.files && task.files.length > 0),
           promptLength: task.prompt?.length ?? 0,
         });
 
-        const prompt = this.extractPrompt(task, options.workspaceRoot, options.workspaceBase);
+        const prompt = this.extractPrompt(task);
         if (!prompt.trim()) {
           throw new Error('No prompt provided for Antigravity CLI execution');
         }
@@ -503,59 +296,21 @@ export class AntigravityCLILayer implements LayerInterface {
   }
 
   /**
-   * Process files (basic support for text files)
+   * Not supported: this layer takes a text prompt and nothing else.
+   *
+   * Kept so callers that route file work here (cli.ts `cgmb gemini -f`) fail
+   * with an actionable message instead of a type error. Reading files and
+   * inlining them into the prompt was tried and removed: the feature existed
+   * only as a fallback for AI Studio, and making it safe -- binary sniffing,
+   * encoding detection, credential filtering, size budgets -- cost far more
+   * code than the fallback was worth. AI Studio handles files natively.
    */
-  /**
-   * @param workspaceRoot Root the files must live under. Callers that received
-   * the path from a human -- the CLI, where naming the file *is* the
-   * authorisation -- may widen this. Callers handling untrusted input (MCP
-   * requests) should pass their declared workingDirectory, or omit it to get
-   * the process working directory.
-   */
-  async processFiles(
-    files: FileReference[],
-    prompt: string,
-    workspaceRoot?: string
-  ): Promise<MultimodalResult> {
-    // One admission test, not two.
-    //
-    // This used to accept only type==='text' or a .txt/.md suffix, while
-    // extractPrompt accepts anything that is not a known binary format and
-    // decodes as text. The CLI sets type:'document' for `-f`, so
-    // `cgmb gemini -f module.ts` failed here with "only supports text files"
-    // even though the layer can read it perfectly well. Reusing the same
-    // predicate keeps the two paths from disagreeing again.
-    const textFiles = files.filter(isInlinableTextFile);
-
-    if (textFiles.length === 0) {
-      throw new Error(
-        'None of the requested files are text. The Antigravity CLI layer cannot read binary ' +
-        'formats; use the AI Studio layer for PDF, Office and image files.'
-      );
-    }
-
-    logger.debug('Processing text files with Antigravity CLI', {
-      fileCount: textFiles.length,
-      promptLength: prompt.length,
-    });
-
-    const result = await this.execute(
-      { type: 'multimodal', prompt, files: textFiles },
-      ...(workspaceRoot === undefined ? [] : [{ workspaceRoot }])
-    );
-
-    return {
-      content: result.data as string,
-      success: true,
-      files_processed: textFiles.map(f => f.path),
-      processing_time: result.metadata?.duration ?? 0,
-      workflow_used: 'analysis' as const,
-      layers_involved: ['antigravity'] as const,
-      metadata: {
-        total_duration: result.metadata?.duration ?? 0,
-        ...result.metadata,
-      },
-    };
+  processFiles(files: FileReference[], _prompt: string): Promise<MultimodalResult> {
+    const names = files.map(f => basename(f.path)).join(', ');
+    return Promise.reject(new Error(
+      `The Antigravity CLI layer cannot process files (${names}); it accepts a text prompt only. ` +
+      `Use the AI Studio layer instead -- for example \`cgmb analyze ${files[0]?.path ?? '<file>'}\`.`
+    ));
   }
 
   /**
@@ -879,271 +634,8 @@ export class AntigravityCLILayer implements LayerInterface {
   /**
    * Extract prompt from task (unified method)
    */
-  private extractPrompt(
-    task: AntigravityTask,
-    workspaceRootOverride?: string,
-    workspaceBase?: string
-  ): string {
-    const prompt = task.prompt ?? task.request ?? task.input ?? '';
-
-    if (!task.files || task.files.length === 0) {
-      return prompt;
-    }
-
-    // File contents must be inlined, not referenced by path.
-    //
-    // This used to pass only the prompt and drop task.files silently, so
-    // `cgmb analyze` falling back from AI Studio asked the CLI to summarise
-    // documents it had never been given. agy answered "which documents?" and
-    // the caller reported "Analysis complete" -- a confident non-answer.
-    // Paths cannot work either: the CLI runs in an empty scratch directory
-    // with no access to the caller's files, by design.
-    const sections: string[] = [];
-    let used = 0;
-
-    // Files must live under this root. Defaults to the process working
-    // directory, which is the project the operator invoked CGMB from; MCP
-    // callers should pass their declared workingDirectory instead.
-    // The root is a code-level argument, never a field on the task.
-    //
-    // It used to be read from task.workspaceRoot -- but workflow steps spread
-    // arbitrary caller-supplied input into the task, so an MCP caller could set
-    // workspaceRoot to a drive root and read anything on the machine. The
-    // control was bypassable by exactly the threat it existed to stop. Only
-    // trusted code paths (the CLI's explicit -f, a server-validated
-    // workingDirectory) may pass an override.
-    const requestedRoot = workspaceRootOverride?.trim()
-      ? workspaceRootOverride
-      : process.cwd();
-
-    let workspaceRoot: string;
-    try {
-      workspaceRoot = realpathSync(requestedRoot);
-    } catch (error) {
-      throw new Error(
-        `Could not resolve the workspace root ${requestedRoot}: ${(error as Error).message}`
-      );
-    }
-
-    // Re-check the root against the outer boundary now, not only when the
-    // request was accepted. A subdirectory that was inside the base at
-    // validation time can be swapped for a link to somewhere external before
-    // the files are read, silently moving the boundary.
-    if (workspaceBase !== undefined) {
-      let base: string;
-      try {
-        base = realpathSync(workspaceBase);
-      } catch {
-        base = workspaceBase;
-      }
-
-      const rootRelative = relativePath(base, workspaceRoot);
-      if (rootRelative.startsWith('..') || isAbsolute(rootRelative)) {
-        throw new Error(
-          `The workspace root ${workspaceRoot} is outside the trusted base ${base}; ` +
-          `refusing to read any files.`
-        );
-      }
-    }
-
-    for (const file of task.files) {
-      // Resolve symlinks first: a link innocuously named notes.txt can point at
-      // a credential file, and every check below would otherwise judge the link
-      // rather than what is actually about to be transmitted.
-      let resolvedPath: string;
-      try {
-        resolvedPath = realpathSync(file.path);
-      } catch (error) {
-        throw new Error(
-          `Could not resolve ${file.path} for Antigravity CLI processing: ${(error as Error).message}`
-        );
-      }
-
-      // Confine reads to the workspace root.
-      //
-      // The name denylist alone was never sufficient: it cannot enumerate every
-      // credential file, and anything readable outside the workspace --
-      // application_default_credentials.json, source trees, an unrelated
-      // repository -- could be inlined and transmitted on the strength of a
-      // caller-supplied absolute path. A prompt-injected MCP caller is exactly
-      // the threat. Root confinement is the primary control; the denylist stays
-      // as a second line for files inside the workspace.
-      const relative = relativePath(workspaceRoot, resolvedPath);
-      if (relative.startsWith('..') || isAbsolute(relative)) {
-        throw new Error(
-          `Refusing to send ${basename(file.path)} to the Antigravity CLI: it resolves to ` +
-          `${resolvedPath}, outside the workspace root ${workspaceRoot}. ` +
-          `Pass a workspaceRoot that contains the file if this is intended.`
-        );
-      }
-
-      // Credentials are checked before file type so the refusal names the real
-      // reason. A .env would otherwise be rejected merely as "not a text
-      // format", which tells the operator nothing about why it matters.
-      for (const candidate of [basename(file.path), basename(resolvedPath)]) {
-        if (SECRET_FILE_PATTERNS.some(pattern => pattern.test(candidate))) {
-          throw new Error(
-            `Refusing to send ${candidate} to the Antigravity CLI: it matches a credential file pattern. ` +
-            `File contents are transmitted to Antigravity's servers.`
-          );
-        }
-      }
-
-      // Only ever inline formats that are actually text.
-      //
-      // Reading a PDF or DOCX as UTF-8 yields mojibake, and the CLI answers it
-      // as if it were a document -- a plausible, wrong summary reported as
-      // success. LayerManager hands the original file list to this layer when
-      // AI Studio fails, so binaries genuinely arrive here.
-      if (!isInlinableTextFile(file)) {
-        throw new Error(
-          `The Antigravity CLI layer cannot read ${basename(file.path)}. ` +
-          `Only plain-text formats can be inlined; use the AI Studio layer for PDF, Office and image files.`
-        );
-      }
-
-      // One file descriptor, and every check bound to that handle.
-      //
-      // Two rounds of narrowing led here. Validating the path with realpathSync
-      // and then re-opening it left a window in which a concurrent process
-      // could swap the file -- or an ancestor directory -- for a symlink to a
-      // secret: the name and root checks had passed against the old target
-      // while open() followed the new one. Checking fstat and reading through
-      // the same descriptor closes the fstat/read race, and re-deriving the
-      // real path *from the open handle* closes the resolve/open race, because
-      // that path describes the object actually opened.
-      // Identity of the object that passed validation, captured before open.
-      // Comparing dev/ino after opening detects a swap that a second path
-      // resolution cannot: an attacker who points the path at a secret, lets
-      // open() follow it, then restores the original link produces a matching
-      // re-resolved path while the descriptor still holds the secret.
-      let validatedIdentity: { dev: number; ino: number } | undefined;
-      try {
-        const pre = lstatSync(resolvedPath);
-        validatedIdentity = { dev: pre.dev, ino: pre.ino };
-      } catch {
-        validatedIdentity = undefined;
-      }
-
-      let fd: number;
-      try {
-        fd = openSync(resolvedPath, 'r');
-      } catch (error) {
-        throw new Error(
-          `Could not read ${file.path} for Antigravity CLI processing: ${(error as Error).message}`
-        );
-      }
-
-      let bytes: Buffer;
-      try {
-        const stats = fstatSync(fd);
-
-        if (!stats.isFile()) {
-          throw new Error(
-            `${basename(file.path)} is not a regular file and will not be sent to the Antigravity CLI.`
-          );
-        }
-
-        // The descriptor must refer to the object that was validated. Identity
-        // comes from fstat on the open handle, so a path swapped and restored
-        // around open() cannot disguise it.
-        if (
-          validatedIdentity === undefined ||
-          stats.dev !== validatedIdentity.dev ||
-          stats.ino !== validatedIdentity.ino
-        ) {
-          throw new Error(
-            `${basename(file.path)} changed while it was being opened; refusing to send it.`
-          );
-        }
-
-        if (stats.size > MAX_INLINED_FILE_BYTES) {
-          throw new Error(
-            `${basename(file.path)} is ${stats.size} bytes, over the ` +
-            `${MAX_INLINED_FILE_BYTES}-byte limit for a single inlined file. ` +
-            `Split the document or use the AI Studio layer.`
-          );
-        }
-
-        // Read to EOF, one byte past the limit.
-        //
-        // readSync may return fewer bytes than requested before EOF -- normal
-        // on network and FUSE filesystems -- so a single call could hand the
-        // model the first fragment of a document and report success. Loop until
-        // it returns 0.
-        const buffer = Buffer.allocUnsafe(MAX_INLINED_FILE_BYTES + 1);
-        let total = 0;
-        for (;;) {
-          const read = readSync(fd, buffer, total, buffer.length - total, total);
-          if (read === 0) {
-            break;
-          }
-          total += read;
-          if (total >= buffer.length) {
-            break;
-          }
-        }
-
-        if (total > MAX_INLINED_FILE_BYTES) {
-          throw new Error(
-            `${basename(file.path)} grew past the ${MAX_INLINED_FILE_BYTES}-byte limit while being read.`
-          );
-        }
-
-        if (total !== stats.size) {
-          // Shrunk or grew mid-read: the content is not what was validated.
-          throw new Error(
-            `${basename(file.path)} changed size while being read ` +
-            `(expected ${stats.size} bytes, read ${total}); refusing to send it.`
-          );
-        }
-
-        bytes = Buffer.from(buffer.subarray(0, total));
-      } finally {
-        closeSync(fd);
-      }
-
-      {
-        // A permitted name is not proof of text: inspect the actual bytes.
-        // Answering mojibake produces a confident summary of noise.
-        const decoded = decodeAsText(bytes);
-        if (decoded === undefined) {
-          throw new Error(
-            `${basename(file.path)} is not text this layer can decode and will not be sent to the ` +
-            `Antigravity CLI. Use the AI Studio layer for binary formats.`
-          );
-        }
-
-        const content = decoded;
-
-        if (content.length > MAX_INLINED_FILE_CHARS) {
-          // Do not truncate silently: a summary or comparison built from part
-          // of a document is wrong in a way the caller cannot see.
-          throw new Error(
-            `${basename(file.path)} is ${content.length} characters, over the ` +
-            `${MAX_INLINED_FILE_CHARS}-character limit for a single inlined file. ` +
-            `Split the document or use the AI Studio layer.`
-          );
-        }
-
-        used += content.length;
-
-        if (used > MAX_TOTAL_INLINED_CHARS) {
-          // Likewise for the combined budget. Previously the loop logged a
-          // warning and broke, so files silently never reached the model while
-          // the caller still received a successful-looking answer.
-          throw new Error(
-            `The requested files total more than ${MAX_TOTAL_INLINED_CHARS} characters, ` +
-            `which exceeds what one Antigravity CLI request can carry. ` +
-            `Send fewer files per request.`
-          );
-        }
-
-        sections.push(`--- FILE: ${basename(file.path)} ---\n${content}`);
-      }
-    }
-
-    return `${prompt}\n\n${sections.join('\n\n')}`;
+  private extractPrompt(task: AntigravityTask): string {
+    return task.prompt ?? task.request ?? task.input ?? '';
   }
 
   /**

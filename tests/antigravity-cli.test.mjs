@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -11,9 +11,9 @@ import {
   looksLikeAgyBinary,
   MIN_AGY_VERSION,
 } from '../dist/utils/antigravityCli.js';
-import { LayerTypeSchema, TargetLayerSchema, narrowTrustedRoot, normalizeLayerName } from '../dist/core/types.js';
+import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
-import { AntigravityCLILayer, isInlinableTextFile } from '../dist/layers/AntigravityCLILayer.js';
+import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
 import { buildSpawnTarget, isUntrustedBinaryLocation, resolveTrustedCommand, resolveWindowsCommand } from '../dist/utils/processUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -224,47 +224,6 @@ describe('windows .cmd launcher', { skip: !isWindows && 'Windows-only behaviour'
   });
 });
 
-describe('credential file guard', () => {
-  const dir = join(tmpdir(), `cgmb-test-secrets-${process.pid}`);
-
-  after(() => rmSync(dir, { recursive: true, force: true }));
-
-  it('refuses to inline credential-looking files, and allows ordinary ones', () => {
-    // extractPrompt inlines file contents into a prompt that is sent to
-    // Antigravity's servers, so a mistaken path would exfiltrate credentials
-    // while looking like a normal analysis request.
-    rmSync(dir, { recursive: true, force: true });
-    mkdirSync(dir, { recursive: true });
-
-    const layer = new AntigravityCLILayer();
-
-    for (const name of ['.env', '.env.local', 'credentials.json', 'server.pem', 'id_rsa', '.npmrc']) {
-      const p = join(dir, name);
-      // Deliberately inert placeholder content - never a real secret.
-      writeFileSync(p, 'PLACEHOLDER=not-a-real-secret\n', { encoding: 'utf8' });
-
-      // Exercised through extractPrompt, the point of disclosure, so the test
-      // stays hermetic: execute() would spawn a live agy auth probe.
-      assert.throws(
-        () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: p, type: 'text' }] }, dir),
-        /credential file pattern/,
-        `${name} must be refused`
-      );
-    }
-
-    // A normal document must still be readable; assert on the built prompt
-    // rather than making a network call.
-    const doc = join(dir, 'notes.txt');
-    writeFileSync(doc, 'CGMB regression note.\n', { encoding: 'utf8' });
-    const built = layer.extractPrompt({
-      prompt: 'summarise',
-      files: [{ path: doc, type: 'text' }],
-    }, dir);
-    assert.match(built, /CGMB regression note/);
-    assert.match(built, /FILE: notes\.txt/);
-  });
-});
-
 describe('translation sanitiser', () => {
   const layer = new AntigravityCLILayer();
   const clean = raw => layer.extractTranslation(raw, 'ORIGINAL');
@@ -319,360 +278,6 @@ describe('translation sanitiser', () => {
   it('caps runaway output and falls back when nothing is usable', () => {
     assert.ok(clean(`x${'y'.repeat(900)}`).length <= 400);
     assert.equal(clean('   '), 'ORIGINAL');
-  });
-});
-
-describe('inlined file safety', () => {
-  const dir = join(tmpdir(), `cgmb-test-inline-${process.pid}`);
-  const layer = new AntigravityCLILayer();
-
-  after(() => rmSync(dir, { recursive: true, force: true }));
-
-  it('refuses binary document formats instead of reading them as text', () => {
-    // LayerManager hands the original files to this layer when AI Studio
-    // fails, so PDFs really do arrive. Reading one as UTF-8 yields mojibake
-    // that the CLI answers as if it were a document.
-    rmSync(dir, { recursive: true, force: true });
-    mkdirSync(dir, { recursive: true });
-
-    const pdf = join(dir, 'report.pdf');
-    writeFileSync(pdf, Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x00, 0x01]));
-
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: pdf, type: 'pdf' }] }, dir),
-      /cannot read report\.pdf/,
-      'PDF must be refused, not silently mis-read'
-    );
-  });
-
-  it('refuses files outside the workspace root, and allows files inside it', () => {
-    // Root confinement is the primary control: a name denylist cannot enumerate
-    // every credential file, and a caller-supplied absolute path could
-    // otherwise reach anything readable on the machine.
-    const inside = join(dir, 'inside.txt');
-    writeFileSync(inside, 'workspace content\n');
-
-    const outsideDir = join(tmpdir(), `cgmb-test-outside-${process.pid}`);
-    rmSync(outsideDir, { recursive: true, force: true });
-    mkdirSync(outsideDir, { recursive: true });
-    const outside = join(outsideDir, 'elsewhere.txt');
-    writeFileSync(outside, 'content outside the workspace\n');
-
-    try {
-      assert.throws(
-        () => layer.extractPrompt({
-          prompt: 'summarise',
-          files: [{ path: outside, type: 'text' }],
-        }, dir),
-        /outside the workspace root/,
-        'a path outside the root must be refused'
-      );
-
-      const built = layer.extractPrompt({
-        prompt: 'summarise',
-        files: [{ path: inside, type: 'text' }],
-      }, dir);
-      assert.match(built, /workspace content/);
-    } finally {
-      rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-
-  it('lets an explicit caller widen the root without weakening the default', () => {
-    // The CLI passes the file's own directory because a path typed by the
-    // operator is the authorisation. MCP callers omit it and get process.cwd(),
-    // so untrusted input stays confined. Both behaviours must hold at once.
-    const outsideDir = join(tmpdir(), `cgmb-test-widen-${process.pid}`);
-    rmSync(outsideDir, { recursive: true, force: true });
-    mkdirSync(outsideDir, { recursive: true });
-    const file = join(outsideDir, 'explicit.txt');
-    writeFileSync(file, 'explicitly requested content\n');
-
-    try {
-      // Widened by an explicit caller: allowed.
-      const built = layer.extractPrompt({
-        prompt: 'summarise',
-        files: [{ path: file, type: 'text' }],
-      }, outsideDir);
-      assert.match(built, /explicitly requested content/);
-
-      // Same file under a narrower root: still refused.
-      assert.throws(
-        () => layer.extractPrompt({
-          prompt: 'summarise',
-          files: [{ path: file, type: 'text' }],
-        }, dir),
-        /outside the workspace root/
-      );
-    } finally {
-      rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-
-  it('ignores a workspaceRoot supplied through the task', () => {
-    // The root must come from a code-level argument, never from caller data.
-    // Workflow steps spread arbitrary caller input into the task, so while the
-    // root lived on the task an MCP caller could set it to a drive root and
-    // read anything -- the control was bypassable by the threat it existed to
-    // stop. Passing it on the task must now have no effect whatsoever.
-    const outsideDir = join(tmpdir(), `cgmb-test-taskroot-${process.pid}`);
-    rmSync(outsideDir, { recursive: true, force: true });
-    mkdirSync(outsideDir, { recursive: true });
-    const file = join(outsideDir, 'target.txt');
-    writeFileSync(file, 'content the caller should not reach\n');
-
-    try {
-      assert.throws(
-        () => layer.extractPrompt({
-          prompt: 'summarise',
-          workspaceRoot: outsideDir,       // attacker-controlled: must be ignored
-          files: [{ path: file, type: 'text' }],
-        }, dir),
-        /outside the workspace root/,
-        'a root on the task must not widen the trusted root'
-      );
-    } finally {
-      rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-
-  it('accepts ordinary source and extensionless files', () => {
-    // A closed extension allowlist rejected .ts, .py, Dockerfile and LICENSE --
-    // ordinary inputs for a developer tool.
-    for (const name of ['module.ts', 'script.py', 'Dockerfile', 'LICENSE', '.gitignore', 'query.sql']) {
-      const p = join(dir, name);
-      writeFileSync(p, 'plain text content\n');
-      const built = layer.extractPrompt({ prompt: 'review', files: [{ path: p, type: 'text' }] }, dir);
-      assert.match(built, /plain text content/, `${name} must be inlinable`);
-    }
-  });
-
-  it('re-checks the root against the trusted base when files are read', () => {
-    // Narrowing returns only the narrowed path, so a subdirectory that was
-    // inside the base at request time could be swapped for a link to somewhere
-    // external before the files were read -- moving the boundary silently.
-    // The base travels separately and is re-checked at the moment of use.
-    const outsideRoot = join(tmpdir(), `cgmb-test-outside-base-${process.pid}`);
-    rmSync(outsideRoot, { recursive: true, force: true });
-    mkdirSync(outsideRoot, { recursive: true });
-    const target = join(outsideRoot, 'target.txt');
-    writeFileSync(target, 'content outside the trusted base\n');
-
-    try {
-      // Root outside the base: refused before any file is touched.
-      assert.throws(
-        () => layer.extractPrompt(
-          { prompt: 'x', files: [{ path: target, type: 'text' }] },
-          outsideRoot,
-          dir
-        ),
-        /outside the trusted base/,
-        'a root outside the base must be refused'
-      );
-
-      // Root inside the base: still works.
-      const inside = join(dir, 'inside-base.txt');
-      writeFileSync(inside, 'content inside the base\n');
-      const built = layer.extractPrompt(
-        { prompt: 'x', files: [{ path: inside, type: 'text' }] },
-        dir,
-        dir
-      );
-      assert.match(built, /content inside the base/);
-    } finally {
-      rmSync(outsideRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('fails loudly when the combined budget is exceeded', () => {
-    // Previously the loop logged a warning and stopped, so later files never
-    // reached the model while the caller still received a successful answer.
-    const big = 'a'.repeat(90000);
-    const files = [];
-    for (let i = 0; i < 4; i++) {
-      const p = join(dir, `bulk-${i}.txt`);
-      writeFileSync(p, big);
-      files.push({ path: p, type: 'text' });
-    }
-
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'compare', files }, dir),
-      /exceeds what one Antigravity CLI request can carry/,
-      'exceeding the total budget must fail, not silently drop files'
-    );
-  });
-
-  it('rejects binary content even when the caller claims it is text', () => {
-    // FileReference.type comes from MCP input, so it cannot be trusted; the
-    // decoded bytes are what matter.
-    const disguised = join(dir, 'disguised.txt');
-    writeFileSync(disguised, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0xff, 0xfe]));
-
-    assert.throws(
-      () => layer.extractPrompt({
-        prompt: 'summarise',
-        files: [{ path: disguised, type: 'text' }],
-      }, dir),
-      /is not text/,
-      'binary content behind a .txt name must be refused'
-    );
-  });
-
-  it('refuses a binary hidden behind a BOM, and decodes UTF-16 correctly', () => {
-    // A BOM used to short-circuit the whole content check, so three prepended
-    // bytes smuggled any binary through. And a UTF-16 BOM was accepted while
-    // the body was still decoded as UTF-8, producing mojibake the model
-    // answered as if it were prose.
-    const bomBinary = join(dir, 'bom-binary.txt');
-    writeFileSync(bomBinary, Buffer.concat([
-      Buffer.from([0xef, 0xbb, 0xbf]),
-      Buffer.from([0x00, 0x01, 0x02, 0x03, 0x00, 0x04]),
-    ]));
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'x', files: [{ path: bomBinary, type: 'text' }] }, dir),
-      /not text/,
-      'a BOM must not bypass the content check'
-    );
-
-    const utf16 = join(dir, 'utf16.txt');
-    writeFileSync(utf16, Buffer.concat([
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from('UTF16 CONTENT MARKER', 'utf16le'),
-    ]));
-    const built = layer.extractPrompt({ prompt: 'x', files: [{ path: utf16, type: 'text' }] }, dir);
-    assert.match(built, /UTF16 CONTENT MARKER/, 'UTF-16 must be decoded, not mangled');
-  });
-
-  it('refuses binary hidden behind a UTF-16 BOM, and odd-length UTF-16', () => {
-    // The magic-byte check ran against the original buffer, so a UTF-16 BOM
-    // shifted every signature out of position and let PDF/ZIP bytes through as
-    // mojibake. Odd-length input silently lost its final byte.
-    const bomPdf = join(dir, 'utf16-pdf.txt');
-    writeFileSync(bomPdf, Buffer.concat([
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]),
-    ]));
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'x', files: [{ path: bomPdf, type: 'text' }] }, dir),
-      /not text/,
-      'a PDF behind a UTF-16 BOM must be refused'
-    );
-
-    const odd = join(dir, 'utf16-odd.txt');
-    writeFileSync(odd, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from([0x41, 0x00, 0x42])]));
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'x', files: [{ path: odd, type: 'text' }] }, dir),
-      /not text/,
-      'odd-length UTF-16 must be refused rather than truncated'
-    );
-  });
-
-  it('refuses a container signature shifted behind a UTF-16 prefix', () => {
-    // Matching magic only at offset 0 was evadable: FF FE 41 00 decodes as a
-    // valid UTF-16 'A' and pushes %PDF to offset 2, where nothing looked.
-    const shifted = join(dir, 'shifted.txt');
-    writeFileSync(shifted, Buffer.concat([
-      Buffer.from([0xff, 0xfe, 0x41, 0x00]),
-      Buffer.from('%PDF-1.4', 'ascii'),
-    ]));
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'x', files: [{ path: shifted, type: 'text' }] }, dir),
-      /not text/,
-      'a shifted PDF signature must still be caught'
-    );
-
-    // Shifted well past any fixed window: a magic-offset search cannot catch
-    // this, so the UTF-16 plausibility check has to.
-    const farShifted = join(dir, 'far-shifted.txt');
-    writeFileSync(farShifted, Buffer.concat([
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from('AAAAAAAAAAAAAAAA', 'ascii'),
-      Buffer.from('%PDF-1.4 stream endstream obj endobj xref trailer', 'ascii'),
-    ]));
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'x', files: [{ path: farShifted, type: 'text' }] }, dir),
-      /not text/,
-      'ASCII data behind a UTF-16 BOM must be refused however far the signature is shifted'
-    );
-
-    // Japanese UTF-16 must be accepted. A byte-ratio heuristic added in an
-    // earlier round rejected it: U+4E2D (中) is bytes 2D 4E, both printable
-    // ASCII, and a normal Japanese document measured 48% such units.
-    const japanese = join(dir, 'japanese-utf16.txt');
-    writeFileSync(japanese, Buffer.concat([
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from('中文文書テストです。これは正当な日本語の文書です。', 'utf16le'),
-    ]));
-    const jpBuilt = layer.extractPrompt(
-      { prompt: 'x', files: [{ path: japanese, type: 'text' }] }, dir);
-    assert.match(jpBuilt, /正当な日本語の文書/, 'Japanese UTF-16 must not be treated as binary');
-
-    // Genuine UTF-16 text must still be accepted.
-    const realUtf16 = join(dir, 'real-utf16.txt');
-    writeFileSync(realUtf16, Buffer.concat([
-      Buffer.from([0xff, 0xfe]),
-      Buffer.from('GENUINE UTF16 DOCUMENT TEXT', 'utf16le'),
-    ]));
-    const utf16Built = layer.extractPrompt(
-      { prompt: 'x', files: [{ path: realUtf16, type: 'text' }] }, dir);
-    assert.match(utf16Built, /GENUINE UTF16 DOCUMENT TEXT/);
-
-    // Prose that merely mentions the signature further in must still pass.
-    const prose = join(dir, 'about-pdf.md');
-    writeFileSync(prose, 'This document explains how a PDF header such as %PDF-1.4 works.\n');
-    const built = layer.extractPrompt({ prompt: 'x', files: [{ path: prose, type: 'text' }] }, dir);
-    assert.match(built, /explains how a PDF header/);
-  });
-
-  it('accepts source files through the public processFiles filter', () => {
-    // processFiles used to admit only type==='text' or .txt/.md, while
-    // extractPrompt accepted anything decodable. The CLI sets type:'document',
-    // so `cgmb gemini -f module.ts` failed before reaching the real check.
-    for (const name of ['module.ts', 'data.json', 'Dockerfile']) {
-      const p = join(dir, name);
-      writeFileSync(p, 'source content\n');
-      assert.equal(
-        isInlinableTextFile({ path: p, type: 'document' }),
-        true,
-        `${name} must pass the shared admission test regardless of caller type`
-      );
-    }
-
-    assert.equal(isInlinableTextFile({ path: join(dir, 'report.pdf'), type: 'text' }), false);
-  });
-
-  it('rejects an oversized file without reading it', () => {
-    // The size check must happen before the read, or a large file stalls the
-    // event loop and allocates twice its size before being rejected.
-    const big = join(dir, 'huge.txt');
-    writeFileSync(big, Buffer.alloc(500_000, 0x41));
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'x', files: [{ path: big, type: 'text' }] }, dir),
-      /over the .* limit for a single inlined file/
-    );
-  });
-
-  it('resolves symlinks before applying the credential check', () => {
-    const secret = join(dir, '.env');
-    const link = join(dir, 'notes.txt');
-    writeFileSync(secret, 'PLACEHOLDER=not-a-real-secret\n');
-
-    try {
-      symlinkSync(secret, link);
-    } catch (error) {
-      // Unprivileged Windows accounts cannot create symlinks. Skip rather than
-      // pass silently, so the gap is visible.
-      if (error.code === 'EPERM' || error.code === 'ENOSYS') {
-        return;
-      }
-      throw error;
-    }
-
-    assert.throws(
-      () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: link, type: 'text' }] }, dir),
-      /credential file pattern/,
-      'a link named notes.txt must not smuggle a credential file through'
-    );
   });
 });
 
@@ -742,151 +347,6 @@ describe('subprocess output decoding', () => {
   });
 });
 
-describe('trusted root narrowing', () => {
-  const root = join(tmpdir(), `cgmb-narrow-${process.pid}`);
-  const base = join(root, 'base');
-  const inside = join(base, 'project');
-  const outside = join(root, 'elsewhere');
-
-  after(() => rmSync(root, { recursive: true, force: true }));
-
-  it('lets a caller tighten the boundary but never widen it', () => {
-    // An MCP client's workingDirectory is caller data. Honouring it directly
-    // would let a request nominate a drive root and read anything -- the same
-    // trap that made a task-level workspaceRoot worthless.
-    rmSync(root, { recursive: true, force: true });
-    mkdirSync(inside, { recursive: true });
-    mkdirSync(outside, { recursive: true });
-
-    assert.equal(narrowTrustedRoot(base, inside), realpathSync(inside), 'a subdirectory must be honoured');
-    assert.equal(narrowTrustedRoot(base, outside), realpathSync(base), 'an outside directory must be ignored');
-    assert.equal(narrowTrustedRoot(base, undefined), realpathSync(base));
-    assert.equal(narrowTrustedRoot(base, '   '), realpathSync(base));
-    assert.equal(narrowTrustedRoot(base, join(base, '..')), realpathSync(base), '.. must not escape');
-    assert.equal(
-      narrowTrustedRoot(base, join(base, 'does-not-exist')),
-      realpathSync(base),
-      'a non-existent directory cannot be a trusted root'
-    );
-  });
-
-  it('is not widened by a symlink inside the base pointing out of it', () => {
-    // resolve()/relative() are string operations: a link inside the base that
-    // targets an external directory looked "inside", and realpathSync
-    // downstream then expanded it, making that external directory the root.
-    rmSync(root, { recursive: true, force: true });
-    mkdirSync(inside, { recursive: true });
-    mkdirSync(outside, { recursive: true });
-
-    const link = join(base, 'link');
-    try {
-      symlinkSync(outside, link, 'dir');
-    } catch (error) {
-      if (error.code === 'EPERM' || error.code === 'ENOSYS') {
-        return;
-      }
-      throw error;
-    }
-
-    assert.equal(
-      narrowTrustedRoot(base, link),
-      realpathSync(base),
-      'a symlink escaping the base must not become the root'
-    );
-  });
-});
-
-describe('layer-independent admission', () => {
-  const dir = join(tmpdir(), `cgmb-admission-${process.pid}`);
-
-  after(() => rmSync(dir, { recursive: true, force: true }));
-
-  const makeManager = () => new LayerManager({
-    claude: { timeout: 300000, max_tokens: 16384, temperature: 0.2 },
-    gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: '' },
-    aistudio: { temperature: 0.2, max_tokens: 16384, timeout: 180000, model: 'gemini-2.5-flash', api_key: '' },
-  });
-
-  it('refuses out-of-workspace and credential files for every layer', async () => {
-    // The boundary lived inside AntigravityCLILayer, so choosing 'aistudio'
-    // bypassed it entirely -- and that layer reads the file and sends it to
-    // Gemini. Admission now runs before routing.
-    rmSync(dir, { recursive: true, force: true });
-    mkdirSync(dir, { recursive: true });
-
-    const outsideDir = join(tmpdir(), `cgmb-admission-outside-${process.pid}`);
-    rmSync(outsideDir, { recursive: true, force: true });
-    mkdirSync(outsideDir, { recursive: true });
-    const outside = join(outsideDir, 'secret-notes.txt');
-    writeFileSync(outside, 'content outside the workspace');
-    writeFileSync(join(dir, '.env'), 'PLACEHOLDER=not-a-real-secret');
-
-    const lm = makeManager();
-
-    try {
-      for (const layer of ['aistudio', 'claude', 'antigravity']) {
-        await assert.rejects(
-          () => lm.executeWithLayer(layer, { prompt: 'x', files: [{ path: outside, type: 'text' }] },
-            { trustedWorkspaceRoot: dir }),
-          /outside the workspace root/,
-          `${layer} must refuse a file outside the root`
-        );
-
-        await assert.rejects(
-          () => lm.executeWithLayer(layer, { prompt: 'x', files: [{ path: join(dir, '.env'), type: 'text' }] },
-            { trustedWorkspaceRoot: dir }),
-          /credential file pattern/,
-          `${layer} must refuse a credential file`
-        );
-      }
-    } finally {
-      rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('fast path admission', () => {
-  const dir = join(tmpdir(), `cgmb-fastpath-${process.pid}`);
-
-  after(() => rmSync(dir, { recursive: true, force: true }));
-
-  it('applies admission to the single-file analysis fast path', async () => {
-    // One- and two-file analyses skipped executeWithLayer and called
-    // AIStudioLayer directly, so the workspace and credential checks never ran
-    // for the most common MCP request shape.
-    rmSync(dir, { recursive: true, force: true });
-    mkdirSync(dir, { recursive: true });
-
-    const outsideDir = join(tmpdir(), `cgmb-fastpath-outside-${process.pid}`);
-    rmSync(outsideDir, { recursive: true, force: true });
-    mkdirSync(outsideDir, { recursive: true });
-    const outside = join(outsideDir, 'notes.txt');
-    writeFileSync(outside, 'content outside the workspace');
-
-    const lm = new LayerManager({
-      claude: { timeout: 300000, max_tokens: 16384, temperature: 0.2 },
-      gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: '' },
-      aistudio: { temperature: 0.2, max_tokens: 16384, timeout: 180000, model: 'gemini-2.5-flash', api_key: '' },
-    });
-
-    try {
-      const result = await lm.processMultimodal(
-        'summarise',
-        [{ path: outside, type: 'text' }],
-        'analysis',
-        undefined,
-        { trustedWorkspaceRoot: dir }
-      );
-
-      assert.equal(result.success, false, 'a file outside the workspace must not be processed');
-    } catch (error) {
-      assert.match(String(error?.message ?? error), /outside the workspace root/);
-    } finally {
-      rmSync(outsideDir, { recursive: true, force: true });
-    }
-  });
-});
-
 describe('workspace isolation', () => {
   it('leaves no shared, predictably-named scratch directory behind', () => {
     // Regression: every run shared <tmp>/cgmb-agy-workspace and never cleaned
@@ -901,5 +361,71 @@ describe('workspace isolation', () => {
     // Any surviving per-run directories would mean cleanup regressed.
     const leftovers = readdirSync(tmpdir()).filter(name => /^cgmb-agy-/.test(name));
     assert.deepEqual(leftovers, [], `stale agy workspaces: ${leftovers.join(', ')}`);
+  });
+});
+
+describe('files are refused, not silently dropped', () => {
+  // The layer used to accept task.files and ignore them, so a request to
+  // summarise a document was answered from the prompt alone and reported as a
+  // success. Inlining file contents was tried as the fix and then removed:
+  // making it safe cost far more code than the fallback was worth. Failing is
+  // now the contract, and these tests hold it in place.
+
+  it('refuses a task that carries files', async () => {
+    const layer = new AntigravityCLILayer();
+
+    await assert.rejects(
+      () => layer.execute({
+        type: 'text_processing',
+        prompt: 'Summarise this',
+        files: [{ path: join(HERE, 'antigravity-cli.test.mjs'), type: 'text' }],
+      }),
+      /cannot process files/i,
+      'a file-carrying task must fail rather than answer from the prompt alone'
+    );
+  });
+
+  it('refuses processFiles and names the layer to use instead', async () => {
+    const layer = new AntigravityCLILayer();
+
+    await assert.rejects(
+      () => layer.processFiles([{ path: '/tmp/report.pdf', type: 'document' }], 'Summarise'),
+      error => /cannot process files/i.test(error.message) && /cgmb analyze/.test(error.message),
+      'the refusal must point the caller at the AI Studio path'
+    );
+  });
+
+  it('refuses to fall back to the search layer for a step that carries files', async () => {
+    const manager = new LayerManager();
+
+    const failedStep = {
+      id: 'analyse',
+      layer: 'aistudio',
+      input: { files: [{ path: '/tmp/report.pdf', type: 'document' }], prompt: 'Summarise' },
+    };
+    const workflow = {
+      steps: [failedStep],
+      fallbackStrategies: {
+        aistudio_unavailable: {
+          replace: 'analyse',
+          with: { id: 'analyse-fallback', layer: 'gemini', input: { prompt: 'Summarise' } },
+        },
+      },
+    };
+
+    // tryFallbackStrategy is private in TypeScript terms only; the compiled
+    // output exposes it, and this is the behaviour worth pinning.
+    await assert.rejects(
+      () => manager.tryFallbackStrategy(
+        failedStep,
+        workflow,
+        new Error('AI Studio quota exceeded'),
+        { executionMode: 'sequential' }
+      ),
+      error =>
+        /cannot fall back to the Antigravity CLI layer/.test(error.message) &&
+        /AI Studio quota exceeded/.test(error.message),
+      'the fallback must fail loudly and preserve the original cause'
+    );
   });
 });

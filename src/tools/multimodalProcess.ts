@@ -1,5 +1,4 @@
 import {
-  ExecutionContext,
   FileReference,
   LayerResult,
   MultimodalFile,
@@ -52,12 +51,7 @@ export class MultimodalProcess {
   /**
    * Main multimodal processing method
    */
-  async processMultimodal(
-    args: MultimodalProcessArgs,
-    // Separate argument, not a field on args: MultimodalProcessArgs comes from
-    // MCP input, and a trusted root a caller can set is not a trust boundary.
-    context: ExecutionContext = {}
-  ): Promise<MultimodalProcessResult> {
+  async processMultimodal(args: MultimodalProcessArgs): Promise<MultimodalProcessResult> {
     return safeExecute(
       async () => {
         const startTime = Date.now();
@@ -78,7 +72,7 @@ export class MultimodalProcess {
         await this.verifyRequiredAuthentications(validatedArgs);
         
         // Execute processing workflow
-        const result = await this.executeWorkflow(validatedArgs, processedFiles, context);
+        const result = await this.executeWorkflow(validatedArgs, processedFiles);
         
         const totalDuration = Date.now() - startTime;
         
@@ -115,8 +109,7 @@ export class MultimodalProcess {
   async processSingleFile(
     filePath: string,
     instructions: string,
-    options?: ProcessingOptions,
-    context: ExecutionContext = {}
+    options?: ProcessingOptions
   ): Promise<MultimodalProcessResult> {
     const file = await this.createFileReference(filePath);
 
@@ -126,8 +119,7 @@ export class MultimodalProcess {
         files: [file],
         workflow: this.detectWorkflowType([file], instructions),
         options: options || {},
-      },
-      context
+      }
     );
   }
 
@@ -453,8 +445,7 @@ export class MultimodalProcess {
    */
   private async executeWorkflow(
     args: MultimodalProcessArgs,
-    files: MultimodalFile[],
-    context: ExecutionContext = {}
+    files: MultimodalFile[]
   ): Promise<WorkflowResult> {
     return retry(
       async () => {
@@ -474,7 +465,7 @@ export class MultimodalProcess {
         });
 
         // Execute through layer manager with intelligent routing
-        return await this.layerManager.processMultimodal(workflowTask.instructions, workflowTask.files, workflowTask.workflowType, workflowTask.options, context);
+        return await this.layerManager.processMultimodal(workflowTask.instructions, workflowTask.files, workflowTask.workflowType, workflowTask.options);
       },
       {
         maxAttempts: 3,

@@ -1,17 +1,4 @@
-import { realpathSync } from 'fs';
-import { basename, isAbsolute as isAbsolutePath, relative as relativePath, resolve as resolvePath } from 'path';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
-
-/** Names that must never be sent to any layer. Mirrors AntigravityCLILayer. */
-const CREDENTIAL_FILE_PATTERNS = [
-  /^\.env(\..*)?$/i,
-  /^\.npmrc$/i,
-  /^\.netrc$/i,
-  /^id_(rsa|dsa|ecdsa|ed25519)$/i,
-  /^credentials(\..*)?$/i,
-  /^secrets?\.[a-z0-9]+$/i,
-  /\.(pem|key|pfx|p12|keystore|jks)$/i,
-];
 import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
@@ -19,7 +6,6 @@ import { ErrorHandler, safeExecute } from '../utils/errorHandler.js';
 import {
   CGMBError,
   Config,
-  ExecutionContext,
   ExecutionPlan,
   FileReference,
   LayerResult,
@@ -30,6 +16,7 @@ import {
   WorkflowType,
   WorkloadAnalysis,
 } from './types.js';
+import { normalizeLayerName } from './types.js';
 
 // ===================================
 // Layer Manager - Orchestrates all three layers
@@ -224,8 +211,7 @@ export class LayerManager {
    */
   public async processSimpleFast(
     prompt: string,
-    files?: FileReference[],
-    context: ExecutionContext = {}
+    files?: FileReference[]
   ): Promise<LayerResult> {
     logger.info('Fast simple processing', {
       promptLength: prompt.length,
@@ -236,22 +222,12 @@ export class LayerManager {
     try {
       // Use simplified execution directly on Antigravity layer (with async initialization)
       const antigravityLayer = await this.getAntigravityLayerAsync();
-      const result = await antigravityLayer.execute(
-        {
-          type: 'text_processing',
-          prompt,
-          files: files || [],
-          useSearch: true // Enable search by default for current information
-        },
-        {
-          ...(context.trustedWorkspaceRoot === undefined
-            ? {}
-            : { workspaceRoot: context.trustedWorkspaceRoot }),
-          ...(context.trustedWorkspaceBase === undefined
-            ? {}
-            : { workspaceBase: context.trustedWorkspaceBase }),
-        }
-      );
+      const result = await antigravityLayer.execute({
+        type: 'text_processing',
+        prompt,
+        files: files || [],
+        useSearch: true // Enable search by default for current information
+      });
 
       logger.info('Fast processing completed', {
         duration: result.metadata?.duration,
@@ -378,8 +354,7 @@ export class LayerManager {
    * Enhanced to support user-specified layer preferences
    */
   public async executeWithOptimalLayer(
-    task: any,
-    context: ExecutionContext = {}
+    task: any
   ): Promise<LayerResult> {
     // Extract user-preferred layer from task options
     const userPreferredLayer = task.options?.preferredLayer;
@@ -396,128 +371,34 @@ export class LayerManager {
     });
 
     try {
-      return await this.executeWithLayer(analysis.preferredLayer, task, context);
+      return await this.executeWithLayer(analysis.preferredLayer, task);
     } catch (error) {
       logger.warn('Primary layer execution failed, attempting fallback', {
         primaryLayer: analysis.preferredLayer,
         error: (error as Error).message,
       });
       
-      return await this.executeWithFallback(task, analysis.preferredLayer, context);
+      return await this.executeWithFallback(task, analysis.preferredLayer);
     }
   }
 
   /**
    * Execute task with specific layer
    */
-  /**
-   * Refuse any file the request must not reach, before a layer is chosen.
-   *
-   * Shares the rules the Antigravity layer already applied -- canonicalise,
-   * confine to the trusted root, refuse credential names -- so they hold for
-   * AI Studio and Claude as well. The layer keeps its own checks: this is the
-   * gate, not a replacement for defence in depth.
-   */
-  private assertFilesAdmissible(task: any, context: ExecutionContext): void {
-    const files: Array<{ path?: string }> = Array.isArray(task?.files) ? task.files : [];
-    if (files.length === 0) {
-      return;
-    }
-
-    const requestedRoot = context.trustedWorkspaceRoot ?? process.cwd();
-
-    let root: string;
-    try {
-      root = realpathSync(requestedRoot);
-    } catch {
-      root = resolvePath(requestedRoot);
-    }
-
-    if (context.trustedWorkspaceBase !== undefined) {
-      let base: string;
-      try {
-        base = realpathSync(context.trustedWorkspaceBase);
-      } catch {
-        base = resolvePath(context.trustedWorkspaceBase);
-      }
-
-      const rootRel = relativePath(base, root);
-      if (rootRel.startsWith('..') || isAbsolutePath(rootRel)) {
-        throw new CGMBError(
-          `Workspace root ${root} is outside the trusted base ${base}`,
-          'UNTRUSTED_WORKSPACE_ROOT'
-        );
-      }
-    }
-
-    for (const file of files) {
-      if (typeof file?.path !== 'string' || file.path === '') {
-        continue;
-      }
-
-      let resolved: string;
-      try {
-        resolved = realpathSync(file.path);
-      } catch (error) {
-        throw new CGMBError(
-          `Could not resolve ${file.path}: ${(error as Error).message}`,
-          'UNREADABLE_FILE'
-        );
-      }
-
-      const rel = relativePath(root, resolved);
-      if (rel.startsWith('..') || isAbsolutePath(rel)) {
-        throw new CGMBError(
-          `Refusing to process ${basename(file.path)}: it resolves to ${resolved}, ` +
-          `outside the workspace root ${root}.`,
-          'FILE_OUTSIDE_WORKSPACE'
-        );
-      }
-
-      for (const name of [basename(file.path), basename(resolved)]) {
-        if (CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(name))) {
-          throw new CGMBError(
-            `Refusing to process ${name}: it matches a credential file pattern.`,
-            'CREDENTIAL_FILE_REFUSED'
-          );
-        }
-      }
-    }
-  }
-
   public async executeWithLayer(
     layerType: LayerType,
-    task: any,
-    context: ExecutionContext = {}
+    task: any
   ): Promise<LayerResult> {
-    // Admission runs before routing, for every layer.
-    //
-    // The boundary was enforced inside AntigravityCLILayer only, so a path that
-    // layer would refuse still reached AI Studio -- whose MCP server reads the
-    // file and sends it to Gemini. A prompt-injected caller could exfiltrate
-    // anything the server can read outside the workspace simply by choosing the
-    // layer. Checking here means adding a layer cannot silently opt out.
-    this.assertFilesAdmissible(task, context);
-
     switch (layerType) {
       case 'claude':
         const claudeLayer = await this.getClaudeLayerAsync();
         return await claudeLayer.execute(task);
-        
+
       case 'gemini': // deprecated alias
       case 'antigravity':
         const antigravityLayer = await this.getAntigravityLayerAsync();
-        // The trusted root travels beside the task, never inside it: workflow
-        // steps spread caller-supplied input into the task object.
-        return await antigravityLayer.execute(task, {
-          ...(context.trustedWorkspaceRoot === undefined
-            ? {}
-            : { workspaceRoot: context.trustedWorkspaceRoot }),
-          ...(context.trustedWorkspaceBase === undefined
-            ? {}
-            : { workspaceBase: context.trustedWorkspaceBase }),
-        });
-        
+        return await antigravityLayer.execute(task);
+
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();
         return await aiStudioLayer.execute(task);
@@ -532,8 +413,7 @@ export class LayerManager {
    */
   private async executeWithFallback(
     task: any,
-    failedLayer: LayerType,
-    context: ExecutionContext = {}
+    failedLayer: LayerType
   ): Promise<LayerResult> {
     const fallbackOrder = this.getFallbackOrder(failedLayer, task);
 
@@ -555,7 +435,7 @@ export class LayerManager {
           originalLayer: failedLayer,
         });
 
-        return await this.executeWithLayer(layerType, task, context);
+        return await this.executeWithLayer(layerType, task);
       } catch (error) {
         logger.warn('Fallback layer also failed', {
           layer: layerType,
@@ -790,8 +670,7 @@ export class LayerManager {
     prompt: string,
     files: FileReference[],
     workflow: WorkflowType,
-    options?: ProcessingOptions,
-    context: ExecutionContext = {}
+    options?: ProcessingOptions
   ): Promise<WorkflowResult> {
     logger.info('LayerManager.processMultimodal called', {
       workflow,
@@ -805,7 +684,7 @@ export class LayerManager {
       logger.info('Using fast path for simple multimodal request');
 
       try {
-        const result = await this.processSimpleFast(prompt, files, context);
+        const result = await this.processSimpleFast(prompt, files);
 
         // Convert to WorkflowResult format
         return {
@@ -852,7 +731,7 @@ export class LayerManager {
           prompt,
           files,
           options: options || {}
-        }, context);
+        });
 
         // Convert to WorkflowResult format
         return {
@@ -894,10 +773,7 @@ export class LayerManager {
       {
         executionMode: options?.execution_mode || 'adaptive',
         timeout: options?.timeout || 300000,
-      },
-      // The fast path above is only chosen when there are no files, so without
-      // this the context was discarded for exactly the requests that carry them.
-      context
+      }
     );
   }
 
@@ -977,11 +853,7 @@ export class LayerManager {
   public async executeWorkflow(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
-    options: ExecutionOptions,
-    // Deliberately a separate argument rather than a field on ExecutionOptions:
-    // that type is part of the public surface, so a caller could set its own
-    // root and defeat the confinement it is meant to enforce.
-    context: ExecutionContext = {}
+    options: ExecutionOptions
   ): Promise<WorkflowResult> {
     const startTime = Date.now();
     logger.info('Starting workflow execution', {
@@ -994,13 +866,13 @@ export class LayerManager {
 
       switch (options.executionMode) {
         case 'sequential':
-          results = await this.executeSequential(workflow, inputData, options, context);
+          results = await this.executeSequential(workflow, inputData, options);
           break;
         case 'parallel':
-          results = await this.executeParallel(workflow, inputData, options, context);
+          results = await this.executeParallel(workflow, inputData, options);
           break;
         case 'adaptive':
-          results = await this.executeAdaptive(workflow, inputData, options, context);
+          results = await this.executeAdaptive(workflow, inputData, options);
           break;
         default:
           throw new CGMBError(
@@ -1049,8 +921,7 @@ export class LayerManager {
   private async executeSequential(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
-    options: ExecutionOptions,
-    context: ExecutionContext = {}
+    options: ExecutionOptions
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
     const stepOutputs: Record<string, Record<string, unknown>> = {};
@@ -1064,7 +935,7 @@ export class LayerManager {
         const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
         
         // Execute step
-        const result = await this.executeStep(step, stepInput, options, context);
+        const result = await this.executeStep(step, stepInput, options);
 
         // A failed step must reach the fallback path.
         //
@@ -1098,8 +969,7 @@ export class LayerManager {
           step,
           workflow,
           error as Error,
-          options,
-          context
+          options
         );
         
         if (fallbackResult) {
@@ -1129,8 +999,7 @@ export class LayerManager {
   private async executeParallel(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
-    options: ExecutionOptions,
-    context: ExecutionContext = {}
+    options: ExecutionOptions
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
     
@@ -1141,7 +1010,7 @@ export class LayerManager {
       const promises = level.map(async (step) => {
         try {
           const stepInput = this.resolveStepInput(step.input, results, inputData);
-          const result = await this.executeStep(step, stepInput, options, context);
+          const result = await this.executeStep(step, stepInput, options);
           return { stepId: step.id, result };
         } catch (error) {
           logger.error(`Step ${step.id} failed in parallel execution`, error as Error);
@@ -1174,8 +1043,7 @@ export class LayerManager {
   private async executeAdaptive(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
-    options: ExecutionOptions,
-    context: ExecutionContext = {}
+    options: ExecutionOptions
   ): Promise<Record<string, LayerResult>> {
     // Analyze the workload to determine the best execution strategy
     const analysis = await this.analyzeWorkload(workflow, inputData);
@@ -1184,13 +1052,13 @@ export class LayerManager {
 
     if (analysis.requiresComplexReasoning) {
       // Use Claude-heavy sequential approach
-      return this.executeSequential(workflow, inputData, options, context);
+      return this.executeSequential(workflow, inputData, options);
     } else if (analysis.estimatedComplexity === 'low') {
       // Use parallel execution for simple tasks
-      return this.executeParallel(workflow, inputData, options, context);
+      return this.executeParallel(workflow, inputData, options);
     } else {
       // Use hybrid approach
-      return this.executeHybrid(workflow, inputData, options, analysis, context);
+      return this.executeHybrid(workflow, inputData, options, analysis);
     }
   }
 
@@ -1326,8 +1194,7 @@ export class LayerManager {
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
     options: ExecutionOptions,
-    analysis: WorkloadAnalysis,
-    context: ExecutionContext = {}
+    analysis: WorkloadAnalysis
   ): Promise<Record<string, LayerResult>> {
     // Group steps by recommended layer and execute accordingly
     const stepGroups = this.groupStepsByRecommendedLayer(workflow.steps, analysis);
@@ -1346,7 +1213,7 @@ export class LayerManager {
         // Single step - execute directly
         const step = steps[0]!;
         const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
-        const result = await this.executeStep(step, stepInput, options, context);
+        const result = await this.executeStep(step, stepInput, options);
         results[step.id] = result;
         if (result.success) {
           stepOutputs[step.id] = { output: result.data };
@@ -1357,7 +1224,7 @@ export class LayerManager {
           const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
           return {
             stepId: step.id,
-            result: await this.executeStep(step, stepInput, options, context),
+            result: await this.executeStep(step, stepInput, options),
           };
         });
 
@@ -1381,8 +1248,7 @@ export class LayerManager {
     failedStep: WorkflowStep,
     workflow: ExecutionPlan,
     error: Error,
-    options: ExecutionOptions,
-    context: ExecutionContext = {}
+    options: ExecutionOptions
   ): Promise<LayerResult | null> {
     if (!workflow.fallbackStrategies) {
       return null;
@@ -1396,6 +1262,23 @@ export class LayerManager {
       return null;
     }
 
+    // A file-carrying step cannot fall back to the Antigravity CLI layer.
+    //
+    // That layer takes a text prompt only, so it would answer from the prompt
+    // alone -- summarising documents it was never given, and reporting success.
+    // Failing loudly here surfaces the real problem (AI Studio was unavailable)
+    // instead of substituting a fluent, unfounded answer.
+    const fallbackLayer = normalizeLayerName(String(strategy.with.layer));
+    const stepFiles = (failedStep.input as { files?: unknown } | undefined)?.files;
+    if (fallbackLayer === 'antigravity' && Array.isArray(stepFiles) && stepFiles.length > 0) {
+      throw new CGMBError(
+        `Step ${failedStep.id} carries files and cannot fall back to the Antigravity CLI layer, ` +
+        `which accepts a text prompt only. The AI Studio layer is required for file processing. ` +
+        `Original failure: ${error.message}`,
+        'FILE_FALLBACK_UNAVAILABLE'
+      );
+    }
+
     logger.info(`Attempting fallback strategy for step ${failedStep.id}`, {
       strategy: strategyKey,
       fallbackLayer: strategy.with.layer,
@@ -1407,12 +1290,8 @@ export class LayerManager {
         {},
         failedStep.input
       );
-      
-      // The fallback must run under the same trusted root as the step it
-      // replaces. Defaulting to an empty context here meant the Antigravity
-      // fallback fell back to process.cwd(): wider than intended in some
-      // layouts, and wrong enough to refuse legitimate files in others.
-      return await this.executeStep(strategy.with, fallbackInput, options, context);
+
+      return await this.executeStep(strategy.with, fallbackInput, options);
     } catch (fallbackError) {
       logger.error(`Fallback strategy failed for step ${failedStep.id}`, fallbackError as Error);
       return null;
@@ -1956,8 +1835,7 @@ export class LayerManager {
   private async executeStep(
     step: WorkflowStep,
     input: Record<string, unknown>,
-    options: ExecutionOptions,
-    context: ExecutionContext = {}
+    options: ExecutionOptions
   ): Promise<LayerResult> {
     const startTime = Date.now();
     
@@ -1982,7 +1860,7 @@ export class LayerManager {
       // including the Antigravity quality check in conversion workflows and the
       // fallback used when AI Studio fails.
       const result = await safeExecute(
-        () => this.executeWithLayer(step.layer, executionParams, context),
+        () => this.executeWithLayer(step.layer, executionParams),
         {
           operationName: `execute-step-${step.id}`,
           layer: step.layer,

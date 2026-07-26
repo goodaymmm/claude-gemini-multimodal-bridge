@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
-import { DEFAULT_ANTIGRAVITY_MODEL, FileReference } from './core/types.js';
+import { DEFAULT_ANTIGRAVITY_MODEL } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
@@ -83,38 +83,6 @@ function renderLayerData(data: unknown): string {
 
   // Unknown shape: show it rather than silently printing "[object Object]".
   return JSON.stringify(data, null, 2);
-}
-
-/**
- * Deepest directory containing every given path.
- *
- * Used to derive a trusted workspace root from paths the operator named on the
- * command line: naming them *is* the authorisation, so the root is as tight as
- * those paths allow rather than the process working directory, which may not
- * contain them at all.
- */
-function commonParentDirectory(paths: string[]): string {
-  if (paths.length === 0) {
-    return process.cwd();
-  }
-
-  const dirs = paths.map(p => path.dirname(path.resolve(p)));
-  let common = dirs[0] ?? process.cwd();
-
-  for (const dir of dirs.slice(1)) {
-    while (path.relative(common, dir).startsWith('..')) {
-      const parent = path.dirname(common);
-      if (parent === common) {
-        // Different drives or roots: nothing narrower than the filesystem root
-        // contains both, so fall back to the working directory rather than
-        // silently widening to everything.
-        return process.cwd();
-      }
-      common = parent;
-    }
-  }
-
-  return common;
 }
 
 function showGeminiHelp() {
@@ -1055,8 +1023,7 @@ program
         const result = await processor.processSingleFile(
           options.file,
           options.prompt,
-          { timeout: parseInt(options.timeout) },
-          { trustedWorkspaceRoot: commonParentDirectory([options.file]) }
+          { timeout: parseInt(options.timeout) }
         );
 
         if (!result.success) {
@@ -1307,17 +1274,13 @@ async function executeGeminiCommand(options: any) {
     let result;
     if (options.file) {
       // Process with file
-      // A path typed on the command line is the operator's own explicit
-      // instruction, so the file's own directory is the workspace root here.
-      // The default (process.cwd()) is the right posture for MCP input, where
-      // the path may have been chosen by a prompt-injected caller, but applying
-      // it to the CLI would refuse `cgmb gemini -f` for any file outside the
-      // current directory -- a workflow that has nothing to do with the threat.
+      // The search layer takes a text prompt only, so this always fails with an
+      // actionable message pointing at `cgmb analyze`. Kept as an explicit call
+      // rather than a local error so the two paths cannot drift apart.
       const filePath = path.resolve(options.file);
       result = await antigravityLayer.processFiles(
         [{ path: filePath, type: 'document' }],
-        options.prompt,
-        path.dirname(filePath)
+        options.prompt
       );
     } else {
       // Text-only processing
@@ -1531,8 +1494,7 @@ program
                            options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
             detailed: true
           }
-        },
-        { trustedWorkspaceRoot: commonParentDirectory(files.map((f: FileReference) => f.path)) }
+        }
       );
 
       if (!result.success) {
@@ -2019,13 +1981,7 @@ program
               multiplePDFs: pdfFiles.length > 1,
               preferredLayer: userPreferredLayer
             }
-          },
-          // Paths named on the command line are the operator's own
-          // instruction, so their common parent is the trusted root. Without
-          // this, `cgmb analyze <file outside cwd> --layer gemini` -- and the
-          // AI Studio fallback for any such file -- was refused because the
-          // layer defaulted to process.cwd().
-          { trustedWorkspaceRoot: commonParentDirectory(fileReferences.map(f => f.path)) }
+          }
         ),
         'analyze-documents',
         240000 // 4 minutes base, automatically adjusted for environment and file count
@@ -2111,13 +2067,7 @@ program
               outputFormat: options.output,
               execution_mode: 'adaptive'
             }
-          },
-          // Same reasoning as `analyze`: files named on the command line are
-          // the operator's instruction. Without this, a file outside cwd was
-          // refused by the Antigravity fallback, and the Claude fallback after
-          // it does not inline file contents -- so the command could answer
-          // without ever reading the file and still exit 0.
-          { trustedWorkspaceRoot: commonParentDirectory(fileRefs.map((f: FileReference) => f.path)) }
+          }
         ),
         'multimodal-process',
         300000 // 5 minutes base, automatically adjusted for environment and file count

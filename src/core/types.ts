@@ -1,5 +1,3 @@
-import { realpathSync } from 'fs';
-import { isAbsolute as pathIsAbsolute, relative as pathRelative, resolve as pathResolve } from 'path';
 import { z } from 'zod';
 
 // ===================================
@@ -21,76 +19,6 @@ export type LayerType = z.infer<typeof LayerTypeSchema>;
 // Target Layer Types for direct routing
 export const TargetLayerSchema = z.enum(['antigravity', 'gemini', 'aistudio', 'adaptive']);
 export type TargetLayer = z.infer<typeof TargetLayerSchema>;
-
-/**
- * Trusted execution context, carried alongside a task rather than inside it.
- *
- * Anything a layer must be able to trust belongs here. Task objects are built
- * by spreading caller-supplied input (workflow steps do this literally), so a
- * security-relevant field on the task can be overridden by the very caller it
- * is meant to constrain.
- */
-export interface ExecutionContext {
-  /**
-   * Directory that inlined files must live under. Set only by trusted callers:
-   * a path the operator typed on the command line, or a root the server has
-   * validated. Absent means the process working directory.
-   */
-  trustedWorkspaceRoot?: string;
-
-  /**
-   * Outer boundary the root itself must stay inside.
-   *
-   * Kept separately because narrowing returns only the narrowed path, and a
-   * subdirectory validated at request time can be replaced with a symlink or
-   * junction to somewhere external before the files are read -- which would
-   * make that external directory the effective root. Re-checking the root
-   * against this base at the moment of use closes that window.
-   */
-  trustedWorkspaceBase?: string;
-}
-
-/**
- * Narrow a trusted root using a caller-supplied directory.
- *
- * An MCP client's workingDirectory is caller data, so it may only make the
- * boundary tighter, never wider: honouring it directly would let a request
- * nominate a drive root and read anything, which is the same trap that made an
- * earlier task-level workspaceRoot useless. Returns the base unchanged when the
- * request names somewhere outside it.
- */
-export function narrowTrustedRoot(base: string, requested?: string): string {
-  if (requested === undefined || requested.trim() === '') {
-    return base;
-  }
-
-  // Canonicalise both sides before comparing.
-  //
-  // resolve() and relative() are pure string operations: a symlink inside the
-  // base pointing outside it looked "inside", and downstream realpathSync then
-  // expanded it, making that external directory the workspace root. A caller
-  // could therefore widen the boundary with a link it controls.
-  let resolvedBase: string;
-  let resolvedRequested: string;
-  try {
-    resolvedBase = realpathSync(pathResolve(base));
-  } catch {
-    resolvedBase = pathResolve(base);
-  }
-
-  try {
-    resolvedRequested = realpathSync(pathResolve(requested));
-  } catch {
-    // A directory that does not exist cannot be trusted as a root.
-    return resolvedBase;
-  }
-
-  const relative = pathRelative(resolvedBase, resolvedRequested);
-
-  // '' means the same directory; otherwise it must descend without escaping.
-  const escapes = relative.startsWith('..') || pathIsAbsolute(relative);
-  return escapes ? resolvedBase : resolvedRequested;
-}
 
 /**
  * Map the deprecated 'gemini' layer name onto its canonical replacement.
