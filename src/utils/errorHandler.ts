@@ -1,4 +1,4 @@
-import { CGMBError, LayerError, LayerType, WorkflowError } from '../core/types.js';
+import { CGMBError, LayerError, LayerType } from '../core/types.js';
 import { logger } from './logger.js';
 
 // ===================================

@@ -12,13 +12,12 @@ import path from 'path';
 import { dirname as pathDirname, join as pathJoin } from 'path';
 import { fileURLToPath as toPath } from 'url';
 import fs from 'fs';
-import { OAuthManager } from './auth/OAuthManager.js';
 import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
 import { AuthCache } from './auth/AuthCache.js';
 import { LayerManager } from './core/LayerManager.js';
 import { Logger } from './utils/logger.js';
-import { TimeoutManager, withCLITimeout } from './utils/TimeoutManager.js';
+import { withCLITimeout } from './utils/TimeoutManager.js';
 
 // ===================================
 // Helper Functions for CLI Commands
@@ -195,7 +194,7 @@ program
   .command('setup')
   .description('Set up CGMB dependencies and configuration')
   .option('--force', 'Force reinstall dependencies')
-  .action(async (options) => {
+  .action(async (_options) => {
     try {
       logger.info('Setting up CGMB...');
       
@@ -264,7 +263,6 @@ program
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
       
-      const authManager = new OAuthManager();
       const interactiveSetup = new InteractiveSetup();
       
       logger.info('CGMB Authentication Manager');
@@ -377,7 +375,7 @@ program
   .command('quota-status')
   .description('Check Gemini API quota usage')
   .option('--detailed', 'Show detailed information')
-  .action(async (options) => {
+  .action(async (_options) => {
     // Set CLI mode environment variable FIRST
     process.env.CGMB_CLI_MODE = 'true';
     
@@ -1908,7 +1906,7 @@ program
       console.log('   "CGMB analyze the document at /path/to/report.pdf"\n');
       console.log(`📁 Files (${resolvedFiles.length}):`);
       console.log(`📂 Current directory: ${process.cwd()}`);
-      resolvedFiles.forEach((file: string, index: number) => {
+      resolvedFiles.forEach((file: string, _index: number) => {
         const originalFile = files[resolvedFiles.indexOf(file)] || file;
         const isRelative = !path.isAbsolute(originalFile);
         if (isRelative && originalFile !== file) {

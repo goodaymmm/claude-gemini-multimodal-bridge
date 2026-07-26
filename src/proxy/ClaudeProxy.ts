@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { ClaudeRequest, ClaudeResponse, EnhancementPlan, RequestAnalysis } from '../core/types.js';
+import { ClaudeRequest, EnhancementPlan, RequestAnalysis } from '../core/types.js';
 import { resolveTrustedCommand } from '../utils/processUtils.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';

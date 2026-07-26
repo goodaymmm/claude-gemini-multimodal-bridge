@@ -436,7 +436,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
   private createComparativeAnalysisWorkflow(
     files: FileReference[],
     comparisonType: string,
-    options?: ProcessingOptions
+    _options?: ProcessingOptions
   ): WorkflowDefinition {
     return {
       id: `comparative_analysis_${Date.now()}`,
@@ -484,7 +484,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
   private createThematicAnalysisWorkflow(
     files: FileReference[],
     themes: string[],
-    options?: ProcessingOptions
+    _options?: ProcessingOptions
   ): WorkflowDefinition {
     return {
       id: `thematic_analysis_${Date.now()}`,
@@ -532,7 +532,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
   private createSentimentAnalysisWorkflow(
     files: FileReference[],
     granularity: string,
-    options?: ProcessingOptions
+    _options?: ProcessingOptions
   ): WorkflowDefinition {
     return {
       id: `sentiment_analysis_${Date.now()}`,
@@ -580,7 +580,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
   private createTrendAnalysisWorkflow(
     files: FileReference[],
     timeframe?: { start: Date; end: Date },
-    options?: ProcessingOptions
+    _options?: ProcessingOptions
   ): WorkflowDefinition {
     return {
       id: `trend_analysis_${Date.now()}`,
@@ -641,7 +641,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
   private createStatisticalAnalysisWorkflow(
     files: FileReference[],
     analysisTypes: string[],
-    options?: ProcessingOptions
+    _options?: ProcessingOptions
   ): WorkflowDefinition {
     return {
       id: `statistical_analysis_${Date.now()}`,

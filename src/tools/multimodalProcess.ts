@@ -478,13 +478,10 @@ export class MultimodalProcess {
   /**
    * Detect optimal workflow type based on files and instructions
    */
-  private detectWorkflowType(files: FileReference[], instructions: string): WorkflowType {
-    const fileTypes = files.map(f => this.determineFileType(f.path));
-    const hasImages = fileTypes.includes('image');
-    const hasDocuments = fileTypes.includes('document');
-    const hasAudio = fileTypes.includes('audio');
-    const hasVideo = fileTypes.includes('video');
-    
+  private detectWorkflowType(_files: FileReference[], instructions: string): WorkflowType {
+    // Decided purely from the instruction keywords below. The file types were
+    // being computed into hasImages/hasDocuments/hasAudio/hasVideo and then
+    // never consulted, so every branch already ignored them.
     const lowerInstructions = instructions.toLowerCase();
     
     // Specific workflow detection

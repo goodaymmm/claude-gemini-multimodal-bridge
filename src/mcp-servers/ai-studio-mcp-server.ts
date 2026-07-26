@@ -1244,9 +1244,10 @@ To retrieve this file, use:
         throw new Error(`PDF file too large: ${fileSizeMB.toFixed(1)}MB (max 50MB)`);
       }
       
-      // Read file as binary data
-      const fileData = fs.readFileSync(pdfPath);
-      
+      // The upload takes a path, so there is nothing to read here. This used to
+      // pull the whole PDF -- up to the 50MB limit checked above -- into memory
+      // and then discard it.
+
       // Upload the file using GoogleGenAI files API
       const uploadResult = await this.genAI.files.upload({
         file: pdfPath,

@@ -25,13 +25,11 @@ import {
   MediaGenResult,
   MultimodalFile,
   MultimodalResult,
-  VideoGenOptions
 } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { TimeoutManager } from '../utils/TimeoutManager.js';
-import { isPlatformWindows, isUrl, normalizeCrossPlatformPath } from '../utils/platformUtils.js';
+import { isPlatformWindows, normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
 
@@ -62,20 +60,8 @@ const SUPPORTED_LANGUAGES = {
   th: 'Thai'
 };
 
-// Problematic words to safe alternatives mapping
-const promptSanitizer: Record<string, string> = {
-  // Emotional modifiers to specific descriptions
-  'cute': 'friendly-looking',
-  'adorable': 'appealing',
-  'sweet': 'pleasant',
-  'baby': 'young',
-  'little': 'small-sized',
-  'tiny': 'miniature',
-  'sexy': 'elegant',
-  'hot': 'striking',
-  'beautiful': 'visually pleasing',
-  'pretty': 'well-formed'
-};
+// The word map that fed the duplicate sanitizePrompt above went with it; the
+// live copy lives in ai-studio-mcp-server.ts.
 
 // Function to detect language of prompt text
 function detectLanguage(text: string): string | null {
@@ -93,15 +79,9 @@ function detectLanguage(text: string): string | null {
   return 'en';
 }
 
-// Function to sanitize prompts by replacing problematic words
-function sanitizePrompt(prompt: string): string {
-  let sanitized = prompt;
-  for (const [problem, safe] of Object.entries(promptSanitizer)) {
-    const regex = new RegExp(`\\b${problem}\\b`, 'gi');
-    sanitized = sanitized.replace(regex, safe);
-  }
-  return sanitized;
-}
+// sanitizePrompt lived here as a byte-for-byte duplicate of the one in
+// ai-studio-mcp-server.ts and was never called from this file. The MCP server
+// applies it on the way to the model, which is the only place it can matter.
 
 /**
  * AIStudioLayer handles AI Studio MCP integration with enhanced authentication support
@@ -885,7 +865,7 @@ export class AIStudioLayer implements LayerInterface {
   private async downloadGeneratedMedia(
     downloadUrl: string, 
     mediaType: 'image' | 'video' | 'audio',
-    quality: string
+    _quality: string
   ): Promise<string> {
     if (!downloadUrl) {
       throw new Error('No download URL provided for generated media');
@@ -1025,7 +1005,7 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Estimate cost for processing
    */
-  private estimateCost(input: any, result: any): number {
+  private estimateCost(input: any, _result: any): number {
     const basePrice = 0.001; // $0.001 per request
     
     if (input.files && input.files.length > 0) {
@@ -1133,7 +1113,7 @@ export class AIStudioLayer implements LayerInterface {
    * Check if we can use direct API call instead of MCP
    * REMOVED: Enforcing MCP-only architecture for consistency
    */
-  private canUseDirectAPI(params: any): boolean {
+  private canUseDirectAPI(_params: any): boolean {
     // Always use MCP server to enforce architectural consistency
     return false;
   }
@@ -1421,6 +1401,11 @@ export class AIStudioLayer implements LayerInterface {
 
       // Create cleanup function to ensure proper timeout clearing
       let isResolved = false;
+      // Must stay `let`, declared here. cleanup() below closes over it and is
+      // defined before setTimeout runs, so moving the declaration down to a
+      // `const` would make cleanup reference a block-scoped binding ahead of
+      // its declaration. The rule's analysis does not see the closure.
+      // eslint-disable-next-line prefer-const
       let timeoutId: NodeJS.Timeout;
       
       const cleanup = () => {
@@ -1513,7 +1498,16 @@ export class AIStudioLayer implements LayerInterface {
       timeoutId = setTimeout(() => {
         if (!isResolved) {
           cleanup();
-          reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
+          // Attach whatever the server wrote to stderr. It was being collected
+          // and then dropped, so a timeout reported only "timed out" while the
+          // reason -- a missing key, a quota refusal -- sat unread in the
+          // buffer. Trimmed because it can be long and is only a hint.
+          const stderrHint = errorOutput.trim()
+            ? ` Server stderr: ${errorOutput.trim().slice(-500)}`
+            : '';
+          reject(new Error(
+            `AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully.${stderrHint}`
+          ));
         }
       }, timeout);
 
@@ -1904,8 +1898,6 @@ export class AIStudioLayer implements LayerInterface {
   private setupGhostLogDetection(): void {
     const originalConsoleDebug = console.debug;
     const originalConsoleLog = console.log;
-    const originalConsoleWarn = console.warn;
-    const originalConsoleInfo = console.info;
 
     // Monkey-patch console methods to detect library logs
     console.debug = (...args: any[]) => {
@@ -1940,7 +1932,9 @@ export class AIStudioLayer implements LayerInterface {
 
     logger.info(`[${this.instanceId}] Ghost log detection active - monitoring console methods`, {
       instanceId: this.instanceId,
-      monitoredMethods: ['console.debug', 'console.log', 'console.warn', 'console.info'],
+      // Only these two are patched. warn and info were saved but never wrapped,
+      // so listing them here claimed coverage that did not exist.
+      monitoredMethods: ['console.debug', 'console.log'],
       purpose: 'Detect external library logs about direct API integration'
     });
   }
@@ -2122,7 +2116,7 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Calculate cost
    */
-  private calculateCost(task: any, result: any): number {
+  private calculateCost(task: any, _result: any): number {
     const basePrice = 0.001;
     
     if (task.files && task.files.length > 0) {

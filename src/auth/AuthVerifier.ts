@@ -1,5 +1,5 @@
 import { commandExists } from '../utils/platformUtils.js';
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';

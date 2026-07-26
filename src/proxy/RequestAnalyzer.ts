@@ -185,7 +185,7 @@ export class RequestAnalyzer {
   /**
    * Analyze files in the request
    */
-  private analyzeFiles(args: string[], input: string): {
+  private analyzeFiles(args: string[], _input: string): {
     hasFiles: boolean;
     hasMultimodalFiles: boolean;
     fileTypes: string[];

@@ -333,7 +333,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get cost estimation for a task
    */
-  getCost(task: ClaudeCodeTask): number {
+  getCost(_task: ClaudeCodeTask): number {
     // Claude Code is typically free for personal use
     return 0;
   }
@@ -606,7 +606,7 @@ export class ClaudeCodeLayer implements LayerInterface {
 
     try {
       const output = probe(['--version'], 30000);
-      if (output && output.trim()) {
+      if (output?.trim()) {
         logger.debug('Claude Code connection test successful via --version', {
           version: output.trim().substring(0, 100),
         });
@@ -710,7 +710,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Parse reasoning result
    */
-  private parseReasoningResult(output: string, task: ReasoningTask): ReasoningResult {
+  private parseReasoningResult(output: string, _task: ReasoningTask): ReasoningResult {
     // Try to extract structured reasoning from output
     const lines = output.trim().split('\n');
     const steps: string[] = [];
@@ -799,7 +799,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Calculate cost
    */
-  private calculateCost(task: ClaudeCodeTask, result: string): number {
+  private calculateCost(_task: ClaudeCodeTask, _result: string): number {
     // Claude Code is typically free
     return 0;
   }

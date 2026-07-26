@@ -236,7 +236,10 @@ export class MCPConfigManager {
     dryRun?: boolean;
     interactive?: boolean;
   } = {}): Promise<ConfigManagerResult> {
-    const { force = false, skipBackup = false, dryRun = false, interactive = false } = options;
+    // `interactive` stays on the options type for callers, but this method has
+    // no interactive path -- setupCGMBMCP() is where that flag is inspected --
+    // so it is not destructured here.
+    const { force = false, skipBackup = false, dryRun = false } = options;
 
     try {
       const configPath = this.findConfigPath();
@@ -269,7 +272,15 @@ export class MCPConfigManager {
       }
 
       if (dryRun) {
+        // generateCGMBConfig() was called here and its result dropped. Keeping
+        // the call so a dry run still exercises path validation, and naming the
+        // command in the message so the caller can see what would be written.
         const cgmbConfig = this.generateCGMBConfig();
+        logger.info('Dry run: CGMB MCP entry that would be written', {
+          configPath,
+          command: cgmbConfig.command,
+          args: cgmbConfig.args,
+        });
         return {
           success: true,
           message: `Would add CGMB configuration to ${configPath}`,

@@ -28,8 +28,8 @@ import {
   // WorkflowDefinitionArgs,
   WorkflowDefinitionArgsSchema,
   WorkflowResult,
-  normalizeLayerName,
 } from './types.js';
+import { normalizeLayerName } from './types.js';
 import { Config, ConfigSchema } from './types.js';
 
 // Read version from package.json

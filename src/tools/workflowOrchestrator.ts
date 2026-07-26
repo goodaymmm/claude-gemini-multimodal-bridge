@@ -1,5 +1,4 @@
 import {
-  ExecutionPlan,
   FileReference,
   LayerResult,
   ResourceEstimate,
@@ -175,7 +174,7 @@ export class WorkflowOrchestrator {
   /**
    * Get workflow status and progress
    */
-  async getWorkflowStatus(workflowId: string): Promise<{
+  async getWorkflowStatus(_workflowId: string): Promise<{
     status: 'running' | 'completed' | 'failed' | 'not_found';
     progress: number;
     currentStep?: string;
@@ -832,7 +831,7 @@ export class WorkflowOrchestrator {
     id: string,
     files: FileReference[],
     instructions: string,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id,
@@ -879,7 +878,7 @@ export class WorkflowOrchestrator {
     id: string,
     files: FileReference[],
     instructions: string,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id,
@@ -928,7 +927,7 @@ export class WorkflowOrchestrator {
     id: string,
     files: FileReference[],
     instructions: string,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id,

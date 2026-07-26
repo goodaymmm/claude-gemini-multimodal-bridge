@@ -549,7 +549,7 @@ export class GenerationWorkflow extends BaseWorkflow {
     sourceFiles: FileReference[],
     reportType: string,
     specifications: any,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id: `report_generation_${Date.now()}`,
@@ -610,8 +610,8 @@ export class GenerationWorkflow extends BaseWorkflow {
   private createDocumentationGenerationWorkflow(
     sourceFiles: FileReference[],
     documentationType: string,
-    structure: any,
-    options?: any
+    _structure: any,
+    _options?: any
   ): WorkflowDefinition {
     return {
       id: `documentation_generation_${Date.now()}`,
@@ -673,7 +673,7 @@ export class GenerationWorkflow extends BaseWorkflow {
     sourceFiles: FileReference[],
     presentationType: string,
     slideStructure: any,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id: `presentation_generation_${Date.now()}`,
@@ -725,7 +725,7 @@ export class GenerationWorkflow extends BaseWorkflow {
     sourceFiles: FileReference[],
     creativeType: string,
     creativePrompt: string,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id: `creative_generation_${Date.now()}`,
@@ -777,7 +777,7 @@ export class GenerationWorkflow extends BaseWorkflow {
     sourceFiles: FileReference[],
     comparisonCriteria: string[],
     outputType: string,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id: `comparative_analysis_generation_${Date.now()}`,

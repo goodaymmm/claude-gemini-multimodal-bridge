@@ -1,5 +1,5 @@
 import { logger } from './logger.js';
-import { findProcesses, getHomeDir } from './platformUtils.js';
+import { findProcesses } from './platformUtils.js';
 
 
 /**
@@ -179,10 +179,9 @@ export class TimeoutManager {
    */
   private static needsMCPServerStartup(): boolean {
     try {
-      // Check if MCP processes are likely running
-      const { execSync } = require('child_process');
-      
       // Check for node processes running AI Studio MCP server
+      // (findProcesses does the work; a leftover require('child_process') here
+      // was unused and would not resolve in this ESM module anyway.)
       try {
         const processes = findProcesses("ai-studio-mcp-server");
         return processes.length === 0; // No processes found = needs startup
@@ -205,7 +204,7 @@ export class TimeoutManager {
     const environment = this.detectEnvironment();
     
     return this.executeWithTimeout(
-      async (signal) => {
+      async (_signal) => {
         // Pass abort signal to command if it supports it
         return await command();
       },

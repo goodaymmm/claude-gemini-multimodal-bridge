@@ -1,6 +1,6 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
-import { commandExists, findExecutable } from './platformUtils.js';
+import { findExecutable } from './platformUtils.js';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';

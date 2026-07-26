@@ -378,7 +378,7 @@ export class ExtractionWorkflow extends BaseWorkflow {
     });
 
     // Step 2: Multi-type extraction
-    extractionTypes.forEach((type, index) => {
+    extractionTypes.forEach((type, _index) => {
       steps.push({
         id: `extract_${type}`,
         layer: 'aistudio' as const,

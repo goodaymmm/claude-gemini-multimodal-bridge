@@ -3,7 +3,7 @@ import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
 import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
-import { ErrorHandler, safeExecute } from '../utils/errorHandler.js';
+import { safeExecute } from '../utils/errorHandler.js';
 import {
   CGMBError,
   Config,
