@@ -1,3 +1,4 @@
+import { basename } from 'path';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
 import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
@@ -17,6 +18,56 @@ import {
   WorkloadAnalysis,
 } from './types.js';
 import { normalizeLayerName } from './types.js';
+
+/**
+ * Names that must not be transmitted to Google, checked at the AI Studio
+ * boundary.
+ *
+ * Deliberately a name check and nothing more. The workspace-confinement and
+ * canonicalisation machinery this replaces refused legitimate paths outside the
+ * working directory -- `cgmb analyze ~/docs/report.pdf` is the product's main
+ * use, not an attack -- and needed a trusted-context argument threaded through
+ * every routing method to work at all. A denylist costs neither: no ordinary
+ * request analyses a .env, so nothing legitimate is lost.
+ *
+ * Matched on the basename only. A symlink pointing at a credential file is out
+ * of scope by design: resolving it is what dragged in realpath, TOCTOU handling
+ * and the identity checks that made the previous version untenable.
+ */
+const CREDENTIAL_FILE_PATTERNS = [
+  /^\.env(\..*)?$/i,
+  /^\.npmrc$/i,
+  /^\.netrc$/i,
+  /^id_(rsa|dsa|ecdsa|ed25519)$/i,
+  /^credentials(\..*)?$/i,
+  /^secrets?\.[a-z0-9]+$/i,
+  /\.(pem|key|pfx|p12|keystore|jks)$/i,
+];
+
+/** Refuse a task whose files include anything credential-shaped. */
+export function assertNoCredentialFiles(task: unknown): void {
+  const files = (task as { files?: unknown })?.files;
+  if (!Array.isArray(files)) {
+    return;
+  }
+
+  for (const file of files) {
+    const filePath = typeof file === 'string' ? file : (file as { path?: unknown })?.path;
+    if (typeof filePath !== 'string' || filePath === '') {
+      continue;
+    }
+
+    // basename() handles both separators, so no path parsing is needed here.
+    const name = basename(filePath);
+    if (CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(name))) {
+      throw new CGMBError(
+        `Refusing to send ${name} to the AI Studio layer: it matches a credential file pattern, ` +
+        `and file contents are transmitted to Google.`,
+        'CREDENTIAL_FILE_REFUSED'
+      );
+    }
+  }
+}
 
 // ===================================
 // Layer Manager - Orchestrates all three layers
@@ -400,9 +451,19 @@ export class LayerManager {
         return await antigravityLayer.execute(task);
 
       case 'aistudio':
+        // This is the egress point, so the check belongs here.
+        //
+        // Being able to read a file locally is not the same authorisation as
+        // sending its contents to Google. AI Studio's MCP server readFileSync()s
+        // whatever path it is handed, so a mistaken glob or a prompt-injected
+        // caller turns "analyse this" into credential disclosure that looks
+        // like ordinary operation -- and unlike a local read, the user never
+        // sees the content leave.
+        assertNoCredentialFiles(task);
+
         const aiStudioLayer = await this.getAIStudioLayerAsync();
         return await aiStudioLayer.execute(task);
-        
+
       default:
         throw new Error(`Unknown layer type: ${layerType}`);
     }
@@ -445,32 +506,78 @@ export class LayerManager {
       }
     }
 
+    if (fallbackOrder.length === 0) {
+      // Reached when the task carries files and no remaining layer can read
+      // them. Naming that explicitly beats "Fallbacks: " with an empty list.
+      throw new Error(
+        `The ${failedLayer} layer failed and no fallback layer can process files. ` +
+        `Only the AI Studio layer reads file contents; the search and Claude layers ` +
+        `would answer from the prompt alone.`
+      );
+    }
+
     throw new Error(`All layers failed for task. Primary: ${failedLayer}, Fallbacks: ${fallbackOrder.join(', ')}`);
   }
+
+  /**
+   * Layers that actually read task.files.
+   *
+   * Only AI Studio does. The Antigravity layer refuses them outright, and
+   * ClaudeCodeLayer declares `files` on its task type but never reads it -- it
+   * builds the prompt and nothing else. Falling back to either for a
+   * file-carrying task produces an answer about documents that were never
+   * opened, returned as success.
+   */
+  private static readonly FILE_CAPABLE_LAYERS: ReadonlySet<LayerType> = new Set(['aistudio']);
 
   /**
    * Get fallback order based on failed layer and task characteristics
    */
   private getFallbackOrder(failedLayer: LayerType, task: any): LayerType[] {
     const analysis = this.analyzeTask(task);
-    
-    switch (failedLayer) {
-      case 'claude':
-        // If Claude fails, try Gemini for search or AI Studio for files
-        return analysis.hasFiles ? ['aistudio', 'antigravity'] : ['antigravity', 'aistudio'];
-        
-      case 'gemini': // deprecated alias
-      case 'antigravity':
-        // If Gemini fails, prefer AI Studio, then Claude for complex tasks only
-        return analysis.complexity === 'high' ? ['aistudio', 'claude'] : ['aistudio', 'claude'];
-        
-      case 'aistudio':
-        // If AI Studio fails, prefer Gemini for search, then Claude for complex tasks
-        return analysis.complexity === 'high' ? ['antigravity', 'claude'] : ['antigravity', 'claude'];
-        
-      default:
-        return ['aistudio', 'antigravity', 'claude'];
+
+    const order = ((): LayerType[] => {
+      switch (failedLayer) {
+        case 'claude':
+          // If Claude fails, try Gemini for search or AI Studio for files
+          return analysis.hasFiles ? ['aistudio', 'antigravity'] : ['antigravity', 'aistudio'];
+
+        case 'gemini': // deprecated alias
+        case 'antigravity':
+          // If Gemini fails, prefer AI Studio, then Claude for complex tasks only
+          return analysis.complexity === 'high' ? ['aistudio', 'claude'] : ['aistudio', 'claude'];
+
+        case 'aistudio':
+          // If AI Studio fails, prefer Gemini for search, then Claude for complex tasks
+          return analysis.complexity === 'high' ? ['antigravity', 'claude'] : ['antigravity', 'claude'];
+
+        default:
+          return ['aistudio', 'antigravity', 'claude'];
+      }
+    })();
+
+    if (!analysis.hasFiles) {
+      return order;
     }
+
+    // Fallback for a file-carrying task must be capability-aware.
+    //
+    // executeWithFallback catches each layer's error and moves on, so the
+    // Antigravity layer's refusal was swallowed and the task slid to Claude,
+    // which answers from the prompt alone -- "Analysis complete" for a document
+    // nobody read. Dropping incapable layers here makes the loop run out and
+    // report the real failure instead.
+    const capable = order.filter(layer => LayerManager.FILE_CAPABLE_LAYERS.has(layer));
+
+    if (capable.length < order.length) {
+      logger.debug('Dropped file-incapable layers from the fallback order', {
+        failedLayer,
+        considered: order,
+        usable: capable,
+      });
+    }
+
+    return capable;
   }
 
   /**

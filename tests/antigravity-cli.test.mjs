@@ -12,7 +12,7 @@ import {
   MIN_AGY_VERSION,
 } from '../dist/utils/antigravityCli.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
-import { LayerManager } from '../dist/core/LayerManager.js';
+import { LayerManager, assertNoCredentialFiles } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
 import { buildSpawnTarget, isUntrustedBinaryLocation, resolveTrustedCommand, resolveWindowsCommand } from '../dist/utils/processUtils.js';
 
@@ -364,6 +364,53 @@ describe('workspace isolation', () => {
   });
 });
 
+describe('credential files never reach the AI Studio egress', () => {
+  // Being able to read a file locally is not the same authorisation as sending
+  // it to Google. AI Studio's MCP server readFileSync()s whatever path it is
+  // given, so this is the point of actual disclosure.
+
+  it('refuses credential-shaped names and allows ordinary ones', () => {
+    const refused = [
+      '.env', '.env.production', '.npmrc', '.netrc', 'id_rsa', 'id_ed25519',
+      'credentials.json', 'secrets.yaml', 'server.pem', 'client.p12',
+    ];
+
+    for (const name of refused) {
+      assert.throws(
+        () => assertNoCredentialFiles({ files: [{ path: join('/some/dir', name), type: 'text' }] }),
+        /credential file pattern/,
+        `${name} must be refused`
+      );
+    }
+
+    const allowed = [
+      'report.pdf', 'notes.md', 'environment.md', 'index.ts',
+      'Dockerfile', 'secretsmanager.ts', 'monkey.png',
+    ];
+
+    for (const name of allowed) {
+      assert.doesNotThrow(
+        () => assertNoCredentialFiles({ files: [{ path: join('/some/dir', name), type: 'document' }] }),
+        `${name} must be allowed`
+      );
+    }
+  });
+
+  it('checks every file, and tolerates tasks with no files', () => {
+    assert.throws(
+      () => assertNoCredentialFiles({
+        files: [{ path: '/a/report.pdf' }, { path: '/b/.env' }],
+      }),
+      /credential file pattern/,
+      'a credential file anywhere in the list must fail the whole task'
+    );
+
+    assert.doesNotThrow(() => assertNoCredentialFiles({ prompt: 'hello' }));
+    assert.doesNotThrow(() => assertNoCredentialFiles({ files: [] }));
+    assert.doesNotThrow(() => assertNoCredentialFiles(undefined));
+  });
+});
+
 describe('files are refused, not silently dropped', () => {
   // The layer used to accept task.files and ignore them, so a request to
   // summarise a document was answered from the prompt alone and reported as a
@@ -393,6 +440,36 @@ describe('files are refused, not silently dropped', () => {
       error => /cannot process files/i.test(error.message) && /cgmb analyze/.test(error.message),
       'the refusal must point the caller at the AI Studio path'
     );
+  });
+
+  it('drops file-incapable layers from the fallback order', () => {
+    // executeWithFallback swallows each layer's error and moves on, so the
+    // search layer's refusal used to be caught and the task slid to Claude --
+    // which declares task.files and never reads it, then reports success.
+    const manager = new LayerManager();
+    const withFiles = {
+      type: 'multimodal',
+      prompt: 'Summarise',
+      files: [{ path: '/tmp/report.pdf', type: 'document' }],
+    };
+
+    const afterAiStudio = manager.getFallbackOrder('aistudio', withFiles);
+    assert.deepEqual(
+      afterAiStudio,
+      [],
+      'nothing can read files once AI Studio is out, so the chain must end'
+    );
+
+    const afterClaude = manager.getFallbackOrder('claude', withFiles);
+    assert.deepEqual(
+      afterClaude,
+      ['aistudio'],
+      'only the file-capable layer may remain'
+    );
+
+    // Text-only routing must be untouched.
+    const textOnly = manager.getFallbackOrder('aistudio', { type: 'search', prompt: 'hello' });
+    assert.deepEqual(textOnly, ['antigravity', 'claude']);
   });
 
   it('refuses to fall back to the search layer for a step that carries files', async () => {
