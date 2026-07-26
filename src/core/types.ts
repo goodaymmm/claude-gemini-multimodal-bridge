@@ -1,3 +1,4 @@
+import { isAbsolute as pathIsAbsolute, relative as pathRelative, resolve as pathResolve } from 'path';
 import { z } from 'zod';
 
 // ===================================
@@ -35,6 +36,28 @@ export interface ExecutionContext {
    * validated. Absent means the process working directory.
    */
   trustedWorkspaceRoot?: string;
+}
+
+/**
+ * Narrow a trusted root using a caller-supplied directory.
+ *
+ * An MCP client's workingDirectory is caller data, so it may only make the
+ * boundary tighter, never wider: honouring it directly would let a request
+ * nominate a drive root and read anything, which is the same trap that made an
+ * earlier task-level workspaceRoot useless. Returns the base unchanged when the
+ * request names somewhere outside it.
+ */
+export function narrowTrustedRoot(base: string, requested?: string): string {
+  if (requested === undefined || requested.trim() === '') {
+    return base;
+  }
+
+  const resolvedBase = pathResolve(base);
+  const resolvedRequested = pathResolve(requested);
+  const relative = pathRelative(resolvedBase, resolvedRequested);
+
+  const escapes = relative.startsWith('..') || pathIsAbsolute(relative);
+  return escapes ? resolvedBase : resolvedRequested;
 }
 
 /**

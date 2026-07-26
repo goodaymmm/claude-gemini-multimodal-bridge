@@ -11,7 +11,7 @@ import {
   looksLikeAgyBinary,
   MIN_AGY_VERSION,
 } from '../dist/utils/antigravityCli.js';
-import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
+import { LayerTypeSchema, TargetLayerSchema, narrowTrustedRoot, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer, isInlinableTextFile } from '../dist/layers/AntigravityCLILayer.js';
 import { buildSpawnTarget } from '../dist/utils/processUtils.js';
@@ -636,6 +636,23 @@ describe('inlined file safety', () => {
       /credential file pattern/,
       'a link named notes.txt must not smuggle a credential file through'
     );
+  });
+});
+
+describe('trusted root narrowing', () => {
+  it('lets a caller tighten the boundary but never widen it', () => {
+    // An MCP client's workingDirectory is caller data. Honouring it directly
+    // would let a request nominate a drive root and read anything -- the same
+    // trap that made a task-level workspaceRoot worthless.
+    const base = join(tmpdir(), 'cgmb-base');
+    const inside = join(base, 'project', 'src');
+    const outside = join(tmpdir(), 'cgmb-elsewhere');
+
+    assert.equal(narrowTrustedRoot(base, inside), inside, 'a subdirectory must be honoured');
+    assert.equal(narrowTrustedRoot(base, outside), base, 'an outside directory must be ignored');
+    assert.equal(narrowTrustedRoot(base, undefined), base);
+    assert.equal(narrowTrustedRoot(base, '   '), base);
+    assert.equal(narrowTrustedRoot(base, join(base, '..')), base, '.. must not escape');
   });
 });
 

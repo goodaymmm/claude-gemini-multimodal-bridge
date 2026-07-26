@@ -28,6 +28,7 @@ import {
   // WorkflowDefinitionArgs,
   WorkflowDefinitionArgsSchema,
   WorkflowResult,
+  narrowTrustedRoot,
   normalizeLayerName,
 } from './types.js';
 import { Config, ConfigSchema } from './types.js';
@@ -840,6 +841,15 @@ export class CGMBServer {
           {
             ...convertedRequest.options,
             workingDirectory: normalizedRequest.workingDirectory  // Propagate for file path resolution
+          },
+          // workingDirectory is caller data, so it may only tighten the
+          // boundary. narrowTrustedRoot ignores anything outside the server's
+          // own working directory rather than honouring it as a wider root.
+          {
+            trustedWorkspaceRoot: narrowTrustedRoot(
+              process.cwd(),
+              normalizedRequest.workingDirectory
+            ),
           }
         );
         logger.info('LayerManager.processMultimodal completed', {
