@@ -246,7 +246,7 @@ describe('credential file guard', () => {
       // Exercised through extractPrompt, the point of disclosure, so the test
       // stays hermetic: execute() would spawn a live agy auth probe.
       assert.throws(
-        () => layer.extractPrompt({ prompt: 'summarise', workspaceRoot: dir, files: [{ path: p, type: 'text' }] }),
+        () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: p, type: 'text' }] }, dir),
         /credential file pattern/,
         `${name} must be refused`
       );
@@ -258,9 +258,8 @@ describe('credential file guard', () => {
     writeFileSync(doc, 'CGMB regression note.\n', { encoding: 'utf8' });
     const built = layer.extractPrompt({
       prompt: 'summarise',
-      workspaceRoot: dir,
       files: [{ path: doc, type: 'text' }],
-    });
+    }, dir);
     assert.match(built, /CGMB regression note/);
     assert.match(built, /FILE: notes\.txt/);
   });
@@ -284,6 +283,19 @@ describe('translation sanitiser', () => {
     assert.equal(clean('- A cat on a sofa'), 'A cat on a sofa');
     assert.equal(clean('> A cat on a sofa'), 'A cat on a sofa');
     assert.equal(clean('### A cat on a sofa'), 'A cat on a sofa');
+  });
+
+  it('does not accept a bare label or refusal as a single-line translation', () => {
+    // Taking any single line verbatim let these through as successful
+    // translations; the AI Studio layer then marked wasTranslated and sent them
+    // to the image API, which generated a picture of the wrong thing and
+    // reported success.
+    assert.equal(clean('Option 1'), 'ORIGINAL');
+    assert.equal(clean('Here are a few options:'), 'ORIGINAL');
+    assert.equal(clean('I cannot help with that request'), 'ORIGINAL');
+
+    // But a labelled answer keeps its payload.
+    assert.equal(clean('Translation: A cat on a sofa'), 'A cat on a sofa');
   });
 
   it('keeps single-line prompts that mention a style', () => {
@@ -327,7 +339,7 @@ describe('inlined file safety', () => {
     writeFileSync(pdf, Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x00, 0x01]));
 
     assert.throws(
-      () => layer.extractPrompt({ prompt: 'summarise', workspaceRoot: dir, files: [{ path: pdf, type: 'pdf' }] }),
+      () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: pdf, type: 'pdf' }] }, dir),
       /cannot read report\.pdf/,
       'PDF must be refused, not silently mis-read'
     );
@@ -350,18 +362,16 @@ describe('inlined file safety', () => {
       assert.throws(
         () => layer.extractPrompt({
           prompt: 'summarise',
-          workspaceRoot: dir,
           files: [{ path: outside, type: 'text' }],
-        }),
+        }, dir),
         /outside the workspace root/,
         'a path outside the root must be refused'
       );
 
       const built = layer.extractPrompt({
         prompt: 'summarise',
-        workspaceRoot: dir,
         files: [{ path: inside, type: 'text' }],
-      });
+      }, dir);
       assert.match(built, /workspace content/);
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
@@ -382,22 +392,58 @@ describe('inlined file safety', () => {
       // Widened by an explicit caller: allowed.
       const built = layer.extractPrompt({
         prompt: 'summarise',
-        workspaceRoot: outsideDir,
         files: [{ path: file, type: 'text' }],
-      });
+      }, outsideDir);
       assert.match(built, /explicitly requested content/);
 
       // Same file under a narrower root: still refused.
       assert.throws(
         () => layer.extractPrompt({
           prompt: 'summarise',
-          workspaceRoot: dir,
           files: [{ path: file, type: 'text' }],
-        }),
+        }, dir),
         /outside the workspace root/
       );
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a workspaceRoot supplied through the task', () => {
+    // The root must come from a code-level argument, never from caller data.
+    // Workflow steps spread arbitrary caller input into the task, so while the
+    // root lived on the task an MCP caller could set it to a drive root and
+    // read anything -- the control was bypassable by the threat it existed to
+    // stop. Passing it on the task must now have no effect whatsoever.
+    const outsideDir = join(tmpdir(), `cgmb-test-taskroot-${process.pid}`);
+    rmSync(outsideDir, { recursive: true, force: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const file = join(outsideDir, 'target.txt');
+    writeFileSync(file, 'content the caller should not reach\n');
+
+    try {
+      assert.throws(
+        () => layer.extractPrompt({
+          prompt: 'summarise',
+          workspaceRoot: outsideDir,       // attacker-controlled: must be ignored
+          files: [{ path: file, type: 'text' }],
+        }, dir),
+        /outside the workspace root/,
+        'a root on the task must not widen the trusted root'
+      );
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts ordinary source and extensionless files', () => {
+    // A closed extension allowlist rejected .ts, .py, Dockerfile and LICENSE --
+    // ordinary inputs for a developer tool.
+    for (const name of ['module.ts', 'script.py', 'Dockerfile', 'LICENSE', '.gitignore', 'query.sql']) {
+      const p = join(dir, name);
+      writeFileSync(p, 'plain text content\n');
+      const built = layer.extractPrompt({ prompt: 'review', files: [{ path: p, type: 'text' }] }, dir);
+      assert.match(built, /plain text content/, `${name} must be inlinable`);
     }
   });
 
@@ -413,7 +459,7 @@ describe('inlined file safety', () => {
     }
 
     assert.throws(
-      () => layer.extractPrompt({ prompt: 'compare', workspaceRoot: dir, files }),
+      () => layer.extractPrompt({ prompt: 'compare', files }, dir),
       /exceeds what one Antigravity CLI request can carry/,
       'exceeding the total budget must fail, not silently drop files'
     );
@@ -428,10 +474,9 @@ describe('inlined file safety', () => {
     assert.throws(
       () => layer.extractPrompt({
         prompt: 'summarise',
-        workspaceRoot: dir,
         files: [{ path: disguised, type: 'text' }],
-      }),
-      /does not decode as UTF-8 text/,
+      }, dir),
+      /is not text/,
       'binary content behind a .txt name must be refused'
     );
   });
@@ -453,7 +498,7 @@ describe('inlined file safety', () => {
     }
 
     assert.throws(
-      () => layer.extractPrompt({ prompt: 'summarise', workspaceRoot: dir, files: [{ path: link, type: 'text' }] }),
+      () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: link, type: 'text' }] }, dir),
       /credential file pattern/,
       'a link named notes.txt must not smuggle a credential file through'
     );

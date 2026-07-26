@@ -25,44 +25,105 @@ const MAX_INLINED_FILE_CHARS = 100000;
  */
 const MAX_TOTAL_INLINED_CHARS = 200000;
 
-/** Extensions safe to read as UTF-8 text. */
-const INLINABLE_TEXT_EXTENSIONS = new Set([
-  'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'yaml', 'yml', 'toml', 'xml',
-  'html', 'htm', 'css', 'log', 'rst', 'ini', 'cfg',
+/**
+ * Formats known to be binary. Everything else is decided by inspecting the
+ * bytes.
+ *
+ * A closed allowlist was the wrong shape: it rejected .ts, .py, .sh, .sql,
+ * .conf and extensionless files such as Dockerfile, LICENSE and .gitignore --
+ * ordinary inputs for a developer tool. Naming what cannot be text is both
+ * shorter and safer, because the content check below is the real gate.
+ */
+const BINARY_FILE_EXTENSIONS = new Set([
+  'pdf', 'doc', 'docx', 'odt', 'rtf', 'pages',
+  'xls', 'xlsx', 'ods', 'numbers', 'ppt', 'pptx', 'odp', 'key',
+  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tiff', 'ico', 'psd',
+  'mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg', 'wma',
+  'mp4', 'mov', 'avi', 'webm', 'mkv', 'flv', 'wmv',
+  'zip', 'gz', 'tar', 'bz2', 'xz', '7z', 'rar',
+  'exe', 'dll', 'so', 'dylib', 'bin', 'class', 'jar', 'wasm',
+  'sqlite', 'db', 'woff', 'woff2', 'ttf', 'otf', 'eot',
 ]);
 
+/** Leading bytes that identify common binary containers. */
+const BINARY_MAGIC: ReadonlyArray<readonly number[]> = [
+  [0x25, 0x50, 0x44, 0x46],        // %PDF
+  [0x50, 0x4b, 0x03, 0x04],        // ZIP / OOXML
+  [0x89, 0x50, 0x4e, 0x47],        // PNG
+  [0xff, 0xd8, 0xff],              // JPEG
+  [0x47, 0x49, 0x46, 0x38],        // GIF8
+  [0x1f, 0x8b],                    // gzip
+  [0x7f, 0x45, 0x4c, 0x46],        // ELF
+  [0x4d, 0x5a],                    // PE/MZ
+  [0xd0, 0xcf, 0x11, 0xe0],        // legacy Office
+];
+
 /**
- * True when a file is a plain-text format this layer may inline.
+ * True when a file's name does not mark it as a known binary format.
  *
  * Deliberately ignores FileReference.type: it is caller-supplied and arrives
  * from MCP input, so trusting it let a PDF labelled type:'text' through to be
- * read as UTF-8 and answered from mojibake. The extension is checked here and
- * the decoded bytes are checked in looksLikeText() before anything is sent.
+ * read as UTF-8 and answered from mojibake. This is only a cheap first pass --
+ * looksLikeText() inspects the actual bytes and is the real gate.
  */
 function isInlinableTextFile(file: FileReference): boolean {
-  const ext = file.path.toLowerCase().split('.').pop() ?? '';
-  return INLINABLE_TEXT_EXTENSIONS.has(ext);
-}
+  // basename() handles both separators, so no path parsing here.
+  const name = basename(file.path).toLowerCase();
+  const lastDot = name.lastIndexOf('.');
 
-/**
- * True when decoded content really is text.
- *
- * An allowed extension is not proof: a .txt can hold anything. NUL bytes and a
- * scattering of U+FFFD are what a mis-decoded binary looks like, and feeding
- * that to the model produces a confident answer about noise.
- */
-function looksLikeText(content: string): boolean {
-  // String.fromCharCode(0) avoids writing a raw NUL or an escape into source.
-  if (content.indexOf(String.fromCharCode(0)) !== -1) {
-    return false;
-  }
-
-  if (content.length === 0) {
+  // No extension (Dockerfile, LICENSE) or a leading-dot name (.gitignore) is
+  // not a reason to reject: the byte check decides.
+  if (lastDot <= 0) {
     return true;
   }
 
-  const replacements = (content.match(/�/g) ?? []).length;
-  return replacements === 0 || replacements / content.length < 0.001;
+  return !BINARY_FILE_EXTENSIONS.has(name.slice(lastDot + 1));
+}
+
+/**
+ * True when raw bytes are text this layer can safely inline.
+ *
+ * Works on the Buffer rather than a decoded string. Decoding first hid two
+ * failures: a binary made mostly of ASCII control bytes contains no NUL and no
+ * U+FFFD, so it passed and the model answered noise as though it were a
+ * document; and a legitimate short document containing one replacement
+ * character was rejected. UTF-16 and Shift-JIS were rejected outright for the
+ * same reason.
+ */
+function looksLikeText(buffer: Buffer): boolean {
+  if (buffer.length === 0) {
+    return true;
+  }
+
+  for (const magic of BINARY_MAGIC) {
+    if (buffer.length >= magic.length && magic.every((byte, i) => buffer[i] === byte)) {
+      return false;
+    }
+  }
+
+  // A BOM means a declared text encoding, even when it is not UTF-8.
+  const hasBom =
+    (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) ||
+    (buffer[0] === 0xff && buffer[1] === 0xfe) ||
+    (buffer[0] === 0xfe && buffer[1] === 0xff);
+  if (hasBom) {
+    return true;
+  }
+
+  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
+  let control = 0;
+
+  for (const byte of sample) {
+    if (byte === 0) {
+      return false;
+    }
+    // Control characters other than tab, newline, carriage return and form feed.
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x0c) {
+      control++;
+    }
+  }
+
+  return control / sample.length < 0.02;
 }
 
 /**
@@ -95,8 +156,6 @@ interface AntigravityTask {
   needsGrounding?: boolean;
   files?: FileReference[];
   model?: string;
-  /** Root that inlined files must live under. Defaults to process.cwd(). */
-  workspaceRoot?: string;
   [key: string]: unknown;
 }
 
@@ -252,7 +311,10 @@ export class AntigravityCLILayer implements LayerInterface {
   /**
    * Main execution method
    */
-  async execute(task: AntigravityTask): Promise<LayerResult> {
+  async execute(
+    task: AntigravityTask,
+    options: { workspaceRoot?: string } = {}
+  ): Promise<LayerResult> {
     const startTime = Date.now();
 
     // Ensure initialization
@@ -269,7 +331,7 @@ export class AntigravityCLILayer implements LayerInterface {
           promptLength: task.prompt?.length ?? 0,
         });
 
-        const prompt = this.extractPrompt(task);
+        const prompt = this.extractPrompt(task, options.workspaceRoot);
         if (!prompt.trim()) {
           throw new Error('No prompt provided for Antigravity CLI execution');
         }
@@ -382,12 +444,10 @@ export class AntigravityCLILayer implements LayerInterface {
       promptLength: prompt.length,
     });
 
-    const result = await this.execute({
-      type: 'multimodal',
-      prompt,
-      files: textFiles,
-      ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
-    });
+    const result = await this.execute(
+      { type: 'multimodal', prompt, files: textFiles },
+      ...(workspaceRoot === undefined ? [] : [{ workspaceRoot }])
+    );
 
     return {
       content: result.data as string,
@@ -714,7 +774,7 @@ export class AntigravityCLILayer implements LayerInterface {
   /**
    * Extract prompt from task (unified method)
    */
-  private extractPrompt(task: AntigravityTask): string {
+  private extractPrompt(task: AntigravityTask, workspaceRootOverride?: string): string {
     const prompt = task.prompt ?? task.request ?? task.input ?? '';
 
     if (!task.files || task.files.length === 0) {
@@ -735,8 +795,16 @@ export class AntigravityCLILayer implements LayerInterface {
     // Files must live under this root. Defaults to the process working
     // directory, which is the project the operator invoked CGMB from; MCP
     // callers should pass their declared workingDirectory instead.
-    const requestedRoot = typeof task.workspaceRoot === 'string' && task.workspaceRoot.trim()
-      ? task.workspaceRoot
+    // The root is a code-level argument, never a field on the task.
+    //
+    // It used to be read from task.workspaceRoot -- but workflow steps spread
+    // arbitrary caller-supplied input into the task, so an MCP caller could set
+    // workspaceRoot to a drive root and read anything on the machine. The
+    // control was bypassable by exactly the threat it existed to stop. Only
+    // trusted code paths (the CLI's explicit -f, a server-validated
+    // workingDirectory) may pass an override.
+    const requestedRoot = workspaceRootOverride?.trim()
+      ? workspaceRootOverride
       : process.cwd();
 
     let workspaceRoot: string;
@@ -806,9 +874,9 @@ export class AntigravityCLILayer implements LayerInterface {
 
       // Read and validate as separate steps: the catch below is only for I/O
       // failures, and must not re-wrap the deliberate rejections that follow.
-      let content: string;
+      let bytes: Buffer;
       try {
-        content = readFileSync(resolvedPath, 'utf8');
+        bytes = readFileSync(resolvedPath);
       } catch (error) {
         // Fail loudly: a silently skipped file produces an answer about
         // nothing, which is worse than an error the caller can act on.
@@ -818,14 +886,16 @@ export class AntigravityCLILayer implements LayerInterface {
       }
 
       {
-        // An allowed extension is not proof of text: verify the decoded bytes.
+        // A permitted name is not proof of text: inspect the actual bytes.
         // Answering mojibake produces a confident summary of noise.
-        if (!looksLikeText(content)) {
+        if (!looksLikeText(bytes)) {
           throw new Error(
-            `${basename(file.path)} does not decode as UTF-8 text and will not be sent to the ` +
+            `${basename(file.path)} is not text and will not be sent to the ` +
             `Antigravity CLI. Use the AI Studio layer for binary formats.`
           );
         }
+
+        const content = bytes.toString('utf8');
 
         if (content.length > MAX_INLINED_FILE_CHARS) {
           // Do not truncate silently: a summary or comparison built from part
@@ -936,19 +1006,40 @@ export class AntigravityCLILayer implements LayerInterface {
       /^(here are|here is|options?|option\s*\d|alternatives?|choices?|notes?)\b/i.test(line) ||
       line.endsWith(':');
 
+    // A refusal or apology is not a translation. Passing one through would send
+    // "I cannot help with that" to the image API as if it were the prompt.
+    const isRefusal = (line: string): boolean =>
+      /^(i (cannot|can't|am unable|won't)|sorry|unfortunately|as an ai)\b/i.test(line);
+
+    // "Translation: <text>" is the answer wearing a label; keep the payload.
+    const unlabel = (line: string): string =>
+      line.replace(/^(translation|english|prompt|result)\s*[:\-]\s*/i, '').trim();
+
     const lines = raw.split('\n').map(stripMarkers).filter(line => line.length > 0);
 
-    // A single-line reply is the requested shape; take it verbatim. Only a
-    // multi-line reply needs disambiguating.
+    // A single-line reply is the requested shape, but it still has to be
+    // checked. Taking it verbatim let bare labels ("Option 1", "Translation:")
+    // and refusals through as successful translations, which the AI Studio
+    // layer then marked wasTranslated and sent to the image API -- generating a
+    // picture of the wrong thing and reporting success.
     if (lines.length === 1 && lines[0] !== undefined) {
-      return this.capTranslation(lines[0], original);
+      const single = unlabel(lines[0]);
+
+      if (single.length >= 3 && !isLabel(single) && !isRefusal(single)) {
+        return this.capTranslation(single);
+      }
+
+      logger.warn('Single-line reply was a label or refusal, not a translation; using the original text');
+      return original;
     }
 
     const highlighted = [...raw.matchAll(/\*\*"?([^"*\n]{3,300})"?\*\*/g)]
       .map(match => stripMarkers(match[1] ?? ''))
       .filter(line => line.length >= 3 && !isLabel(line));
 
-    const candidates = highlighted.length > 0 ? highlighted : lines.filter(line => !isLabel(line));
+    const candidates = (highlighted.length > 0 ? highlighted : lines)
+      .map(unlabel)
+      .filter(line => !isLabel(line) && !isRefusal(line));
 
     const picked = candidates.find(line => line.length >= 3);
 
@@ -959,7 +1050,7 @@ export class AntigravityCLILayer implements LayerInterface {
       return original;
     }
 
-    return this.capTranslation(picked, original);
+    return this.capTranslation(picked);
   }
 
   /**
@@ -968,17 +1059,19 @@ export class AntigravityCLILayer implements LayerInterface {
    * The API rejects prompts over 480 characters; 400 leaves headroom for the
    * safety prefix the AI Studio layer prepends.
    */
-  private capTranslation(text: string, original: string): string {
+  private capTranslation(text: string): string {
     const MAX_TRANSLATION_LENGTH = 400;
 
     if (text.length <= MAX_TRANSLATION_LENGTH) {
       return text;
     }
 
+    // Never log the text itself. Image prompts carry whatever the user typed,
+    // which can include personal or confidential content, and warn output goes
+    // to the console and to LOG_FILE with no redaction.
     logger.warn('Translation was longer than the image-prompt budget and was truncated', {
       length: text.length,
       limit: MAX_TRANSLATION_LENGTH,
-      original,
     });
     return text.slice(0, MAX_TRANSLATION_LENGTH).trim();
   }
@@ -1011,10 +1104,11 @@ export class AntigravityCLILayer implements LayerInterface {
       `No explanation, no alternatives, no markdown, no quotes, no preamble.\n\n` +
       text;
 
+    // Length only: the prompt body must not reach the logs (see capTranslation).
     logger.info(`Translating ${languageName} prompt to English using Antigravity CLI`, {
-      originalText: text,
       sourceLang,
-      languageName
+      languageName,
+      length: text.length,
     });
 
     try {
@@ -1033,9 +1127,8 @@ export class AntigravityCLILayer implements LayerInterface {
       const translatedText = this.extractTranslation(raw, text);
 
       logger.info('Translation completed successfully', {
-        originalText: text,
-        translatedText,
         sourceLang,
+        translatedLength: translatedText.length,
         ...(raw === translatedText ? {} : { rawLength: raw.length }),
         duration: result.metadata?.duration ?? 0
       });
@@ -1045,8 +1138,8 @@ export class AntigravityCLILayer implements LayerInterface {
     } catch (error) {
       logger.error('Translation failed, using original text', {
         error: error instanceof Error ? error.message : String(error),
-        originalText: text,
-        sourceLang
+        sourceLang,
+        length: text.length,
       });
 
       // Fallback to original text if translation fails

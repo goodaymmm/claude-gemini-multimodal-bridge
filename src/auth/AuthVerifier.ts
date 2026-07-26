@@ -506,14 +506,53 @@ export class AuthVerifier {
       await Promise.race([probe, timeout]);
       return { ok: true };
     } catch (error) {
-      const message = (error as Error).message ?? String(error);
+      const err = error as Error & { status?: number; code?: number };
+      const message = err.message ?? String(error);
 
-      // 401/403 and explicit key errors mean the credential is bad. Anything
-      // else -- DNS, timeouts, 5xx, quota -- says nothing about the key itself.
-      const rejected = /401|403|API[_ ]?key|unauthenticated|permission denied|invalid.*credential/i
-        .test(message);
+      // Classify on the structured status the SDK provides, not on prose.
+      //
+      // Message matching conflated distinct failures: a 403 for a disabled API,
+      // a project policy or a model the account cannot access all read as
+      // "invalid key" and told the user to reissue a key that was fine, while a
+      // 404 configuration error was reported as a network problem. The wizard
+      // treats this result as authoritative, so the wrong advice sticks.
+      const status = typeof err.status === 'number' ? err.status
+        : typeof err.code === 'number' ? err.code
+        : undefined;
 
-      return { ok: false, transient: !rejected, error: message };
+      if (status === 401) {
+        return { ok: false, transient: false, error: `unauthenticated (401): ${message}` };
+      }
+
+      if (status === 403) {
+        // 403 covers both a bad key and an account/project restriction. Only
+        // an explicit credential complaint justifies "reissue your key".
+        const credentialProblem = /api[_ ]?key|api key not valid|unauthenticated|invalid.*credential/i
+          .test(message);
+        return credentialProblem
+          ? { ok: false, transient: false, error: `key rejected (403): ${message}` }
+          : {
+              ok: false,
+              transient: true,
+              error: `access denied (403) -- this is a project or API-enablement problem, ` +
+                     `not necessarily the key: ${message}`,
+            };
+      }
+
+      if (status === 429 || (typeof status === 'number' && status >= 500)) {
+        return { ok: false, transient: true, error: `service unavailable (${status}): ${message}` };
+      }
+
+      if (status === 404) {
+        return {
+          ok: false,
+          transient: true,
+          error: `probe model not found (404) -- configuration issue, not a credential one: ${message}`,
+        };
+      }
+
+      // No usable status: timeouts, DNS, offline. Never a credential verdict.
+      return { ok: false, transient: true, error: message };
     }
   }
 
