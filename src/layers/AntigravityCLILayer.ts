@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
@@ -12,6 +12,9 @@ import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLe
 /**
  * Task interface for better type safety
  */
+/** Upper bound on inlined file content, to stay inside the CLI's prompt budget. */
+const MAX_INLINED_FILE_CHARS = 100000;
+
 interface AntigravityTask {
   type?: string;
   action?: string;
@@ -611,7 +614,49 @@ export class AntigravityCLILayer implements LayerInterface {
    * Extract prompt from task (unified method)
    */
   private extractPrompt(task: AntigravityTask): string {
-    return task.prompt ?? task.request ?? task.input ?? '';
+    const prompt = task.prompt ?? task.request ?? task.input ?? '';
+
+    if (!task.files || task.files.length === 0) {
+      return prompt;
+    }
+
+    // File contents must be inlined, not referenced by path.
+    //
+    // This used to pass only the prompt and drop task.files silently, so
+    // `cgmb analyze` falling back from AI Studio asked the CLI to summarise
+    // documents it had never been given. agy answered "which documents?" and
+    // the caller reported "Analysis complete" -- a confident non-answer.
+    // Paths cannot work either: the CLI runs in an empty scratch directory
+    // with no access to the caller's files, by design.
+    const sections: string[] = [];
+
+    for (const file of task.files) {
+      try {
+        const content = readFileSync(file.path, 'utf8');
+        const truncated = content.length > MAX_INLINED_FILE_CHARS;
+
+        sections.push(
+          `--- FILE: ${basename(file.path)} ---\n` +
+          (truncated ? `${content.slice(0, MAX_INLINED_FILE_CHARS)}\n[truncated]` : content)
+        );
+
+        if (truncated) {
+          logger.warn('File truncated before sending to Antigravity CLI', {
+            path: file.path,
+            length: content.length,
+            limit: MAX_INLINED_FILE_CHARS,
+          });
+        }
+      } catch (error) {
+        // Fail loudly: a silently skipped file produces an answer about
+        // nothing, which is worse than an error the caller can act on.
+        throw new Error(
+          `Could not read ${file.path} for Antigravity CLI processing: ${(error as Error).message}`
+        );
+      }
+    }
+
+    return `${prompt}\n\n${sections.join('\n\n')}`;
   }
 
   /**
@@ -661,6 +706,55 @@ export class AntigravityCLILayer implements LayerInterface {
    * Translate text to English for image generation.
    * Uses the CLI layer for efficient token usage and cost optimization.
    */
+  /**
+   * Reduce a model reply to a single usable prompt line.
+   *
+   * The instruction above asks for a bare translation, but model output is not
+   * a contract: a chatty reply must not be able to break image generation. The
+   * downstream API rejects prompts over 480 characters, so this enforces the
+   * shape in code -- pick the first substantive line, drop markdown decoration,
+   * and fall back to the original text rather than emitting something unusable.
+   */
+  private extractTranslation(raw: string, original: string): string {
+    // Prefer the first quoted or bolded candidate when the model offered a list.
+    const highlighted = raw.match(/\*\*"?([^"*\n]{3,300})"?\*\*/) ?? raw.match(/^>\s*"?([^"\n]{3,300})"?/m);
+
+    const candidates = highlighted?.[1] !== undefined
+      ? [highlighted[1]]
+      : raw
+          .split('\n')
+          .map(line =>
+            line
+              .replace(/^[>#\-*\d.)\s]+/, '')   // list markers, headers, quotes
+              .replace(/\*\*/g, '')
+              .replace(/^["']|["']$/g, '')
+              .trim()
+          )
+          .filter(line => line.length > 0 && !/^(here|options?|translation)\b/i.test(line));
+
+    const picked = candidates.find(line => line.length >= 3);
+
+    if (picked === undefined) {
+      logger.warn('Could not extract a translation from the model reply; using the original text', {
+        rawLength: raw.length,
+      });
+      return original;
+    }
+
+    // Leave headroom under the image API's 480-character prompt limit for the
+    // safety prefixes the AI Studio layer prepends.
+    const MAX_TRANSLATION_LENGTH = 400;
+    if (picked.length > MAX_TRANSLATION_LENGTH) {
+      logger.warn('Translation was longer than the image-prompt budget and was truncated', {
+        length: picked.length,
+        limit: MAX_TRANSLATION_LENGTH,
+      });
+      return picked.slice(0, MAX_TRANSLATION_LENGTH).trim();
+    }
+
+    return picked;
+  }
+
   async translateToEnglish(text: string, sourceLang: string): Promise<string> {
     const languageNames: Record<string, string> = {
       ja: 'Japanese',
@@ -677,8 +771,17 @@ export class AntigravityCLILayer implements LayerInterface {
 
     const languageName = languageNames[sourceLang] ?? sourceLang;
 
-    // Simplified translation prompt for image generation
-    const translationPrompt = `Translate to English for image generation: ${text}`;
+    // Antigravity answers conversationally by default. Asked to "translate for
+    // image generation" it replied with a markdown document offering four
+    // styled variants (700+ characters), which was then handed to the image API
+    // verbatim and rejected for exceeding its 480-character prompt limit. Gemini
+    // CLI used to answer tersely, so this only surfaced after the migration.
+    // Constrain the output explicitly, then enforce it in code below.
+    const translationPrompt =
+      `Translate the following ${languageName} text into English for use as an image-generation prompt.\n` +
+      `Output ONLY the translation on a single line. ` +
+      `No explanation, no alternatives, no markdown, no quotes, no preamble.\n\n` +
+      text;
 
     logger.info(`Translating ${languageName} prompt to English using Antigravity CLI`, {
       originalText: text,
@@ -698,12 +801,14 @@ export class AntigravityCLILayer implements LayerInterface {
         throw new Error('Translation failed: No result returned');
       }
 
-      const translatedText = (result.data as string).trim();
+      const raw = (result.data as string).trim();
+      const translatedText = this.extractTranslation(raw, text);
 
       logger.info('Translation completed successfully', {
         originalText: text,
         translatedText,
         sourceLang,
+        ...(raw === translatedText ? {} : { rawLength: raw.length }),
         duration: result.metadata?.duration ?? 0
       });
 
