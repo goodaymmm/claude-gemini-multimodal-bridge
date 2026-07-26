@@ -1034,12 +1034,12 @@ program
 // ADVANCED/TROUBLESHOOTING: Direct Gemini CLI command  
 program
   .command('gemini')
-  .description('⚠️  ADVANCED: Direct Gemini CLI access (troubleshooting only - use cgmb chat instead)')
+  .description('⚠️  ADVANCED: Direct Antigravity CLI access (troubleshooting only - use cgmb chat instead)')
   .argument('[prompt...]', 'Direct prompt (auto-detects if -p missing)')
   .option('-p, --prompt <text>', 'Explicit prompt for Antigravity CLI')
   .option('-m, --model <model>', 'Antigravity model to use (see `agy models`)', DEFAULT_ANTIGRAVITY_MODEL)
   .option('-f, --file <path>', 'File to analyze with prompt')
-  .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
+  .option('--fast', 'Skip the search cache (text prompts only)')
   .action(async (promptArgs, options) => {
     try {
       let prompt = options.prompt;
@@ -1093,7 +1093,7 @@ program
         logger.info('🔧 This error usually indicates an authentication issue:');
         logger.info('   1. Sign in: run `agy` in a terminal');
         logger.info('   2. Check API key configuration');
-        logger.info('   3. Verify Gemini CLI version: gemini --version');
+        logger.info('   3. Verify Antigravity CLI version: agy --version');
         logger.info('   4. Check status: cgmb auth-status --verbose');
       } else if (errorMessage.includes('UNAUTHENTICATED') || errorMessage.includes('API_KEY')) {
         logger.error('❌ Authentication Error', error as Error);
@@ -1101,15 +1101,15 @@ program
         logger.info('   • Sign in (recommended): run `agy` in a terminal');
         logger.info('   • Check status: cgmb auth-status');
       } else if (errorMessage.includes('quota exceeded') || errorMessage.includes('Quota exceeded') || errorMessage.includes('Resource exhausted')) {
-        logger.error('❌ Gemini CLI Service Quota Exceeded', error as Error);
-        logger.info('🔧 This is a Gemini CLI service limitation (separate from Gemini API):');
+        logger.error('❌ Antigravity CLI Service Quota Exceeded', error as Error);
+        logger.info('🔧 This is an Antigravity CLI service limitation (separate from the Gemini API):');
         logger.info('   • Wait a few minutes for quota reset');
         logger.info('   • Try AI Studio layer: cgmb aistudio -p "your question"');
         logger.info('   • Check AI Studio quota: cgmb quota-status');
-        logger.info('   💡 Note: Gemini CLI quota ≠ Gemini API quota (different services)');
+        logger.info('   💡 Note: Antigravity quota ≠ Gemini API quota (different services)');
       } else if (errorMessage.includes('not found') || errorMessage.includes('command not found')) {
-        logger.error('❌ Gemini CLI Not Found', error as Error);
-        logger.info('🔧 Install Gemini CLI:');
+        logger.error('❌ Antigravity CLI Not Found', error as Error);
+        logger.info('🔧 Install Antigravity CLI:');
         logger.info('   • Run setup: cgmb setup');
         logger.info(`   • Manual install: ${AGY_INSTALL_HINT}`);
       } else if (errorMessage.includes('timeout')) {
@@ -1119,7 +1119,7 @@ program
         logger.info('   • Check network connection');
         logger.info('   • Use --fast flag for direct calls');
       } else {
-        logger.error('❌ Gemini CLI processing failed', error as Error);
+        logger.error('❌ Antigravity CLI processing failed', error as Error);
         logger.info('💡 General troubleshooting:');
         logger.info('   • Check authentication: cgmb auth-status');
         logger.info('   • Verify setup: cgmb verify');
@@ -1138,7 +1138,7 @@ async function executeGeminiCommand(options: any) {
 
     // Handle common incorrect option usage
     if (process.argv.includes('--search')) {
-      console.log('\n💡 Note: Web search is automatically enabled in Gemini CLI.');
+      console.log('\n💡 Note: Web search is automatically enabled in Antigravity CLI.');
       console.log('   No --search flag needed. Just ask about current events or trends!');
       console.log('   Example: cgmb gemini -p "latest AI security trends 2025"\n');
       // Continue processing without the flag
@@ -1146,90 +1146,37 @@ async function executeGeminiCommand(options: any) {
 
     await loadEnvironmentSmart({ verbose: false });
     
-    logger.info('🔍 Processing with Gemini CLI...');
-    
-    // Fast path: Direct Gemini CLI call (bypass CGMB layers)
-    if (options.fast && !options.file) {
-      logger.info('Using fast path (direct Gemini CLI call)...');
-      
-      const args = ['gemini'];
-      if (options.model && options.model !== DEFAULT_ANTIGRAVITY_MODEL) {
-        args.push('-m', options.model);
-      }
-      args.push('-p', options.prompt);
-      // Note: Web search is automatic in Gemini CLI, no flags needed
-      
-      try {
-        const { spawn } = await import('child_process');
-        const child = spawn(args[0]!, args.slice(1));
-        
-        let result = '';
-        let error = '';
-        
-        child.stdout?.on('data', (data: Buffer) => {
-          result += data.toString();
-        });
-        
-        child.stderr?.on('data', (data: Buffer) => {
-          error += data.toString();
-        });
-        
-        await new Promise<void>((resolve, reject) => {
-          child.on('close', (code: number | null) => {
-            if (code !== 0) {
-              reject(new Error(`Process exited with code ${code}: ${error}`));
-            } else {
-              resolve();
-            }
-          });
-          
-          child.on('error', (err: Error) => {
-            reject(err);
-          });
-          
-          // Timeout
-          setTimeout(() => {
-            child.kill();
-            reject(new Error('Process timeout'));
-          }, 90000);
-        });
-        
-        logger.info('✅ Fast path Gemini CLI processing completed');
-        console.log('\n📋 Result:');
-        console.log('═'.repeat(50));
-        console.log(result);
-        console.log('\n📊 Metadata:');
-        console.log('Method: Direct Gemini CLI (fast path)');
-        console.log('Bypass: CGMB layer overhead eliminated');
-        return;
-      } catch (error) {
-        logger.warn('Fast path failed, falling back to CGMB layers', { 
-          error: (error as Error).message 
-        });
-        // Continue to normal processing
-      }
+    logger.info('🔍 Processing with Antigravity CLI...');
+
+    // Fast path used to spawn the retired `gemini` binary directly, with its own
+    // 90s timeout, no workspace isolation and no environment allowlist. Every
+    // agy invocation now goes through AntigravityCLILayer so the hardening lives
+    // in exactly one place; `--fast` simply skips CGMB's search cache.
+    const useSearch = !(options.fast && !options.file);
+    if (!useSearch) {
+      logger.info('Using fast path (search cache bypassed)...');
     }
-    
-    // Import and use Gemini CLI layer directly
-    const { GeminiCLILayer } = await import('./layers/GeminiCLILayer.js');
-    const geminiLayer = new GeminiCLILayer();
-    
-    await geminiLayer.initialize();
-    
+
+    const { AntigravityCLILayer } = await import('./layers/AntigravityCLILayer.js');
+    const antigravityLayer = new AntigravityCLILayer();
+
+    await antigravityLayer.initialize();
+
     let result;
     if (options.file) {
       // Process with file
-      result = await geminiLayer.processFiles([{ path: options.file, type: 'document' }], options.prompt);
+      result = await antigravityLayer.processFiles([{ path: options.file, type: 'document' }], options.prompt);
     } else {
       // Text-only processing
-      result = await geminiLayer.execute({
+      result = await antigravityLayer.execute({
         type: 'text_processing',
         prompt: options.prompt,
-        useSearch: true  // Default to true - Gemini CLI has intelligent search decision-making
+        ...(options.model ? { model: options.model } : {}),
+        useSearch,
       });
     }
     
-    logger.info('✅ Gemini CLI processing completed');
+    logger.info('✅ Antigravity CLI processing completed');
     console.log('\n📋 Result:');
     console.log('═'.repeat(50));
     
@@ -1253,7 +1200,7 @@ async function executeGeminiCommand(options: any) {
     process.exit(0);
     
   } catch (error) {
-    logger.error('❌ Gemini CLI processing failed', error as Error);
+    logger.error('❌ Antigravity CLI processing failed', error as Error);
     logger.info('💡 Check authentication: cgmb auth-status');
     process.exit(1);
   }
