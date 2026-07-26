@@ -1,4 +1,4 @@
-import { execSync, spawn } from 'child_process';
+import { execFileSync, execSync, spawn } from 'child_process';
 import { join } from 'path';
 import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
 
@@ -391,18 +391,34 @@ export class ClaudeCodeLayer implements LayerInterface {
         options,
       });
 
-      const child = spawn(this.claudePath!, [prompt], {
-        stdio: 'pipe',
+      // `--print` asks for a single headless answer. The bare form happens to
+      // work today, but relying on the default leaves the layer at the mercy of
+      // a future CLI default change; the flag makes the intent explicit.
+      const target = this.buildSpawnTarget(this.claudePath!, ['--print', prompt]);
+
+      const child = spawn(target.file, target.args, {
+        // stdin must be closed, not an idle pipe: Claude Code waits ~3s for
+        // piped input before giving up, printing
+        // "no stdin data received in 3s" to stderr and taxing every call.
+        stdio: ['ignore', 'pipe', 'pipe'],
         cwd: process.cwd(),
-        env: process.env,
-        shell: isPlatformWindows()
+        env: this.buildChildEnv(),
+        windowsHide: true,
+        ...target.spawnOptions,
       });
 
       let output = '';
       let errorOutput = '';
 
       const timeoutId = setTimeout(() => {
-        isPlatformWindows() ? child.kill() : child.kill('SIGKILL');
+        child.kill('SIGTERM');
+        // Escalate only if the process is genuinely still alive: `child.killed`
+        // only reports that a signal was delivered.
+        setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill('SIGKILL');
+          }
+        }, 2000).unref();
         reject(new Error(`Claude Code execution timeout after ${timeout}ms`));
       }, timeout);
 
@@ -439,6 +455,64 @@ export class ClaudeCodeLayer implements LayerInterface {
   }
 
   /**
+   * Resolve how to invoke the Claude Code executable without a shell.
+   *
+   * `shell: true` was catastrophic on Windows: Node joins argv into a single
+   * command line for cmd.exe, so a prompt like "Reply with exactly: PING_OK"
+   * was split on whitespace and never arrived as a prompt at all. Claude then
+   * answered whatever it made of the stray tokens, so every Windows call
+   * returned a confident, entirely unrelated response instead of failing --
+   * measurably worse than an error. It was also a command-injection vector,
+   * since prompt text is attacker-influenced and cmd.exe interprets & | > ^.
+   *
+   * Direct spawn handles both bare command names (libuv walks PATH/PATHEXT)
+   * and absolute .exe paths. Only npm's .cmd/.bat shims genuinely need a shell,
+   * and those go through cmd.exe with explicit quoting and
+   * windowsVerbatimArguments so the argument boundaries survive intact.
+   */
+  private buildSpawnTarget(command: string, args: string[]): {
+    file: string;
+    args: string[];
+    spawnOptions: { windowsVerbatimArguments?: boolean };
+  } {
+    if (!isPlatformWindows() || !/\.(cmd|bat)$/i.test(command)) {
+      return { file: command, args, spawnOptions: {} };
+    }
+
+    const quote = (value: string): string =>
+      `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
+
+    const commandLine = [command, ...args].map(quote).join(' ');
+
+    return {
+      file: process.env.ComSpec ?? 'cmd.exe',
+      args: ['/d', '/s', '/c', `"${commandLine}"`],
+      spawnOptions: { windowsVerbatimArguments: true },
+    };
+  }
+
+  /**
+   * Build the environment for a spawned Claude Code process.
+   *
+   * CGMB may itself be running inside a Claude Code session whose environment
+   * remaps the model aliases (ANTHROPIC_DEFAULT_OPUS_MODEL and friends) or
+   * pins a model outright. Inheriting those would silently answer CGMB's
+   * internal reasoning calls with whatever model the host developer happened
+   * to configure, so they are stripped and the child picks its own defaults.
+   */
+  private buildChildEnv(): NodeJS.ProcessEnv {
+    const env = { ...process.env };
+
+    delete env.ANTHROPIC_MODEL;
+    delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
+    delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
+    delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+    delete env.CLAUDE_CODE_SUBAGENT_MODEL;
+
+    return env;
+  }
+
+  /**
    * Find Claude Code executable path
    */
   private async findClaudeCodePath(): Promise<string | undefined> {
@@ -462,7 +536,16 @@ export class ClaudeCodeLayer implements LayerInterface {
 
     for (const path of possiblePaths) {
       try {
-        execSync(`${path} --version`, { stdio: 'ignore', timeout: 5000 });
+        // execFileSync, not a shell string: an interpolated path containing
+        // spaces (C:\Program Files\...) would otherwise be split into
+        // arguments, and any shell metacharacter in it would be interpreted.
+        const target = this.buildSpawnTarget(path, ['--version']);
+        execFileSync(target.file, target.args, {
+          stdio: 'ignore',
+          timeout: 5000,
+          windowsHide: true,
+          ...target.spawnOptions,
+        });
         logger.debug('Found Claude Code at', { path });
         return path;
       } catch {

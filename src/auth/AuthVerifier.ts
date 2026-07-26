@@ -1,5 +1,5 @@
 import { commandExists } from '../utils/platformUtils.js';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
@@ -520,20 +520,27 @@ export class AuthVerifier {
    * Test Claude Code functionality
    */
   private async testClaudeCodeFunctionality(): Promise<boolean> {
+    // `claude auth status --json` reports the session directly. The previous
+    // check ran `claude --help` and scanned the help TEXT for "auth" plus
+    // "required"/"login" -- but the help lists an `auth` subcommand and
+    // includes a JSON schema example containing "required", so the condition
+    // was true on every machine. The Claude layer was therefore reported
+    // unauthenticated for everyone, cached, and never used.
     try {
-      // Try a simple claude command
-      const output = execSync('claude --help', { 
+      const output = execFileSync('claude', ['auth', 'status', '--json'], {
         encoding: 'utf8',
-        timeout: 5000,
-        stdio: 'pipe'
+        timeout: 10000,
+        stdio: 'pipe',
+        windowsHide: true,
       });
-      
-      // Check if the output indicates authentication is needed
-      const needsAuth = output.toLowerCase().includes('auth') && 
-                       (output.toLowerCase().includes('required') || 
-                        output.toLowerCase().includes('login'));
-      
-      return !needsAuth;
+
+      const status = JSON.parse(output) as { loggedIn?: boolean };
+      if (status.loggedIn === true) {
+        return true;
+      }
+
+      logger.debug('Claude Code is installed but not signed in');
+      return false;
     } catch (error) {
       logger.debug('Claude Code functionality test failed', { error: (error as Error).message });
       return false;
