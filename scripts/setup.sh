@@ -35,6 +35,27 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# version_at_least ACTUAL MINIMUM -> exit 0 when ACTUAL >= MINIMUM
+#
+# Uses awk rather than `sort -V`: -V is a GNU extension that BSD sort (the
+# default on macOS, which this project supports) does not implement. There the
+# pipeline fails, the comparison yields an empty result, and a perfectly
+# current version is reported as too old. awk is required by POSIX.
+version_at_least() {
+    awk -v a="$1" -v b="$2" '
+    BEGIN {
+        gsub(/^[vV]/, "", a); gsub(/^[vV]/, "", b);
+        na = split(a, A, "."); nb = split(b, B, ".");
+        n = (na > nb) ? na : nb;
+        for (i = 1; i <= n; i++) {
+            x = (i <= na) ? A[i] + 0 : 0;
+            y = (i <= nb) ? B[i] + 0 : 0;
+            if (x != y) exit (x > y) ? 0 : 1;
+        }
+        exit 0;
+    }'
+}
+
 # Check Node.js version
 check_node_version() {
     log_info "Checking Node.js version..."
@@ -47,7 +68,7 @@ check_node_version() {
     local node_version=$(node --version | cut -d'v' -f2)
     local required_version="18.0.0"
     
-    if [ "$(printf '%s\n' "$required_version" "$node_version" | sort -V | head -n1)" != "$required_version" ]; then
+    if ! version_at_least "$node_version" "$required_version"; then
         log_error "Node.js version $node_version is too old. Required: $required_version or higher."
         exit 1
     fi
@@ -103,11 +124,6 @@ install_claude_code() {
 # execute remote code the user never saw and still leave an unauthenticated
 # CLI, so print the command and let them run it.
 MIN_AGY_VERSION="1.1.7"
-
-# True when $1 is >= $2 as a dotted version.
-version_at_least() {
-    [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
-}
 
 check_antigravity_cli() {
     log_info "Checking Antigravity CLI (agy)..."

@@ -269,7 +269,7 @@ program
       await loadEnvironmentSmart({ verbose: false });
       
       const verifier = new AuthVerifier();
-      const result = await verifier.verifyAllAuthentications();
+      const result = await verifier.verifyAllAuthentications({ live: true });
       
       console.log('\n🔐 Authentication Status Report\n');
       console.log('═'.repeat(50));
@@ -767,7 +767,7 @@ program
       
       // Run authentication verification
       logger.info('\n🔐 Authentication Verification:');
-      const authResults = await authVerifier.verifyAllAuthentications();
+      const authResults = await authVerifier.verifyAllAuthentications({ live: true });
       
       // Display authentication results
       let authChecksPassed = true;

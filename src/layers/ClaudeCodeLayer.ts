@@ -18,7 +18,7 @@ interface ClaudeCodeTask {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { isPlatformWindows } from '../utils/platformUtils.js';
+import { buildSpawnTarget } from '../utils/processUtils.js';
 
 /**
  * ClaudeCodeLayer handles direct Claude Code execution with enhanced authentication support
@@ -407,7 +407,7 @@ export class ClaudeCodeLayer implements LayerInterface {
       // there is nothing left to escape and the class of bug cannot recur.
       // `--print` makes the headless single-answer mode explicit rather than
       // depending on a CLI default.
-      const target = this.buildSpawnTarget(this.claudePath!, ['--print']);
+      const target = buildSpawnTarget(this.claudePath!, ['--print']);
 
       const child = spawn(target.file, target.args, {
         // stdin is a pipe we write and immediately close. It must not be left
@@ -495,49 +495,6 @@ export class ClaudeCodeLayer implements LayerInterface {
   }
 
   /**
-   * Resolve how to invoke the Claude Code executable without a shell.
-   *
-   * `shell: true` was catastrophic on Windows: Node joins argv into a single
-   * command line for cmd.exe, so a prompt like "Reply with exactly: PING_OK"
-   * was split on whitespace and never arrived as a prompt at all. Claude then
-   * answered whatever it made of the stray tokens, so every Windows call
-   * returned a confident, entirely unrelated response instead of failing --
-   * measurably worse than an error. It was also a command-injection vector,
-   * since prompt text is attacker-influenced and cmd.exe interprets & | > ^.
-   *
-   * Direct spawn handles both bare command names (libuv walks PATH/PATHEXT)
-   * and absolute .exe paths. Only npm's .cmd/.bat shims genuinely need a shell,
-   * and those go through cmd.exe with explicit quoting and
-   * windowsVerbatimArguments so the argument boundaries survive intact.
-   *
-   * IMPORTANT: `args` must contain only trusted, static values. cmd.exe cannot
-   * be escaped reliably -- it has no backslash-escape concept, so a quote in an
-   * argument ends the quoted region and any following `&` runs as a command.
-   * Caller-controlled text (prompts, file contents, MCP input) must be passed
-   * on stdin instead; see executeClaudeCommand.
-   */
-  private buildSpawnTarget(command: string, args: string[]): {
-    file: string;
-    args: string[];
-    spawnOptions: { windowsVerbatimArguments?: boolean };
-  } {
-    if (!isPlatformWindows() || !/\.(cmd|bat)$/i.test(command)) {
-      return { file: command, args, spawnOptions: {} };
-    }
-
-    const quote = (value: string): string =>
-      `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
-
-    const commandLine = [command, ...args].map(quote).join(' ');
-
-    return {
-      file: process.env.ComSpec ?? 'cmd.exe',
-      args: ['/d', '/s', '/c', `"${commandLine}"`],
-      spawnOptions: { windowsVerbatimArguments: true },
-    };
-  }
-
-  /**
    * Build the environment for a spawned Claude Code process.
    *
    * CGMB may itself be running inside a Claude Code session whose environment
@@ -585,7 +542,7 @@ export class ClaudeCodeLayer implements LayerInterface {
         // execFileSync, not a shell string: an interpolated path containing
         // spaces (C:\Program Files\...) would otherwise be split into
         // arguments, and any shell metacharacter in it would be interpreted.
-        const target = this.buildSpawnTarget(path, ['--version']);
+        const target = buildSpawnTarget(path, ['--version']);
         execFileSync(target.file, target.args, {
           stdio: 'ignore',
           timeout: 5000,

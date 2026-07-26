@@ -3,6 +3,7 @@ import { execFileSync, execSync } from 'child_process';
 import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
+import { buildSpawnTarget } from '../utils/processUtils.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';
 import { AuthCache } from './AuthCache.js';
@@ -34,9 +35,27 @@ export class AuthVerifier {
   }
 
   /**
-   * Verify all service authentications
+   * Verify all service authentications.
+   *
+   * @param options.live Re-probe every service instead of trusting the cache.
+   *
+   * Successful results are cached for hours, which is right for hot internal
+   * paths but wrong for a user who explicitly asks "am I authenticated?".
+   * After a sign-out, a revoked credential, an uninstalled binary or a network
+   * failure, the cache would keep answering "authenticated" for up to 6 hours
+   * and the user would only discover otherwise on their next real request --
+   * the same delayed-failure pattern this migration set out to remove.
+   * `cgmb auth-status` and `cgmb verify` therefore pass live: true.
    */
-  async verifyAllAuthentications(): Promise<VerificationResult> {
+  async verifyAllAuthentications(options: { live?: boolean } = {}): Promise<VerificationResult> {
+    if (options.live) {
+      // Drop cached verdicts and failure backoff so every service is re-probed.
+      // This is an explicit user action, so the extra latency is warranted.
+      for (const service of ['antigravity', 'gemini', 'aistudio', 'claude'] as const) {
+        this.authCache.forceRefresh(service);
+      }
+    }
+
     return safeExecute(
       async () => {
         logger.info('Starting comprehensive authentication verification...');
@@ -481,11 +500,17 @@ export class AuthVerifier {
     // was true on every machine. The Claude layer was therefore reported
     // unauthenticated for everyone, cached, and never used.
     try {
-      const output = execFileSync('claude', ['auth', 'status', '--json'], {
+      // Must go through the shared launcher: npm installs Claude Code as a
+      // `claude.cmd` shim on Windows, and execFileSync on a .cmd fails with
+      // EINVAL. Probing it directly reported an installed, signed-in Claude as
+      // unauthenticated and cached that, disabling the whole layer.
+      const target = buildSpawnTarget('claude', ['auth', 'status', '--json']);
+      const output = execFileSync(target.file, target.args, {
         encoding: 'utf8',
         timeout: 10000,
         stdio: 'pipe',
         windowsHide: true,
+        ...target.spawnOptions,
       });
 
       const status = JSON.parse(output) as { loggedIn?: boolean };

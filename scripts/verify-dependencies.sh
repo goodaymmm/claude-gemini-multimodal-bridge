@@ -38,6 +38,26 @@ check_command() {
 # 1.1.7 未満は非TTY で何も出力せず exit 0 になるため、存在確認だけでは不十分。
 MIN_AGY_VERSION="1.1.7"
 
+# version_at_least ACTUAL MINIMUM -> ACTUAL >= MINIMUM のとき exit 0
+#
+# `sort -V` は GNU 拡張で、macOS 標準の BSD sort には存在しない。
+# そちらでは比較結果が空になり、要件を満たすバージョンまで「古すぎる」と
+# 誤判定される。awk は POSIX 必須なので macOS でも動作する。
+version_at_least() {
+    awk -v a="$1" -v b="$2" '
+    BEGIN {
+        gsub(/^[vV]/, "", a); gsub(/^[vV]/, "", b);
+        na = split(a, A, "."); nb = split(b, B, ".");
+        n = (na > nb) ? na : nb;
+        for (i = 1; i <= n; i++) {
+            x = (i <= na) ? A[i] + 0 : 0;
+            y = (i <= nb) ? B[i] + 0 : 0;
+            if (x != y) exit (x > y) ? 0 : 1;
+        }
+        exit 0;
+    }'
+}
+
 check_agy_version() {
     if ! command -v agy &> /dev/null; then
         echo -e "${RED}✗${NC} Antigravity CLI (agy) が見つかりません"
@@ -54,9 +74,7 @@ check_agy_version() {
         return 1
     fi
 
-    if [ "$(printf '%s
-%s
-' "$MIN_AGY_VERSION" "$agy_version" | sort -V | head -n1)" = "$MIN_AGY_VERSION" ]; then
+    if version_at_least "$agy_version" "$MIN_AGY_VERSION"; then
         echo -e "${GREEN}✓${NC} Antigravity CLI (agy) $agy_version (要件: >=$MIN_AGY_VERSION)"
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         return 0

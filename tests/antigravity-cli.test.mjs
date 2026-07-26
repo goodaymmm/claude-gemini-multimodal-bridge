@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -13,6 +13,7 @@ import {
 } from '../dist/utils/antigravityCli.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
+import { buildSpawnTarget } from '../dist/utils/processUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === 'win32';
@@ -175,6 +176,50 @@ describe('windows .cmd argument handling', { skip: !isWindows && 'Windows-only b
     const staticOnly = await viaCmd(['--print']);
     assert.doesNotMatch(staticOnly.stdout, /INJECTED_MARKER/, 'static argv must not inject');
     assert.match(staticOnly.stdout, /SHIM-ARGS: "--print"/);
+  });
+});
+
+describe('windows .cmd launcher', { skip: !isWindows && 'Windows-only behaviour' }, () => {
+  const dir = join(tmpdir(), `cgmb-test-launcher-${process.pid}`);
+  const shim = join(dir, 'faketool.cmd');
+
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('can invoke a .cmd shim that execFileSync alone cannot', async () => {
+    // Regression: npm installs Claude Code as `claude.cmd` on Windows, and
+    // execFileSync on a .cmd fails with EINVAL because CreateProcess cannot run
+    // a batch file. An auth probe that called execFileSync directly therefore
+    // reported an installed, signed-in Claude as unauthenticated and cached it,
+    // disabling the whole layer.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(shim, '@echo off\r\necho {"loggedIn":true}\r\n', { encoding: 'utf8', flag: 'wx' });
+
+    // Sanity: the naive call really does fail, so the contrast stays meaningful.
+    let naiveFailed = false;
+    try {
+      execFileSync(shim, ['auth', 'status'], { encoding: 'utf8', stdio: 'pipe', windowsHide: true });
+    } catch (error) {
+      naiveFailed = error.code === 'EINVAL';
+    }
+    assert.equal(naiveFailed, true, 'sanity: execFileSync on .cmd must fail with EINVAL');
+
+    // The shared launcher must make it work.
+    const target = buildSpawnTarget(shim, ['auth', 'status', '--json']);
+    const output = execFileSync(target.file, target.args, {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      windowsHide: true,
+      ...target.spawnOptions,
+    });
+    assert.equal(JSON.parse(output.trim()).loggedIn, true);
+  });
+
+  it('passes a real executable straight through, without a shell', () => {
+    const target = buildSpawnTarget(process.execPath, ['--version']);
+    assert.equal(target.file, process.execPath);
+    assert.deepEqual(target.args, ['--version']);
+    assert.equal(target.spawnOptions.windowsVerbatimArguments, undefined);
   });
 });
 
