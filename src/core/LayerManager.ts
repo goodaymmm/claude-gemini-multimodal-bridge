@@ -100,6 +100,25 @@ export class LayerManager {
   }
 
   /**
+   * @deprecated Renamed to getAntigravityLayer(). Kept because LayerManager is
+   * a public export and this method was public before the Antigravity rename --
+   * removing it outright breaks compilation for TypeScript consumers and throws
+   * TypeError for JavaScript ones. Returns the same instance; scheduled for
+   * removal in the next major release.
+   */
+  public getGeminiLayer(): AntigravityCLILayer {
+    return this.getAntigravityLayer();
+  }
+
+  /**
+   * @deprecated Renamed to getAntigravityLayerAsync(). See getGeminiLayer().
+   * Returns the same shared initialization promise.
+   */
+  public async getGeminiLayerAsync(): Promise<AntigravityCLILayer> {
+    return this.getAntigravityLayerAsync();
+  }
+
+  /**
    * Get AI Studio layer with lazy initialization
    */
   public getAIStudioLayer(): AIStudioLayer {

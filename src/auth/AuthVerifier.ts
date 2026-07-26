@@ -94,32 +94,16 @@ export class AuthVerifier {
             return result;
           }
 
-          // Priority 2: API Key fallback
-          const apiKey = process.env.GEMINI_API_KEY;
-          if (apiKey) {
-            logger.debug('OAuth failed, trying API Key fallback for Gemini');
-            
-            // Test API key validity with a simple request
-            try {
-              await this.testGeminiApiKey(apiKey);
-              
-              const result: AuthResult = {
-                success: true,
-                status: {
-                  isAuthenticated: true,
-                  method: 'api_key',
-                  userInfo: undefined,
-                },
-                requiresAction: false,
-              };
-              
-              // Cache successful API key authentication
-              this.authCache.set('gemini', result);
-              return result;
-            } catch (apiError) {
-              logger.warn('Gemini API key validation failed', { error: (apiError as Error).message });
-            }
-          }
+          // There is deliberately no API-key fallback here.
+          //
+          // This used to validate GEMINI_API_KEY against the Gemini API and, on
+          // success, report the search layer as authenticated for 6 hours. But
+          // Antigravity authenticates solely through OAuth tokens in the OS
+          // keyring and never consumes that key, so the check proved nothing
+          // about the layer. On a machine with a leftover key but no agy -- or
+          // no sign-in, or a network fault -- the layer was reported healthy and
+          // only failed on the first real request. A successful `agy models`
+          // above is the only evidence that counts.
 
           // No valid authentication found
           const result: AuthResult = {
@@ -431,43 +415,6 @@ export class AuthVerifier {
         return this.verifyClaudeCodeAuth();
       default:
         throw new Error(`Unknown service: ${service}`);
-    }
-  }
-
-  /**
-   * Test Gemini API key validity with a lightweight request
-   */
-  private async testGeminiApiKey(apiKey: string): Promise<void> {
-    // Import Google AI library dynamically to avoid loading if not needed
-    const { GoogleGenAI } = await import('@google/genai');
-    
-    try {
-      const genAI = new GoogleGenAI({ apiKey });
-      
-      // Simple test prompt to validate API key and check quota
-      const result = await genAI.models.generateContent({
-        model: 'gemini-pro',
-        contents: [{
-          parts: [{ text: 'Test' }]
-        }]
-      });
-      
-      if (!result.candidates || result.candidates.length === 0) {
-        throw new Error('API key test failed - no response');
-      }
-      
-      logger.debug('Gemini API key validation successful');
-    } catch (error) {
-      const errorMessage = (error as Error).message;
-      
-      // Enhanced quota error detection during authentication
-      if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('Quota exceeded')) {
-        logger.warn('Gemini quota exceeded during authentication check', { error: errorMessage });
-        throw new Error(`Gemini API quota exceeded. Please wait before retrying or use a different model. Details: ${errorMessage}`);
-      }
-      
-      logger.warn('Gemini API key validation failed', { error: errorMessage });
-      throw new Error(`Gemini API key invalid: ${errorMessage}`);
     }
   }
 

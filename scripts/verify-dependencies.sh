@@ -34,6 +34,40 @@ check_command() {
     fi
 }
 
+# agy バージョンチェック
+# 1.1.7 未満は非TTY で何も出力せず exit 0 になるため、存在確認だけでは不十分。
+MIN_AGY_VERSION="1.1.7"
+
+check_agy_version() {
+    if ! command -v agy &> /dev/null; then
+        echo -e "${RED}✗${NC} Antigravity CLI (agy) が見つかりません"
+        FAILURE_COUNT=$((FAILURE_COUNT + 1))
+        return 1
+    fi
+
+    local agy_version
+    agy_version=$(agy --version 2>/dev/null | head -n1 | tr -d '[:space:]')
+
+    if [ -z "$agy_version" ]; then
+        echo -e "${RED}✗${NC} agy のバージョンを取得できません"
+        FAILURE_COUNT=$((FAILURE_COUNT + 1))
+        return 1
+    fi
+
+    if [ "$(printf '%s
+%s
+' "$MIN_AGY_VERSION" "$agy_version" | sort -V | head -n1)" = "$MIN_AGY_VERSION" ]; then
+        echo -e "${GREEN}✓${NC} Antigravity CLI (agy) $agy_version (要件: >=$MIN_AGY_VERSION)"
+        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+        return 0
+    fi
+
+    echo -e "${RED}✗${NC} Antigravity CLI $agy_version は古すぎます (要件: >=$MIN_AGY_VERSION)"
+    echo -e "${YELLOW}  → agy update で更新してください${NC}"
+    FAILURE_COUNT=$((FAILURE_COUNT + 1))
+    return 1
+}
+
 # Node.js バージョンチェック
 check_node_version() {
     if command -v node &> /dev/null; then
@@ -59,7 +93,7 @@ echo "📋 必須ツールの確認:"
 check_node_version
 check_command "npm" "NPM"
 check_command "claude" "Claude Code CLI"
-check_command "agy" "Antigravity CLI (agy)"
+check_agy_version
 
 echo ""
 

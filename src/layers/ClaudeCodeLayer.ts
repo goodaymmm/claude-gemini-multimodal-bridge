@@ -392,21 +392,39 @@ export class ClaudeCodeLayer implements LayerInterface {
         options,
       });
 
-      // `--print` asks for a single headless answer. The bare form happens to
-      // work today, but relying on the default leaves the layer at the mercy of
-      // a future CLI default change; the flag makes the intent explicit.
-      const target = this.buildSpawnTarget(this.claudePath!, ['--print', prompt]);
+      // The prompt is delivered on stdin, never on the command line.
+      //
+      // Prompt text is caller-controlled and reaches this layer from MCP input.
+      // Putting it in argv meant that on Windows, where an npm-installed
+      // `claude.cmd` shim has to be invoked through cmd.exe, it became part of a
+      // shell command line. MSVCRT-style `\"` escaping does not protect it:
+      // cmd.exe has no concept of backslash escapes, so it reads the backslash
+      // as a literal, treats the quote as closing, and executes anything after
+      // an unquoted `&`. Verified with a .cmd shim -- the payload
+      // `x" & echo ... & rem "` ran an extra command.
+      //
+      // With the prompt on stdin the command line carries only static flags, so
+      // there is nothing left to escape and the class of bug cannot recur.
+      // `--print` makes the headless single-answer mode explicit rather than
+      // depending on a CLI default.
+      const target = this.buildSpawnTarget(this.claudePath!, ['--print']);
 
       const child = spawn(target.file, target.args, {
-        // stdin must be closed, not an idle pipe: Claude Code waits ~3s for
-        // piped input before giving up, printing
-        // "no stdin data received in 3s" to stderr and taxing every call.
-        stdio: ['ignore', 'pipe', 'pipe'],
+        // stdin is a pipe we write and immediately close. It must not be left
+        // idle: Claude Code waits ~3s for piped input before giving up and
+        // logging "no stdin data received in 3s", taxing every call.
+        stdio: ['pipe', 'pipe', 'pipe'],
         cwd: this.packageRoot,
         env: this.buildChildEnv(),
         windowsHide: true,
         ...target.spawnOptions,
       });
+
+      child.stdin.on('error', () => {
+        // A child that exits before reading stdin gives us EPIPE; the close
+        // handler below already reports the real failure.
+      });
+      child.stdin.end(prompt);
 
       let output = '';
       let errorOutput = '';
@@ -491,6 +509,12 @@ export class ClaudeCodeLayer implements LayerInterface {
    * and absolute .exe paths. Only npm's .cmd/.bat shims genuinely need a shell,
    * and those go through cmd.exe with explicit quoting and
    * windowsVerbatimArguments so the argument boundaries survive intact.
+   *
+   * IMPORTANT: `args` must contain only trusted, static values. cmd.exe cannot
+   * be escaped reliably -- it has no backslash-escape concept, so a quote in an
+   * argument ends the quoted region and any following `&` runs as a command.
+   * Caller-controlled text (prompts, file contents, MCP input) must be passed
+   * on stdin instead; see executeClaudeCommand.
    */
   private buildSpawnTarget(command: string, args: string[]): {
     file: string;

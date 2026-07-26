@@ -102,18 +102,44 @@ install_claude_code() {
 # sign-in is interactive. Running the installer unattended from here would
 # execute remote code the user never saw and still leave an unauthenticated
 # CLI, so print the command and let them run it.
+MIN_AGY_VERSION="1.1.7"
+
+# True when $1 is >= $2 as a dotted version.
+version_at_least() {
+    [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
+}
+
 check_antigravity_cli() {
     log_info "Checking Antigravity CLI (agy)..."
 
     if command_exists agy; then
-        log_success "Antigravity CLI (agy) is already installed"
-        return 0
+        # Presence is not enough. Builds before 1.1.7 gate stdout on isatty():
+        # they print nothing and still exit 0 when stdout is not a terminal,
+        # which turns every CGMB call into a silent wrong answer. Accepting
+        # them here reported a healthy setup that only failed at runtime.
+        local agy_version
+        agy_version=$(agy --version 2>/dev/null | head -n1 | tr -d '[:space:]')
+
+        if [ -z "$agy_version" ]; then
+            log_error "Could not determine the agy version ('agy --version' produced no output)"
+            return 1
+        fi
+
+        if version_at_least "$agy_version" "$MIN_AGY_VERSION"; then
+            log_success "Antigravity CLI (agy) $agy_version is installed"
+            return 0
+        fi
+
+        log_error "Antigravity CLI $agy_version is too old (need >= $MIN_AGY_VERSION)"
+        echo "  Older builds print nothing when stdout is not a terminal."
+        echo "  Update with: agy update"
+        return 1
     fi
 
     log_warning "Antigravity CLI (agy) not found - the web-search layer needs it"
     echo "  1. curl -fsSL https://antigravity.google/cli/install.sh | bash"
     echo "  2. Run 'agy' once and complete the Google sign-in"
-    echo "  Requires agy 1.1.7 or newer"
+    echo "  Requires agy $MIN_AGY_VERSION or newer"
     echo "  Docs: https://antigravity.google/docs/cli/install"
     return 1
 }
@@ -217,11 +243,11 @@ verify_installation() {
         log_error "✗ Claude Code CLI"
     fi
     
-    if command_exists agy; then
-        log_success "✓ Antigravity CLI (agy)"
+    if check_antigravity_cli >/dev/null 2>&1; then
+        log_success "✓ Antigravity CLI (agy) >= $MIN_AGY_VERSION"
         ((checks_passed++))
     else
-        log_error "✗ Antigravity CLI (agy)"
+        log_error "✗ Antigravity CLI (agy) missing or older than $MIN_AGY_VERSION"
     fi
     
     if [ -f .env ]; then

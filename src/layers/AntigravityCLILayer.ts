@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { mkdirSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
@@ -7,7 +7,7 @@ import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { SearchCache } from '../utils/SearchCache.js';
-import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLeast } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
+import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLeast, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
  * Task interface for better type safety
@@ -39,7 +39,6 @@ export class AntigravityCLILayer implements LayerInterface {
   private searchCache: SearchCache;
   private agyPath: string = 'agy';
   private agyVersion?: string;
-  private cachedWorkspaceDir?: string;
   private isInitialized = false;
 
   // Antigravity responds slower than the old Gemini CLI, so the default budget is higher.
@@ -100,14 +99,52 @@ export class AntigravityCLILayer implements LayerInterface {
   }
 
   /**
-   * Check if the Antigravity CLI layer is available
+   * Check whether this layer can actually serve a request.
+   *
+   * "Initialized" and "usable" are not the same thing. initialize() only logs
+   * an authentication warning and never blocks, so it always ends with
+   * isInitialized = true. Returning that flag reported the search layer as
+   * available on machines with no agy installed at all, which meant
+   * CGMBServer.verifyDependencies() and any monitoring built on it hid a real
+   * outage and every request failed downstream instead.
+   *
+   * Checks the three things a request actually depends on: the binary exists,
+   * it is new enough, and the session is authenticated.
    */
   async isAvailable(): Promise<boolean> {
     try {
       if (!this.isInitialized) {
         await this.initialize();
       }
-      return this.isInitialized;
+
+      const binary = await findAntigravityBinary();
+      if (!binary) {
+        logger.debug('Antigravity CLI layer unavailable: agy not found', {
+          install: AGY_INSTALL_HINT,
+        });
+        return false;
+      }
+
+      if (!binary.versionSupported) {
+        logger.warn('Antigravity CLI layer unavailable: agy is older than the supported minimum', {
+          version: binary.version,
+          minimum: MIN_AGY_VERSION,
+        });
+        return false;
+      }
+
+      const probe = await probeAntigravityAuth(binary.path);
+      if (!probe.authenticated) {
+        // Distinguish "signed out" from "could not reach the service": the
+        // second is transient and should not be read as a configuration error.
+        logger.debug('Antigravity CLI layer unavailable', {
+          outcome: probe.outcome,
+          error: probe.error,
+        });
+        return false;
+      }
+
+      return true;
     } catch (error) {
       logger.debug('Antigravity CLI layer not available', { error: (error as Error).message });
       return false;
@@ -377,9 +414,11 @@ export class AntigravityCLILayer implements LayerInterface {
       // hand it AI_STUDIO_API_KEY and friends. Run it in an empty scratch
       // directory with only the variables it needs to find its own config and
       // credentials.
+      const workspaceDir = this.createWorkspaceDir();
+
       const child = spawn(this.agyPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: this.workspaceDir,
+        cwd: workspaceDir,
         env: this.buildChildEnv(),
         ...(isWindows ? { windowsHide: true } : {}),
       });
@@ -387,6 +426,19 @@ export class AntigravityCLILayer implements LayerInterface {
       let stdout = '';
       let stderr = '';
       let settled = false;
+
+      // Remove the scratch directory once the child is gone, whatever the
+      // outcome. Anything agy wrote there belongs to this request alone.
+      const cleanupWorkspace = (): void => {
+        try {
+          rmSync(workspaceDir, { recursive: true, force: true });
+        } catch (error) {
+          logger.debug('Could not remove Antigravity workspace directory', {
+            workspaceDir,
+            error: (error as Error).message,
+          });
+        }
+      };
 
       child.stdout?.on('data', (data) => {
         stdout += data.toString();
@@ -398,6 +450,7 @@ export class AntigravityCLILayer implements LayerInterface {
 
       child.on('close', (code) => {
         clearTimeout(killTimer);
+        cleanupWorkspace();
         if (settled) {
           return;
         }
@@ -434,6 +487,7 @@ export class AntigravityCLILayer implements LayerInterface {
 
       child.on('error', (err) => {
         clearTimeout(killTimer);
+        cleanupWorkspace();
         if (settled) {
           return;
         }
@@ -482,16 +536,20 @@ export class AntigravityCLILayer implements LayerInterface {
   }
 
   /**
-   * An empty directory used as the CLI's workspace so it never sees the
-   * repository it is running inside. Created lazily and reused.
+   * A fresh, private, empty directory used as the CLI's workspace so it never
+   * sees the repository it is running inside.
+   *
+   * One directory per execution, via mkdtemp. A fixed shared path was wrong on
+   * two counts: agy can read and write its cwd depending on the prompt, so
+   * files left by one request could leak into or contaminate the next; and a
+   * predictable name under a world-writable /tmp can be pre-created or
+   * symlink-swapped by another user on a shared host. mkdtemp generates an
+   * unpredictable name and fails rather than reusing an existing directory.
    */
-  private get workspaceDir(): string {
-    if (!this.cachedWorkspaceDir) {
-      const dir = join(tmpdir(), 'cgmb-agy-workspace');
-      mkdirSync(dir, { recursive: true });
-      this.cachedWorkspaceDir = dir;
-    }
-    return this.cachedWorkspaceDir;
+  private createWorkspaceDir(): string {
+    // mode 0700: readable only by the owner. Ignored on Windows, where the
+    // per-user temp directory already provides the equivalent isolation.
+    return mkdtempSync(join(tmpdir(), 'cgmb-agy-'), { encoding: 'utf8' });
   }
 
   /**

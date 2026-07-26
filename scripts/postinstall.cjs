@@ -5,7 +5,7 @@
  * Automatically installs required dependencies and sets up integrations
  */
 
-const { execSync, spawn } = require('child_process');
+const { execFileSync, execSync, spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -129,6 +129,40 @@ async function setupAIStudioMCP() {
   return success;
 }
 
+const MIN_AGY_VERSION = '1.1.7';
+
+/** Read `agy --version`, or undefined when it cannot be determined. */
+function agyVersion() {
+  try {
+    const out = execFileSync('agy', ['--version'], {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: 'pipe',
+      windowsHide: true,
+    });
+    return out.trim().split('\n')[0].trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Compare dotted versions: isVersionAtLeast('1.1.7', '1.1.7') === true */
+function isVersionAtLeast(actual, minimum) {
+  const toParts = v => v.trim().replace(/^v/i, '').split('.').map(p => parseInt(p, 10) || 0);
+  const a = toParts(actual);
+  const b = toParts(minimum);
+
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) {
+      return x > y;
+    }
+  }
+
+  return true;
+}
+
 // Check for the Antigravity CLI (`agy`)
 //
 // Deliberately detect-and-instruct rather than auto-install. Google
@@ -146,8 +180,24 @@ function setupAntigravityCLI() {
     : 'curl -fsSL https://antigravity.google/cli/install.sh | bash';
 
   if (commandExists('agy')) {
-    log('✅ Antigravity CLI (agy) found', 'success');
-    return true;
+    // Presence alone is not enough: builds before 1.1.7 print nothing when
+    // stdout is not a terminal and still exit 0, so CGMB would silently
+    // receive empty answers. Report that as a problem now rather than at
+    // runtime.
+    const version = agyVersion();
+
+    if (version && isVersionAtLeast(version, MIN_AGY_VERSION)) {
+      log(`✅ Antigravity CLI (agy) ${version} found`, 'success');
+      return true;
+    }
+
+    log(
+      `⚠️ Antigravity CLI ${version ?? '(version unknown)'} is older than the required ${MIN_AGY_VERSION}`,
+      'warning'
+    );
+    log('   Older builds emit nothing when stdout is not a terminal.', 'info');
+    log('   Update with: agy update', 'info');
+    return false;
   }
 
   log('⚠️ Antigravity CLI (agy) not found', 'warning');
