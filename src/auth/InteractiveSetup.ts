@@ -100,7 +100,33 @@ export class InteractiveSetup {
         console.log('STEP 4: Final Verification');
         console.log('═══════════════════════════════════════\n');
         
-        // Commented out unused variable for safety - verification result may be needed for future validation logic\n        // const _verificationResult = await this.verifyAllSetup();\n        await this.verifyAllSetup();
+        // This line previously read as a single // comment containing literal
+        // "\n" sequences, so the verification call itself was commented out and
+        // never ran. The wizard then declared SETUP COMPLETE / SUCCESS purely
+        // from the per-step results, each of which consults the auth cache --
+        // so a revoked credential or a signed-out CLI could still be reported
+        // as a successful setup.
+        const verification = await this.authVerifier.verifyAllAuthentications({ live: true });
+
+        for (const [service, result] of Object.entries(verification.services)) {
+          if (result.success) {
+            if (!servicesConfigured.includes(service)) {
+              servicesConfigured.push(service);
+            }
+            continue;
+          }
+
+          // Drop any step that claimed success but cannot be confirmed live.
+          const index = servicesConfigured.indexOf(service);
+          if (index !== -1) {
+            servicesConfigured.splice(index, 1);
+          }
+
+          const message = `${service}: ${result.error ?? 'verification failed'}`;
+          if (!errors.some(existing => existing.startsWith(`${service}:`))) {
+            errors.push(message);
+          }
+        }
         
         // Generate next steps
         const nextSteps: string[] = [];

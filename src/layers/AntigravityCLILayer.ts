@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
@@ -12,8 +12,34 @@ import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLe
 /**
  * Task interface for better type safety
  */
-/** Upper bound on inlined file content, to stay inside the CLI's prompt budget. */
+/** Upper bound on inlined content from any single file. */
 const MAX_INLINED_FILE_CHARS = 100000;
+
+/**
+ * Upper bound across all inlined files in one request.
+ *
+ * A per-file cap alone let several documents add up without limit. The prompt
+ * now travels on stdin so the 32767-character Windows command-line limit no
+ * longer applies, but an unbounded prompt still wastes tokens and can exceed
+ * the model's context, so the total stays capped.
+ */
+const MAX_TOTAL_INLINED_CHARS = 200000;
+
+/** Extensions safe to read as UTF-8 text. */
+const INLINABLE_TEXT_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'yaml', 'yml', 'toml', 'xml',
+  'html', 'htm', 'css', 'log', 'rst', 'ini', 'cfg',
+]);
+
+/** True when a file is a plain-text format this layer may inline. */
+function isInlinableTextFile(file: FileReference): boolean {
+  if (file.type === 'text') {
+    return true;
+  }
+
+  const ext = file.path.toLowerCase().split('.').pop() ?? '';
+  return INLINABLE_TEXT_EXTENSIONS.has(ext);
+}
 
 /**
  * Files that must never be inlined into a prompt.
@@ -413,7 +439,16 @@ export class AntigravityCLILayer implements LayerInterface {
 
     return new Promise<string>((resolve, reject) => {
       // `-p` (alias of --print/--prompt) runs one prompt and exits.
-      const args: string[] = ['-p', prompt, '--print-timeout', `${printTimeoutSec}s`];
+      // The prompt goes on stdin, not in argv.
+      //
+      // Windows caps a process command line at 32767 characters, and Node
+      // throws ENAMETOOLONG synchronously from spawn() past that -- measured
+      // here: 32000 spawns, 33000 throws. Inlining a document into the prompt
+      // therefore broke outright for any file over ~32KB. `agy` reads the
+      // prompt from stdin when no -p is given (verified: exit 0 with the
+      // correct answer), which removes the limit entirely and, as a side
+      // benefit, keeps caller-controlled text off the command line.
+      const args: string[] = ['--print-timeout', `${printTimeoutSec}s`];
 
       // Only add model flag if explicitly specified and not 'auto'
       if (options.model && options.model !== 'auto') {
@@ -440,11 +475,19 @@ export class AntigravityCLILayer implements LayerInterface {
       const workspaceDir = this.createWorkspaceDir();
 
       const child = spawn(this.agyPath, args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
+        // stdin carries the prompt and is closed immediately: agy drains it to
+        // EOF before producing output, so an idle pipe would hang forever.
+        stdio: ['pipe', 'pipe', 'pipe'],
         cwd: workspaceDir,
         env: this.buildChildEnv(),
         ...(isWindows ? { windowsHide: true } : {}),
       });
+
+      child.stdin.on('error', () => {
+        // The child may exit before reading stdin; the close handler reports
+        // the real failure.
+      });
+      child.stdin.end(prompt);
 
       let stdout = '';
       let stderr = '';
@@ -649,32 +692,69 @@ export class AntigravityCLILayer implements LayerInterface {
     // Paths cannot work either: the CLI runs in an empty scratch directory
     // with no access to the caller's files, by design.
     const sections: string[] = [];
+    let budget = MAX_TOTAL_INLINED_CHARS;
 
     for (const file of task.files) {
-      const name = basename(file.path);
-
-      if (SECRET_FILE_PATTERNS.some(pattern => pattern.test(name))) {
+      // Only ever inline formats that are actually text.
+      //
+      // Reading a PDF or DOCX as UTF-8 yields mojibake, and the CLI answers it
+      // as if it were a document -- a plausible, wrong summary reported as
+      // success. LayerManager hands the original file list to this layer when
+      // AI Studio fails, so binaries genuinely arrive here.
+      if (!isInlinableTextFile(file)) {
         throw new Error(
-          `Refusing to send ${name} to the Antigravity CLI: it matches a credential file pattern. ` +
-          `File contents are transmitted to Antigravity's servers.`
+          `The Antigravity CLI layer cannot read ${basename(file.path)} (type "${file.type}"). ` +
+          `Only plain-text formats can be inlined; use the AI Studio layer for PDF, Office and image files.`
         );
       }
 
+      // Resolve symlinks before deciding anything: a link innocuously named
+      // notes.txt can point at a credential file, and both the name check and
+      // the operator's expectations would otherwise be based on the link.
+      let resolvedPath: string;
       try {
-        const content = readFileSync(file.path, 'utf8');
-        const truncated = content.length > MAX_INLINED_FILE_CHARS;
-
-        sections.push(
-          `--- FILE: ${basename(file.path)} ---\n` +
-          (truncated ? `${content.slice(0, MAX_INLINED_FILE_CHARS)}\n[truncated]` : content)
+        resolvedPath = realpathSync(file.path);
+      } catch (error) {
+        throw new Error(
+          `Could not resolve ${file.path} for Antigravity CLI processing: ${(error as Error).message}`
         );
+      }
+
+      for (const candidate of [basename(file.path), basename(resolvedPath)]) {
+        if (SECRET_FILE_PATTERNS.some(pattern => pattern.test(candidate))) {
+          throw new Error(
+            `Refusing to send ${candidate} to the Antigravity CLI: it matches a credential file pattern. ` +
+            `File contents are transmitted to Antigravity's servers.`
+          );
+        }
+      }
+
+      try {
+        const content = readFileSync(resolvedPath, 'utf8');
+
+        // Budget across all files, not per file: the previous per-file cap let
+        // a handful of documents add up well past what one request can carry.
+        const allowance = Math.min(MAX_INLINED_FILE_CHARS, budget);
+        const truncated = content.length > allowance;
+        const body = truncated ? `${content.slice(0, allowance)}\n[truncated]` : content;
+        budget -= Math.min(content.length, allowance);
+
+        sections.push(`--- FILE: ${basename(file.path)} ---\n${body}`);
 
         if (truncated) {
           logger.warn('File truncated before sending to Antigravity CLI', {
             path: file.path,
             length: content.length,
-            limit: MAX_INLINED_FILE_CHARS,
+            limit: allowance,
           });
+        }
+
+        if (budget <= 0) {
+          logger.warn('Inline budget exhausted; remaining files were not sent', {
+            sent: sections.length,
+            total: task.files.length,
+          });
+          break;
         }
       } catch (error) {
         // Fail loudly: a silently skipped file produces an answer about
@@ -745,21 +825,35 @@ export class AntigravityCLILayer implements LayerInterface {
    * and fall back to the original text rather than emitting something unusable.
    */
   private extractTranslation(raw: string, original: string): string {
-    // Prefer the first quoted or bolded candidate when the model offered a list.
-    const highlighted = raw.match(/\*\*"?([^"*\n]{3,300})"?\*\*/) ?? raw.match(/^>\s*"?([^"\n]{3,300})"?/m);
+    // Strip only complete list/heading markers. A greedy [\d.)\s]+ class ate
+    // meaningful leading digits: "3D render of three cats" became "D render of
+    // three cats" and "2026 Tokyo skyline" lost its year -- silently producing
+    // an image of something else rather than failing.
+    const stripMarkers = (line: string): string =>
+      line
+        .replace(/^\s*(?:[>#]+\s*|[-*+]\s+|\d+[.)]\s+)+/, '')
+        .replace(/\*\*/g, '')
+        .replace(/^["']|["']$/g, '')
+        .trim();
 
-    const candidates = highlighted?.[1] !== undefined
-      ? [highlighted[1]]
+    // Headings like "**Option 1**" or "**1. Natural translation**" label the
+    // choices; they are not the translation. Taking one produced a confident
+    // wrong prompt, so candidates that look like labels are rejected.
+    const isLabel = (line: string): boolean =>
+      /^(here|options?|option\s*\d|translations?|notes?|alternatives?|choices?)\b/i.test(line) ||
+      /^(natural|literal|photorealistic|cinematic|anime)\b.*(translation|prompt|style)\b/i.test(line) ||
+      line.endsWith(':');
+
+    const highlighted = [...raw.matchAll(/\*\*"?([^"*\n]{3,300})"?\*\*/g)]
+      .map(match => stripMarkers(match[1] ?? ''))
+      .filter(line => line.length >= 3 && !isLabel(line));
+
+    const candidates = highlighted.length > 0
+      ? highlighted
       : raw
           .split('\n')
-          .map(line =>
-            line
-              .replace(/^[>#\-*\d.)\s]+/, '')   // list markers, headers, quotes
-              .replace(/\*\*/g, '')
-              .replace(/^["']|["']$/g, '')
-              .trim()
-          )
-          .filter(line => line.length > 0 && !/^(here|options?|translation)\b/i.test(line));
+          .map(stripMarkers)
+          .filter(line => line.length > 0 && !isLabel(line));
 
     const picked = candidates.find(line => line.length >= 3);
 

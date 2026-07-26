@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -262,6 +262,89 @@ describe('credential file guard', () => {
     });
     assert.match(built, /CGMB regression note/);
     assert.match(built, /FILE: notes\.txt/);
+  });
+});
+
+describe('translation sanitiser', () => {
+  const layer = new AntigravityCLILayer();
+  const clean = raw => layer.extractTranslation(raw, 'ORIGINAL');
+
+  it('keeps leading digits that are part of the text', () => {
+    // A greedy [\d.)\s]+ strip turned "3D render" into "D render" and dropped
+    // the year from "2026 Tokyo skyline" -- generating a different image
+    // rather than failing.
+    assert.equal(clean('3D render of three cats'), '3D render of three cats');
+    assert.equal(clean('2026 Tokyo skyline'), '2026 Tokyo skyline');
+    assert.equal(clean('4K photo of a bridge'), '4K photo of a bridge');
+  });
+
+  it('still strips genuine list and heading markers', () => {
+    assert.equal(clean('1. A cat on a sofa'), 'A cat on a sofa');
+    assert.equal(clean('- A cat on a sofa'), 'A cat on a sofa');
+    assert.equal(clean('> A cat on a sofa'), 'A cat on a sofa');
+    assert.equal(clean('### A cat on a sofa'), 'A cat on a sofa');
+  });
+
+  it('does not mistake a section label for the translation', () => {
+    const reply = [
+      'Here are a few options:',
+      '',
+      '### 1. Natural & Direct Translation (Best all-rounder)',
+      '> **"A landscape of blue sky and white clouds"**',
+    ].join('\n');
+    assert.equal(clean(reply), 'A landscape of blue sky and white clouds');
+  });
+
+  it('caps runaway output and falls back when nothing is usable', () => {
+    assert.ok(clean(`x${'y'.repeat(900)}`).length <= 400);
+    assert.equal(clean('   '), 'ORIGINAL');
+  });
+});
+
+describe('inlined file safety', () => {
+  const dir = join(tmpdir(), `cgmb-test-inline-${process.pid}`);
+  const layer = new AntigravityCLILayer();
+
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('refuses binary document formats instead of reading them as text', () => {
+    // LayerManager hands the original files to this layer when AI Studio
+    // fails, so PDFs really do arrive. Reading one as UTF-8 yields mojibake
+    // that the CLI answers as if it were a document.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+
+    const pdf = join(dir, 'report.pdf');
+    writeFileSync(pdf, Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x00, 0x01]));
+
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: pdf, type: 'pdf' }] }),
+      /cannot read report\.pdf/,
+      'PDF must be refused, not silently mis-read'
+    );
+  });
+
+  it('resolves symlinks before applying the credential check', () => {
+    const secret = join(dir, '.env');
+    const link = join(dir, 'notes.txt');
+    writeFileSync(secret, 'PLACEHOLDER=not-a-real-secret\n');
+
+    try {
+      symlinkSync(secret, link);
+    } catch (error) {
+      // Unprivileged Windows accounts cannot create symlinks. Skip rather than
+      // pass silently, so the gap is visible.
+      if (error.code === 'EPERM' || error.code === 'ENOSYS') {
+        return;
+      }
+      throw error;
+    }
+
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: link, type: 'text' }] }),
+      /credential file pattern/,
+      'a link named notes.txt must not smuggle a credential file through'
+    );
   });
 });
 
