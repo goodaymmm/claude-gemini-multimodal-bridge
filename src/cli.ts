@@ -581,14 +581,28 @@ program
       // Check Claude Code CLI version and use appropriate method
       let claudeVersion = '';
       
-      // Skip claude command execution if in serve mode to prevent duplication
-      if (process.env.CGMB_NO_CLAUDE_EXEC === 'true') {
-        console.log('🔄 Claude command execution skipped (serve mode protection)');
-        console.log('💡 Manual setup required. See: cgmb setup-mcp --manual');
-        return;
+      // Two different needs were conflated here.
+      //
+      // CGMB_NO_CLAUDE_EXEC exists to stop a nested `claude` invocation. But
+      // this branch returned before doing any configuration at all, while the
+      // process still exited 0 -- so postinstall recorded "configured" and a
+      // fresh install ended up with no MCP configuration written.
+      //
+      // CGMB_MCP_SETUP_ONLY keeps the guard against running `claude` while
+      // still performing the configuration that was actually requested.
+      const skipClaudeProbe =
+        process.env.CGMB_MCP_SETUP_ONLY === 'true' || process.env.CGMB_NO_CLAUDE_EXEC === 'true';
+
+      if (process.env.CGMB_NO_CLAUDE_EXEC === 'true' && process.env.CGMB_MCP_SETUP_ONLY !== 'true') {
+        console.log('🔄 MCP setup skipped (serve mode protection)');
+        console.log('💡 Run it directly with: cgmb setup-mcp');
+        process.exit(1);
       }
       
       try {
+        if (skipClaudeProbe) {
+          throw new Error('Claude version probe skipped by request');
+        }
         claudeVersion = execSync('claude --version', { encoding: 'utf8' }).trim();
         console.log(`Claude Code CLI version: ${claudeVersion}`);
       } catch (error) {

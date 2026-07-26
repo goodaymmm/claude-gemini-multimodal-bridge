@@ -1,4 +1,4 @@
-import { execFileSync, execSync, spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
@@ -18,7 +18,7 @@ interface ClaudeCodeTask {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { buildSpawnTarget } from '../utils/processUtils.js';
+import { buildSpawnTarget, resolveTrustedCommand } from '../utils/processUtils.js';
 
 /**
  * ClaudeCodeLayer handles direct Claude Code execution with enhanced authentication support
@@ -549,28 +549,28 @@ export class ClaudeCodeLayer implements LayerInterface {
           windowsHide: true,
           ...target.spawnOptions,
         });
-        logger.debug('Found Claude Code at', { path });
-        return path;
+        // Return the resolved absolute path, not the candidate name. Returning
+        // a bare name meant every later use resolved it again, outside the
+        // trust check that had just approved a specific file.
+        const verified = resolveTrustedCommand(path);
+        if (verified === undefined) {
+          continue;
+        }
+        logger.debug('Found Claude Code at', { path: verified });
+        return verified;
       } catch {
         continue;
       }
     }
 
-    // Try system PATH
-    try {
-      const cmd = isWindows ? 'where claude' : 'which claude 2>/dev/null';
-      const output = execSync(cmd, {
-        encoding: 'utf8',
-        stdio: 'pipe',
-        timeout: 5000,
-      });
-      
-      const paths = output.trim().split('\n').filter(p => p && !p.includes('cgmb'));
-      if (paths.length > 0) {
-        return paths[0];
-      }
-    } catch {
-      // System PATH lookup failed
+    // System PATH, through the shared trusted resolver.
+    //
+    // This ran `where claude` / `which claude` through a shell and returned the
+    // first line unchecked, so a claude.cmd in the working tree was adopted
+    // here even after the loop above had refused it.
+    const resolved = resolveTrustedCommand('claude');
+    if (resolved !== undefined && !resolved.includes('cgmb')) {
+      return resolved;
     }
 
     return undefined;
@@ -580,66 +580,53 @@ export class ClaudeCodeLayer implements LayerInterface {
    * Test Claude Code connection
    */
   private async testClaudeCodeConnection(): Promise<void> {
+    // Probe the already-verified path with an argv array.
+    //
+    // These were shell strings interpolating this.claudePath, which resolved
+    // the name a second time -- so a candidate the trust check had rejected
+    // could be selected here instead, during initialization.
+    const probe = (args: string[], timeout: number): string => {
+      const target = buildSpawnTarget(this.claudePath!, args);
+      return execFileSync(target.file, target.args, {
+        timeout,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        windowsHide: true,
+        ...target.spawnOptions,
+      });
+    };
+
     try {
-      // Use lightweight version check instead of full command execution
-      const { execSync } = await import('child_process');
-      
-      try {
-        // First try --version
-        const output = execSync(`${this.claudePath} --version`, { 
-          timeout: 30000,
-          encoding: 'utf8',
-          stdio: 'pipe'
+      const output = probe(['--version'], 30000);
+      if (output && output.trim()) {
+        logger.debug('Claude Code connection test successful via --version', {
+          version: output.trim().substring(0, 100),
         });
-        
-        // Accept any non-empty output as success (Claude Code might have different version output format)
-        if (output && output.trim()) {
-          logger.debug('Claude Code connection test successful via --version', {
-            version: output.trim().substring(0, 100)
+        return;
+      }
+    } catch (versionError) {
+      logger.debug('Claude --version failed, trying --help', {
+        error: (versionError as Error).message,
+      });
+
+      try {
+        const helpOutput = probe(['--help'], 15000);
+        if (helpOutput && (helpOutput.includes('Claude') || helpOutput.includes('Usage:') || helpOutput.length > 20)) {
+          logger.debug('Claude Code connection test successful via --help', {
+            helpLength: helpOutput.length,
           });
           return;
         }
-      } catch (versionError) {
-        // --version failed, try --help as fallback
-        logger.debug('Claude --version failed, trying --help', {
-          error: (versionError as Error).message
+      } catch (helpError) {
+        logger.warn('Both --version and --help failed for Claude Code', {
+          versionError: (versionError as Error).message,
+          helpError: (helpError as Error).message,
         });
-        
-        try {
-          const helpOutput = execSync(`${this.claudePath} --help`, { 
-            timeout: 15000,
-            encoding: 'utf8',
-            stdio: 'pipe'
-          });
-          
-          // If --help works and contains "Claude" or shows help text, consider it working
-          if (helpOutput && (helpOutput.includes('Claude') || helpOutput.includes('Usage:') || helpOutput.length > 20)) {
-            logger.debug('Claude Code connection test successful via --help', {
-              helpLength: helpOutput.length
-            });
-            return;
-          }
-        } catch (helpError) {
-          logger.warn('Both --version and --help failed for Claude Code', {
-            versionError: (versionError as Error).message,
-            helpError: (helpError as Error).message
-          });
-        }
+        throw new Error(`Claude Code connection test failed: ${(helpError as Error).message}`);
       }
-      
-      // Final fallback: just check if the binary exists and is executable
-      try {
-        const { access, constants } = await import('fs/promises');
-        await access(this.claudePath!, constants.F_OK | constants.X_OK);
-        logger.debug('Claude Code binary exists and is executable, considering it available');
-        return;
-      } catch (accessError) {
-        throw new Error(`Claude Code binary not accessible: ${(accessError as Error).message}`);
-      }
-      
-    } catch (error) {
-      throw new Error(`Claude Code connection test failed: ${(error as Error).message}`);
     }
+
+    throw new Error('Claude Code produced no usable output for --version or --help');
   }
 
   /**

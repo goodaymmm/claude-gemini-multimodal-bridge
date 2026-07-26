@@ -379,48 +379,45 @@ async function setupMCPIntegration() {
   }
   
   try {
-    // Try to run cgmb setup-mcp using the cgmb command
+    // Run the CLI that ships with THIS package, by absolute path.
+    //
+    // `execSync('cgmb setup-mcp --force')` resolved a bare name through a
+    // shell, so npm's node_modules/.bin -- or the current directory on
+    // Windows -- could supply a different `cgmb`, and `npm install` alone would
+    // run it with this environment and permission to rewrite MCP config. The
+    // fallback interpolated a cwd-derived path into an unquoted shell string
+    // as well. __dirname is inside the installed package, so this is the copy
+    // that was just installed.
+    const cliPath = path.join(__dirname, '..', 'dist', 'cli.js');
+
+    if (!fs.existsSync(cliPath)) {
+      log('⚠️ CGMB is not built yet. Run "npm run build" then "cgmb setup-mcp"', 'warning');
+      return false;
+    }
+
     try {
-      // Set environment variable to prevent nested Claude Code execution
-      process.env.CGMB_NO_CLAUDE_EXEC = 'true';
-      execSync('cgmb setup-mcp --force', { 
+      execFileSync(process.execPath, [cliPath, 'setup-mcp', '--force'], {
         stdio: 'inherit',
-        env: { 
-          ...process.env, 
-          CGMB_NO_CLAUDE_EXEC: 'true',
+        windowsHide: true,
+        env: {
+          ...process.env,
+          CGMB_MCP_SETUP_ONLY: 'true',
           CGMB_DETECTED_PATH: env.cgmbPath || '',
           CGMB_DETECTED_NODE_PATH: env.nodePath || ''
         }
       });
-      log('✅ MCP integration configured with cgmb command', 'success');
-      
+
+      log('✅ MCP integration configured', 'success');
+
       if (env.detected && (env.isNvm || env.isNodebrew || env.isVolta)) {
         log('✅ MCP configuration updated for your Node.js environment', 'success');
       }
-      
+
       return true;
-    } catch (cgmbError) {
-      // Fallback to direct node execution if cgmb command not available
-      log('⚠️ cgmb command not available, trying direct execution...', 'warning');
-      
-      const cgmbPath = path.join(process.cwd(), 'dist', 'cli.js');
-      if (fs.existsSync(cgmbPath)) {
-        process.env.CGMB_NO_CLAUDE_EXEC = 'true';
-        execSync(`node ${cgmbPath} setup-mcp --force`, { 
-          stdio: 'inherit',
-          env: { 
-            ...process.env, 
-            CGMB_NO_CLAUDE_EXEC: 'true',
-            CGMB_DETECTED_PATH: env.cgmbPath || '',
-            CGMB_DETECTED_NODE_PATH: env.nodePath || ''
-          }
-        });
-        log('✅ MCP integration configured with fallback method', 'success');
-        return true;
-      } else {
-        log('⚠️ CGMB not built yet. Run "npm run build" then "cgmb setup-mcp"', 'warning');
-        return false;
-      }
+    } catch (setupError) {
+      log(`⚠️ MCP setup did not complete: ${setupError.message}`, 'warning');
+      log('   Run it manually with: cgmb setup-mcp', 'info');
+      return false;
     }
   } catch (error) {
     log('⚠️ MCP integration setup failed. You can set it up later with: cgmb setup-mcp --force', 'warning');

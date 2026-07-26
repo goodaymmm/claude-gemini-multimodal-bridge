@@ -1217,6 +1217,30 @@ Solutions:
    * Format unified response for Claude Code
    * Improved data extraction to handle various result structures
    */
+  /**
+   * Convert a layer or workflow result into an MCP CallToolResult.
+   *
+   * The dedicated tools (workflow orchestration, multimodal, document
+   * analysis) each JSON-stringified their result without consulting
+   * result.success, so a workflow whose steps failed -- which
+   * LayerManager.executeWorkflow returns as a normal value, not a throw --
+   * arrived at the client with no isError and was recorded as a success. The
+   * round-15 fix only covered the unified tool's formatResponse path.
+   */
+  private toCallToolResult(result: { success?: boolean; error?: string }): CallToolResult {
+    const failed = result?.success === false;
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+      ...(failed ? { isError: true } : {}),
+    };
+  }
+
   private formatResponse(result: any, hasCGMB: boolean): CallToolResult {
     const prefix = hasCGMB ? '🎯 **CGMB**: ' : '';
 
@@ -1371,14 +1395,7 @@ Failed steps: ${result.metadata.steps_failed}`
         }
 
         // Full response for complex workflows
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
+        return this.toCallToolResult(result);
       },
       {
         operationName: 'multimodal_process',
@@ -1402,14 +1419,7 @@ Failed steps: ${result.metadata.steps_failed}`
           validatedArgs.options
         );
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
+        return this.toCallToolResult(result);
       },
       {
         operationName: 'document_analysis',
@@ -1435,14 +1445,7 @@ Failed steps: ${result.metadata.steps_failed}`
           }
         );
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
+        return this.toCallToolResult(result);
       },
       {
         operationName: 'workflow_orchestration',
