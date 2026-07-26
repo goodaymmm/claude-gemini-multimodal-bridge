@@ -13,6 +13,7 @@ import {
 } from '../dist/utils/antigravityCli.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
+import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
 import { buildSpawnTarget } from '../dist/utils/processUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -220,6 +221,47 @@ describe('windows .cmd launcher', { skip: !isWindows && 'Windows-only behaviour'
     assert.equal(target.file, process.execPath);
     assert.deepEqual(target.args, ['--version']);
     assert.equal(target.spawnOptions.windowsVerbatimArguments, undefined);
+  });
+});
+
+describe('credential file guard', () => {
+  const dir = join(tmpdir(), `cgmb-test-secrets-${process.pid}`);
+
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('refuses to inline credential-looking files, and allows ordinary ones', () => {
+    // extractPrompt inlines file contents into a prompt that is sent to
+    // Antigravity's servers, so a mistaken path would exfiltrate credentials
+    // while looking like a normal analysis request.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+
+    const layer = new AntigravityCLILayer();
+
+    for (const name of ['.env', '.env.local', 'credentials.json', 'server.pem', 'id_rsa', '.npmrc']) {
+      const p = join(dir, name);
+      // Deliberately inert placeholder content - never a real secret.
+      writeFileSync(p, 'PLACEHOLDER=not-a-real-secret\n', { encoding: 'utf8' });
+
+      // Exercised through extractPrompt, the point of disclosure, so the test
+      // stays hermetic: execute() would spawn a live agy auth probe.
+      assert.throws(
+        () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: p, type: 'text' }] }),
+        /credential file pattern/,
+        `${name} must be refused`
+      );
+    }
+
+    // A normal document must still be readable; assert on the built prompt
+    // rather than making a network call.
+    const doc = join(dir, 'notes.txt');
+    writeFileSync(doc, 'CGMB regression note.\n', { encoding: 'utf8' });
+    const built = layer.extractPrompt({
+      prompt: 'summarise',
+      files: [{ path: doc, type: 'text' }],
+    });
+    assert.match(built, /CGMB regression note/);
+    assert.match(built, /FILE: notes\.txt/);
   });
 });
 

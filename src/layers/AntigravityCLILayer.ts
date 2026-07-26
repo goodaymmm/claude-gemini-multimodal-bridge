@@ -15,6 +15,26 @@ import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLe
 /** Upper bound on inlined file content, to stay inside the CLI's prompt budget. */
 const MAX_INLINED_FILE_CHARS = 100000;
 
+/**
+ * Files that must never be inlined into a prompt.
+ *
+ * Inlining sends contents to Antigravity's servers, so a mistaken or
+ * manipulated path turns "analyse this file" into credential exfiltration that
+ * looks like normal operation. `processFiles` classifies .env as 'config' and
+ * rejects it today, but this guard sits at the point of actual disclosure so
+ * the protection does not depend on every caller filtering first -- and it
+ * still covers names that pass a type filter, such as secrets.txt.
+ */
+const SECRET_FILE_PATTERNS = [
+  /^\.env(\..*)?$/i,
+  /^\.npmrc$/i,
+  /^\.netrc$/i,
+  /^id_(rsa|dsa|ecdsa|ed25519)$/i,
+  /^credentials(\..*)?$/i,
+  /^secrets?\.[a-z0-9]+$/i,
+  /\.(pem|key|pfx|p12|keystore|jks)$/i,
+];
+
 interface AntigravityTask {
   type?: string;
   action?: string;
@@ -631,6 +651,15 @@ export class AntigravityCLILayer implements LayerInterface {
     const sections: string[] = [];
 
     for (const file of task.files) {
+      const name = basename(file.path);
+
+      if (SECRET_FILE_PATTERNS.some(pattern => pattern.test(name))) {
+        throw new Error(
+          `Refusing to send ${name} to the Antigravity CLI: it matches a credential file pattern. ` +
+          `File contents are transmitted to Antigravity's servers.`
+        );
+      }
+
       try {
         const content = readFileSync(file.path, 'utf8');
         const truncated = content.length > MAX_INLINED_FILE_CHARS;
