@@ -47,6 +47,42 @@ function showChatHelp() {
   console.log('❓ Having issues? Try: cgmb auth-status');
 }
 
+/**
+ * Render a layer's `data` for a human reader.
+ *
+ * Layers do not agree on the shape: the Antigravity layer returns a plain
+ * string, while the AI Studio layer returns the MCP envelope it received
+ * ({ content: [{ type: 'text', text }], metadata }). Printing that object
+ * directly dumped `{ content: [ { type: 'text', ... } ] }` at the user with the
+ * actual summary buried inside -- previously masked because AI Studio was
+ * failing and analysis fell back to the string-returning layer.
+ */
+function renderLayerData(data: unknown): string {
+  if (data === undefined || data === null) {
+    return 'Analysis completed';
+  }
+
+  if (typeof data === 'string') {
+    return data;
+  }
+
+  const envelope = data as { content?: Array<{ type?: string; text?: string }> };
+  if (Array.isArray(envelope.content)) {
+    const text = envelope.content
+      .filter(part => part?.type === 'text' && typeof part.text === 'string')
+      .map(part => part.text)
+      .join('\n')
+      .trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  // Unknown shape: show it rather than silently printing "[object Object]".
+  return JSON.stringify(data, null, 2);
+}
+
 function showGeminiHelp() {
   console.log('🔧 CGMB Gemini - Advanced/Troubleshooting tool only');
   console.log('');
@@ -1864,7 +1900,7 @@ program
       if (result.success) {
         console.log('\n✅ Analysis complete!');
         console.log('═'.repeat(50));
-        console.log(result.data || 'Analysis completed');
+        console.log(renderLayerData(result.data));
         console.log('═'.repeat(50));
         
         if (result.metadata) {
@@ -1952,7 +1988,7 @@ program
         if (options.output === 'json' && result.data) {
           console.log(JSON.stringify(result.data, null, 2));
         } else {
-          console.log(result.data || 'Analysis completed');
+          console.log(renderLayerData(result.data));
         }
         
         console.log('═'.repeat(50));
