@@ -59,7 +59,7 @@
     "performance-optimization",
     "intelligent-caching",
     "claude-code",
-    "gemini-cli",
+    "antigravity-cli",
     "google-ai-studio",
     "ai-cli",
     "multimodal-ai",
@@ -76,7 +76,7 @@
     "oauth-authentication",
     "enterprise-grade",
     "intelligent-routing",
-    "mcp-gemini-cli",
+    "mcp-antigravity-cli",
     "authentication-cache",
     "fallback-strategies",
     "multi-language-support",
@@ -118,9 +118,6 @@
     "rimraf": "^5.0.0",
     "tsx": "^4.6.0",
     "typescript": "^5.9.3"
-  },
-  "optionalDependencies": {
-    "@google/gemini-cli": "*"
   },
   "engines": {
     "node": ">=22.0.0",

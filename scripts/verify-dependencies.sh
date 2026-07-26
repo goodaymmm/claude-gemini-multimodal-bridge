@@ -59,7 +59,7 @@ echo "📋 必須ツールの確認:"
 check_node_version
 check_command "npm" "NPM"
 check_command "claude" "Claude Code CLI"
-check_command "gemini" "Gemini CLI"
+check_command "agy" "Antigravity CLI (agy)"
 
 echo ""
 
@@ -93,7 +93,6 @@ echo "🔑 環境変数の確認:"
 
 ENV_VARS=(
     "AI_STUDIO_API_KEY"
-    "GEMINI_API_KEY"
 )
 
 for var in "${ENV_VARS[@]}"; do

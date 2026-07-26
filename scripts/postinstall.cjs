@@ -34,9 +34,13 @@ function log(message, level = 'info') {
 }
 
 // Check if command exists
+// `which` does not exist on Windows outside a POSIX shell, so every probe used
+// to report "missing" there and postinstall recommended installs that were
+// already present.
 function commandExists(command) {
+  const lookup = process.platform === 'win32' ? 'where' : 'which';
   try {
-    execSync(`which ${command}`, { stdio: 'ignore' });
+    execSync(`${lookup} ${command}`, { stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -125,24 +129,34 @@ async function setupAIStudioMCP() {
   return success;
 }
 
-// Check and install Gemini CLI
-async function setupGeminiCLI() {
-  log('🔧 Checking Gemini CLI...');
-  
-  if (commandExists('gemini')) {
-    log('✅ Gemini CLI already installed', 'success');
+// Check for the Antigravity CLI (`agy`)
+//
+// Deliberately detect-and-instruct rather than auto-install. Google
+// discontinued Gemini CLI for individual accounts on 2026-06-18 and `agy` is
+// not distributed on npm -- the only supported install is a remote shell
+// script. Piping that into a shell from a postinstall hook would execute
+// remote code during `npm install` without the user ever seeing it, so we tell
+// them what to run instead. Sign-in is interactive anyway, so an unattended
+// install would not produce a working layer.
+function setupAntigravityCLI() {
+  log('🔧 Checking Antigravity CLI (agy)...');
+
+  const installHint = process.platform === 'win32'
+    ? 'irm https://antigravity.google/cli/install.ps1 | iex'
+    : 'curl -fsSL https://antigravity.google/cli/install.sh | bash';
+
+  if (commandExists('agy')) {
+    log('✅ Antigravity CLI (agy) found', 'success');
     return true;
   }
-  
-  log('📦 Gemini CLI not found, attempting installation...');
-  const success = await installPackage('@google/gemini-cli', 'Gemini CLI');
-  
-  if (!success) {
-    log('💡 Gemini CLI installation failed. You can install it later:', 'warning');
-    log('   npm install -g @google/gemini-cli', 'info');
-  }
-  
-  return success;
+
+  log('⚠️ Antigravity CLI (agy) not found', 'warning');
+  log('📋 The web-search layer needs it. Install and sign in:', 'info');
+  log(`   1. ${installHint}`, 'info');
+  log('   2. Run `agy` once and complete the Google sign-in', 'info');
+  log('   Requires agy 1.1.7 or newer; docs: https://antigravity.google/docs/cli/install', 'info');
+
+  return false;
 }
 
 // Check Claude Code CLI
@@ -188,12 +202,14 @@ AI_STUDIO_API_KEY=\${GEMINI_API_KEY}
 
 # Optional: Customize paths if needed
 CLAUDE_CODE_PATH=/usr/local/bin/claude
-GEMINI_CLI_PATH=/usr/local/bin/gemini
+# Path to the Antigravity CLI (agy). Leave unset to auto-detect.
+# ANTIGRAVITY_CLI_PATH=
 
 # Logging and performance
 LOG_LEVEL=info
 ENABLE_CACHING=true
-GEMINI_MODEL=gemini-2.0-flash-exp
+# Antigravity model for the search layer - must match \`agy models\`
+ANTIGRAVITY_MODEL=gemini-3.6-flash-low
 `;
     log('📄 Creating basic .env template', 'info');
   }
@@ -212,7 +228,8 @@ GEMINI_MODEL=gemini-2.0-flash-exp
 // Detect Node.js environment
 async function detectNodeEnvironment() {
   try {
-    const cgmbPath = execSync('which cgmb', { encoding: 'utf8' }).trim();
+    const lookup = process.platform === 'win32' ? 'where' : 'which';
+    const cgmbPath = execSync(`${lookup} cgmb`, { encoding: 'utf8' }).trim().split('\n')[0].trim();
     const nodePath = process.execPath; // Current Node.js path
     
     return {
@@ -363,7 +380,7 @@ async function main() {
   // Setup components
   try {
     results['Claude Code CLI'] = checkClaudeCode();
-    results['Gemini CLI'] = await setupGeminiCLI();
+    results['Antigravity CLI'] = setupAntigravityCLI();
     results['AI Studio MCP'] = await setupAIStudioMCP();
     results['Environment Config'] = setupEnvironment();
     results['MCP Integration'] = await setupMCPIntegration();

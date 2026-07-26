@@ -96,23 +96,26 @@ install_claude_code() {
     fi
 }
 
-# Install Gemini CLI
-install_gemini_cli() {
-    log_info "Checking Gemini CLI..."
-    
-    if command_exists gemini; then
-        log_success "Gemini CLI is already installed"
+# Check for the Antigravity CLI (agy)
+#
+# agy is not on npm: the only supported install is a remote shell script, and
+# sign-in is interactive. Running the installer unattended from here would
+# execute remote code the user never saw and still leave an unauthenticated
+# CLI, so print the command and let them run it.
+check_antigravity_cli() {
+    log_info "Checking Antigravity CLI (agy)..."
+
+    if command_exists agy; then
+        log_success "Antigravity CLI (agy) is already installed"
         return 0
     fi
-    
-    log_info "Installing Gemini CLI..."
-    
-    if npm install -g @google/gemini-cli; then
-        log_success "Gemini CLI installed successfully"
-    else
-        log_error "Failed to install Gemini CLI"
-        exit 1
-    fi
+
+    log_warning "Antigravity CLI (agy) not found - the web-search layer needs it"
+    echo "  1. curl -fsSL https://antigravity.google/cli/install.sh | bash"
+    echo "  2. Run 'agy' once and complete the Google sign-in"
+    echo "  Requires agy 1.1.7 or newer"
+    echo "  Docs: https://antigravity.google/docs/cli/install"
+    return 1
 }
 
 # Setup environment file
@@ -127,12 +130,14 @@ setup_environment() {
             log_warning ".env.example not found, creating basic .env file"
             cat > .env << EOF
 # Claude-Gemini Multimodal Bridge Configuration
-GEMINI_API_KEY=your_gemini_api_key_here
+AI_STUDIO_API_KEY=your_ai_studio_api_key_here
 CLAUDE_CODE_PATH=/usr/local/bin/claude
-GEMINI_CLI_PATH=/usr/local/bin/gemini
+# Path to the Antigravity CLI (agy). Leave unset to auto-detect.
+# ANTIGRAVITY_CLI_PATH=
 LOG_LEVEL=info
 ENABLE_CACHING=true
-GEMINI_MODEL=gemini-2.5-flash
+# Antigravity model for the search layer - must match \`agy models\`
+ANTIGRAVITY_MODEL=gemini-3.6-flash-low
 EOF
             log_success "Created basic .env file"
         fi
@@ -141,8 +146,8 @@ EOF
     fi
     
     log_warning "Please edit the .env file and add your API keys:"
-    echo "  - GEMINI_API_KEY: Get from https://aistudio.google.com/"
-    echo "  - Update paths if Claude Code or Gemini CLI are installed in non-standard locations"
+    echo "  - AI_STUDIO_API_KEY: Get from https://aistudio.google.com/app/apikey"
+    echo "  - Update paths if Claude Code or the Antigravity CLI are installed in non-standard locations"
 }
 
 # Create necessary directories
@@ -212,11 +217,11 @@ verify_installation() {
         log_error "✗ Claude Code CLI"
     fi
     
-    if command_exists gemini; then
-        log_success "✓ Gemini CLI" 
+    if command_exists agy; then
+        log_success "✓ Antigravity CLI (agy)"
         ((checks_passed++))
     else
-        log_error "✗ Gemini CLI"
+        log_error "✗ Antigravity CLI (agy)"
     fi
     
     if [ -f .env ]; then
@@ -241,9 +246,9 @@ show_next_steps() {
     echo
     log_info "Next steps:"
     echo "1. Edit .env file and add your API keys:"
-    echo "   - Get Gemini API key from: https://aistudio.google.com/"
-    echo "2. Authenticate Gemini CLI:"
-    echo "   gemini auth"
+    echo "   - Get an AI Studio API key from: https://aistudio.google.com/app/apikey"
+    echo "2. Sign in to the Antigravity CLI:"
+    echo "   agy          # run once, then complete the Google sign-in"
     echo "3. Verify your installation:"
     echo "   cgmb verify"
     echo "4. Start the CGMB server:"
@@ -264,7 +269,7 @@ main() {
     check_node_version
     check_npm
     install_claude_code
-    install_gemini_cli
+    check_antigravity_cli || true
     install_dependencies
     setup_environment
     create_directories
