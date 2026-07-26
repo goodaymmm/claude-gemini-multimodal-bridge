@@ -8,6 +8,9 @@ import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';
 import { AuthCache } from './AuthCache.js';
 
+/** Why an AI Studio credential probe failed. */
+type AIStudioProbeFailure = 'invalid_credential' | 'permanent_configuration' | 'transient_service';
+
 /**
  * AuthVerifier handles authentication verification for all services
  * Provides clear error messages and guidance for authentication failures
@@ -299,6 +302,20 @@ export class AuthVerifier {
           const probe = await this.probeAIStudioKey(apiKey);
 
           if (!probe.ok) {
+            const transient = probe.kind === 'transient_service';
+
+            const guidance = probe.kind === 'invalid_credential'
+              ? 'Reissue the key at https://aistudio.google.com/app/apikey and update AI_STUDIO_API_KEY'
+              : probe.kind === 'permanent_configuration'
+                ? 'Check that the Generative Language API is enabled for this project and that the account may use the model'
+                : 'Check network connectivity and retry';
+
+            const summary = probe.kind === 'invalid_credential'
+              ? `AI Studio rejected the API key: ${probe.error}`
+              : probe.kind === 'permanent_configuration'
+                ? `AI Studio refused the request for a configuration reason (not the key itself): ${probe.error}`
+                : `Could not reach the Gemini API to verify the key: ${probe.error}`;
+
             const result: AuthResult = {
               success: false,
               status: {
@@ -306,17 +323,15 @@ export class AuthVerifier {
                 method: 'api_key',
                 userInfo: undefined,
               },
-              error: probe.transient
-                ? `Could not reach the Gemini API to verify the key: ${probe.error}`
-                : `AI Studio rejected the API key: ${probe.error}`,
-              requiresAction: !probe.transient,
-              actionInstructions: probe.transient
-                ? 'Check network connectivity and retry'
-                : 'Reissue the key at https://aistudio.google.com/app/apikey and update AI_STUDIO_API_KEY',
+              error: summary,
+              // A configuration problem is just as actionable as a bad key;
+              // only a genuine service/network fault is not.
+              requiresAction: !transient,
+              actionInstructions: guidance,
             };
 
-            // Do not cache a transient network failure as a credential problem.
-            if (!probe.transient) {
+            // Never cache a transient fault as a credential verdict.
+            if (!transient) {
               this.authCache.set('aistudio', result);
             }
             return result;
@@ -491,7 +506,7 @@ export class AuthVerifier {
    */
   private async probeAIStudioKey(
     apiKey: string
-  ): Promise<{ ok: boolean; transient?: boolean; error?: string }> {
+  ): Promise<{ ok: boolean; kind?: AIStudioProbeFailure; error?: string }> {
     const TIMEOUT_MS = 8000;
 
     try {
@@ -506,53 +521,41 @@ export class AuthVerifier {
       await Promise.race([probe, timeout]);
       return { ok: true };
     } catch (error) {
-      const err = error as Error & { status?: number; code?: number };
+      const err = error as Error & { status?: number; code?: number; reason?: string };
       const message = err.message ?? String(error);
 
-      // Classify on the structured status the SDK provides, not on prose.
-      //
-      // Message matching conflated distinct failures: a 403 for a disabled API,
-      // a project policy or a model the account cannot access all read as
-      // "invalid key" and told the user to reissue a key that was fine, while a
-      // 404 configuration error was reported as a network problem. The wizard
-      // treats this result as authoritative, so the wrong advice sticks.
       const status = typeof err.status === 'number' ? err.status
         : typeof err.code === 'number' ? err.code
         : undefined;
 
-      if (status === 401) {
-        return { ok: false, transient: false, error: `unauthenticated (401): ${message}` };
+      // Three outcomes, not two.
+      //
+      // A boolean "transient" flag forced permanent client errors into the
+      // retry bucket: the Gemini API returns 400 API_KEY_INVALID for a bad key,
+      // and 403/404 for a disabled API or a misconfigured model. All of those
+      // were reported as "check your network and retry" with requiresAction
+      // false, so the real problem was never fixed. Google documents 400 and
+      // 403 as non-retryable client errors.
+      const reason = err.reason ?? '';
+      const looksLikeKeyProblem =
+        /API_KEY_INVALID|API key not valid|api[_ ]?key|invalid.*credential|unauthenticated/i
+          .test(`${reason} ${message}`);
+
+      if (status === 401 || (status === 400 && looksLikeKeyProblem) ||
+          (status === 403 && looksLikeKeyProblem)) {
+        return { ok: false, kind: 'invalid_credential', error: message };
       }
 
-      if (status === 403) {
-        // 403 covers both a bad key and an account/project restriction. Only
-        // an explicit credential complaint justifies "reissue your key".
-        const credentialProblem = /api[_ ]?key|api key not valid|unauthenticated|invalid.*credential/i
-          .test(message);
-        return credentialProblem
-          ? { ok: false, transient: false, error: `key rejected (403): ${message}` }
-          : {
-              ok: false,
-              transient: true,
-              error: `access denied (403) -- this is a project or API-enablement problem, ` +
-                     `not necessarily the key: ${message}`,
-            };
+      if (status === 400 || status === 403 || status === 404) {
+        return { ok: false, kind: 'permanent_configuration', error: message };
       }
 
       if (status === 429 || (typeof status === 'number' && status >= 500)) {
-        return { ok: false, transient: true, error: `service unavailable (${status}): ${message}` };
+        return { ok: false, kind: 'transient_service', error: message };
       }
 
-      if (status === 404) {
-        return {
-          ok: false,
-          transient: true,
-          error: `probe model not found (404) -- configuration issue, not a credential one: ${message}`,
-        };
-      }
-
-      // No usable status: timeouts, DNS, offline. Never a credential verdict.
-      return { ok: false, transient: true, error: message };
+      // No usable status: timeouts, DNS, offline.
+      return { ok: false, kind: 'transient_service', error: message };
     }
   }
 

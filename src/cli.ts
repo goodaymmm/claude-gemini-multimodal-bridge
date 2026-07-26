@@ -208,7 +208,7 @@ program
       
       // Check for required tools
       await checkDependency('claude', 'Claude Code CLI');
-      await checkAntigravityDependency();
+      const antigravityReady = await checkAntigravityDependency();
       
       // Create configuration file if it doesn't exist
       const envPath = path.join(process.cwd(), '.env');
@@ -228,6 +228,13 @@ program
         logger.info('✓ Created logs directory');
       }
       
+      if (!antigravityReady) {
+        // Report the truth and exit non-zero: the web-search layer cannot work.
+        logger.error('Setup incomplete: the Antigravity CLI is missing or too old.');
+        logger.info('Install or update it, then re-run: cgmb setup');
+        process.exit(1);
+      }
+
       logger.info('Setup completed successfully!');
       logger.info('Next steps:');
       logger.info('1. Set up authentication: cgmb auth --interactive');
@@ -793,8 +800,18 @@ program
       
       for (const { name, check } of systemChecks) {
         try {
-          await check();
-          logger.info(`✓ ${name}`);
+          // The return value decides the verdict. It used to be discarded, so a
+          // check that answered `false` -- agy missing, or older than the 1.1.7
+          // minimum -- still printed a tick and `cgmb verify` exited 0. That is
+          // a false success for a condition where every real request returns
+          // empty output, not an advisory warning.
+          const ok = await check();
+          if (ok === false) {
+            logger.error(`✗ ${name}`);
+            systemChecksPassed = false;
+          } else {
+            logger.info(`✓ ${name}`);
+          }
         } catch (error) {
           logger.error(`✗ ${name}: ${(error as Error).message}`);
           systemChecksPassed = false;
@@ -2113,22 +2130,31 @@ async function checkDependency(command: string, name: string): Promise<void> {
  * Report on the search-layer CLI using the same resolver the runtime uses, so a
  * `cgmb setup` result can never disagree with what the layer will actually do.
  */
-async function checkAntigravityDependency(): Promise<void> {
+/**
+ * @returns whether the search layer's dependency is actually usable.
+ *
+ * Previously returned void, so `cgmb setup` printed "Setup completed
+ * successfully" even with agy missing or below the 1.1.7 minimum -- a version
+ * that returns empty output for every real request. The caller now decides
+ * what to do with a negative result.
+ */
+async function checkAntigravityDependency(): Promise<boolean> {
   const binary = await findAntigravityBinary();
 
   if (!binary) {
     logger.warn('⚠ Antigravity CLI (agy) not found');
     logger.info(`Install it with: ${AGY_INSTALL_HINT}`);
-    return;
+    return false;
   }
 
   if (!binary.versionSupported) {
     logger.warn(`⚠ Antigravity CLI ${binary.version ?? 'unknown'} is too old (need ${MIN_AGY_VERSION}+)`);
     logger.info('Update it with: agy update');
-    return;
+    return false;
   }
 
   logger.info(`✓ Antigravity CLI is installed (${binary.version ?? 'version unknown'})`);
+  return true;
 }
 
 async function checkCommand(command: string): Promise<boolean> {

@@ -21,6 +21,23 @@ export const TargetLayerSchema = z.enum(['antigravity', 'gemini', 'aistudio', 'a
 export type TargetLayer = z.infer<typeof TargetLayerSchema>;
 
 /**
+ * Trusted execution context, carried alongside a task rather than inside it.
+ *
+ * Anything a layer must be able to trust belongs here. Task objects are built
+ * by spreading caller-supplied input (workflow steps do this literally), so a
+ * security-relevant field on the task can be overridden by the very caller it
+ * is meant to constrain.
+ */
+export interface ExecutionContext {
+  /**
+   * Directory that inlined files must live under. Set only by trusted callers:
+   * a path the operator typed on the command line, or a root the server has
+   * validated. Absent means the process working directory.
+   */
+  trustedWorkspaceRoot?: string;
+}
+
+/**
  * Map the deprecated 'gemini' layer name onto its canonical replacement.
  *
  * Accepts an arbitrary string so it can sit directly on untrusted MCP input;

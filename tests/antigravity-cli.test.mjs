@@ -481,6 +481,42 @@ describe('inlined file safety', () => {
     );
   });
 
+  it('refuses a binary hidden behind a BOM, and decodes UTF-16 correctly', () => {
+    // A BOM used to short-circuit the whole content check, so three prepended
+    // bytes smuggled any binary through. And a UTF-16 BOM was accepted while
+    // the body was still decoded as UTF-8, producing mojibake the model
+    // answered as if it were prose.
+    const bomBinary = join(dir, 'bom-binary.txt');
+    writeFileSync(bomBinary, Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from([0x00, 0x01, 0x02, 0x03, 0x00, 0x04]),
+    ]));
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'x', files: [{ path: bomBinary, type: 'text' }] }, dir),
+      /not text/,
+      'a BOM must not bypass the content check'
+    );
+
+    const utf16 = join(dir, 'utf16.txt');
+    writeFileSync(utf16, Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('UTF16 CONTENT MARKER', 'utf16le'),
+    ]));
+    const built = layer.extractPrompt({ prompt: 'x', files: [{ path: utf16, type: 'text' }] }, dir);
+    assert.match(built, /UTF16 CONTENT MARKER/, 'UTF-16 must be decoded, not mangled');
+  });
+
+  it('rejects an oversized file without reading it', () => {
+    // The size check must happen before the read, or a large file stalls the
+    // event loop and allocates twice its size before being rejected.
+    const big = join(dir, 'huge.txt');
+    writeFileSync(big, Buffer.alloc(500_000, 0x41));
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'x', files: [{ path: big, type: 'text' }] }, dir),
+      /over the .* limit for a single inlined file/
+    );
+  });
+
   it('resolves symlinks before applying the credential check', () => {
     const secret = join(dir, '.env');
     const link = join(dir, 'notes.txt');

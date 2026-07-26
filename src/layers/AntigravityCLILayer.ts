@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'fs';
+import { Stats, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, relative as relativePath } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
@@ -14,6 +14,16 @@ import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLe
  */
 /** Upper bound on inlined content from any single file. */
 const MAX_INLINED_FILE_CHARS = 100000;
+
+/**
+ * Byte-level ceiling, checked with stat() before the file is opened.
+ *
+ * The character limit can only be applied after decoding, which is too late to
+ * prevent the read itself from stalling the event loop. 4 bytes per character
+ * is a generous allowance for UTF-8 so this never rejects a file the character
+ * limit would have accepted.
+ */
+const MAX_INLINED_FILE_BYTES = MAX_INLINED_FILE_CHARS * 4;
 
 /**
  * Upper bound across all inlined files in one request.
@@ -64,7 +74,7 @@ const BINARY_MAGIC: ReadonlyArray<readonly number[]> = [
  * Deliberately ignores FileReference.type: it is caller-supplied and arrives
  * from MCP input, so trusting it let a PDF labelled type:'text' through to be
  * read as UTF-8 and answered from mojibake. This is only a cheap first pass --
- * looksLikeText() inspects the actual bytes and is the real gate.
+ * decodeAsText() inspects the actual bytes and is the real gate.
  */
 function isInlinableTextFile(file: FileReference): boolean {
   // basename() handles both separators, so no path parsing here.
@@ -81,49 +91,64 @@ function isInlinableTextFile(file: FileReference): boolean {
 }
 
 /**
- * True when raw bytes are text this layer can safely inline.
+ * Decode raw bytes as text, or return undefined when they are not text.
  *
- * Works on the Buffer rather than a decoded string. Decoding first hid two
- * failures: a binary made mostly of ASCII control bytes contains no NUL and no
- * U+FFFD, so it passed and the model answered noise as though it were a
- * document; and a legitimate short document containing one replacement
- * character was rejected. UTF-16 and Shift-JIS were rejected outright for the
- * same reason.
+ * Works on the Buffer, and the BOM only selects a decoder -- it is never an
+ * approval. Treating a BOM as proof let a binary with three bytes prepended
+ * skip the magic, NUL and control-density checks entirely, and accepting a
+ * UTF-16 BOM while still decoding as UTF-8 turned a legitimate document into
+ * mojibake that the model answered as though it were prose.
  */
-function looksLikeText(buffer: Buffer): boolean {
+function decodeAsText(buffer: Buffer): string | undefined {
   if (buffer.length === 0) {
-    return true;
+    return '';
+  }
+
+  let encoding: BufferEncoding = 'utf8';
+  let body = buffer;
+
+  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+    body = buffer.subarray(3);
+  } else if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    encoding = 'utf16le';
+    body = buffer.subarray(2);
+  } else if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    // Node cannot decode big-endian UTF-16; refuse rather than mangle it.
+    return undefined;
   }
 
   for (const magic of BINARY_MAGIC) {
     if (buffer.length >= magic.length && magic.every((byte, i) => buffer[i] === byte)) {
-      return false;
+      return undefined;
     }
   }
 
-  // A BOM means a declared text encoding, even when it is not UTF-8.
-  const hasBom =
-    (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) ||
-    (buffer[0] === 0xff && buffer[1] === 0xfe) ||
-    (buffer[0] === 0xfe && buffer[1] === 0xff);
-  if (hasBom) {
-    return true;
-  }
-
-  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
-  let control = 0;
-
-  for (const byte of sample) {
-    if (byte === 0) {
-      return false;
+  if (encoding === 'utf8') {
+    // Every byte is checked, not just a prefix: a text header followed by a
+    // binary tail used to pass because only the first 8KB was sampled.
+    let control = 0;
+    for (const byte of body) {
+      if (byte === 0) {
+        return undefined;
+      }
+      if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x0c) {
+        control++;
+      }
     }
-    // Control characters other than tab, newline, carriage return and form feed.
-    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x0c) {
-      control++;
+    if (body.length > 0 && control / body.length >= 0.02) {
+      return undefined;
     }
   }
 
-  return control / sample.length < 0.02;
+  const text = body.toString(encoding);
+
+  // A fatal decode check: re-encoding a valid string round-trips. Mojibake
+  // from a mis-guessed encoding does not.
+  if (encoding === 'utf8' && !Buffer.from(text, 'utf8').equals(body)) {
+    return undefined;
+  }
+
+  return text;
 }
 
 /**
@@ -872,6 +897,36 @@ export class AntigravityCLILayer implements LayerInterface {
         );
       }
 
+      // Check the size before reading anything.
+      //
+      // readFileSync pulled the whole file into a Buffer and then decoded it to
+      // a string before any limit was applied, so pointing at a large file in
+      // the workspace stalled the event loop and allocated twice its size --
+      // even when it was about to be rejected as oversized or binary. The outer
+      // timeout cannot interrupt synchronous I/O.
+      let stats: Stats;
+      try {
+        stats = statSync(resolvedPath);
+      } catch (error) {
+        throw new Error(
+          `Could not read ${file.path} for Antigravity CLI processing: ${(error as Error).message}`
+        );
+      }
+
+      if (!stats.isFile()) {
+        throw new Error(
+          `${basename(file.path)} is not a regular file and will not be sent to the Antigravity CLI.`
+        );
+      }
+
+      if (stats.size > MAX_INLINED_FILE_BYTES) {
+        throw new Error(
+          `${basename(file.path)} is ${stats.size} bytes, over the ` +
+          `${MAX_INLINED_FILE_BYTES}-byte limit for a single inlined file. ` +
+          `Split the document or use the AI Studio layer.`
+        );
+      }
+
       // Read and validate as separate steps: the catch below is only for I/O
       // failures, and must not re-wrap the deliberate rejections that follow.
       let bytes: Buffer;
@@ -888,14 +943,15 @@ export class AntigravityCLILayer implements LayerInterface {
       {
         // A permitted name is not proof of text: inspect the actual bytes.
         // Answering mojibake produces a confident summary of noise.
-        if (!looksLikeText(bytes)) {
+        const decoded = decodeAsText(bytes);
+        if (decoded === undefined) {
           throw new Error(
-            `${basename(file.path)} is not text and will not be sent to the ` +
+            `${basename(file.path)} is not text this layer can decode and will not be sent to the ` +
             `Antigravity CLI. Use the AI Studio layer for binary formats.`
           );
         }
 
-        const content = bytes.toString('utf8');
+        const content = decoded;
 
         if (content.length > MAX_INLINED_FILE_CHARS) {
           // Do not truncate silently: a summary or comparison built from part

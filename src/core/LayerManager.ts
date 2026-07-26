@@ -6,6 +6,7 @@ import { ErrorHandler, safeExecute } from '../utils/errorHandler.js';
 import {
   CGMBError,
   Config,
+  ExecutionContext,
   ExecutionPlan,
   FileReference,
   LayerResult,
@@ -208,7 +209,11 @@ export class LayerManager {
    * Fast processing for simple prompts (reference implementation style)
    * Bypasses heavy layer initialization and routing overhead
    */
-  public async processSimpleFast(prompt: string, files?: FileReference[]): Promise<LayerResult> {
+  public async processSimpleFast(
+    prompt: string,
+    files?: FileReference[],
+    context: ExecutionContext = {}
+  ): Promise<LayerResult> {
     logger.info('Fast simple processing', {
       promptLength: prompt.length,
       hasFiles: !!files?.length,
@@ -218,12 +223,17 @@ export class LayerManager {
     try {
       // Use simplified execution directly on Antigravity layer (with async initialization)
       const antigravityLayer = await this.getAntigravityLayerAsync();
-      const result = await antigravityLayer.execute({
-        type: 'text_processing',
-        prompt,
-        files: files || [],
-        useSearch: true // Enable search by default for current information
-      });
+      const result = await antigravityLayer.execute(
+        {
+          type: 'text_processing',
+          prompt,
+          files: files || [],
+          useSearch: true // Enable search by default for current information
+        },
+        ...(context.trustedWorkspaceRoot === undefined
+          ? []
+          : [{ workspaceRoot: context.trustedWorkspaceRoot }])
+      );
 
       logger.info('Fast processing completed', {
         duration: result.metadata?.duration,
@@ -349,7 +359,10 @@ export class LayerManager {
    * Implements intelligent routing with fallback strategies
    * Enhanced to support user-specified layer preferences
    */
-  public async executeWithOptimalLayer(task: any): Promise<LayerResult> {
+  public async executeWithOptimalLayer(
+    task: any,
+    context: ExecutionContext = {}
+  ): Promise<LayerResult> {
     // Extract user-preferred layer from task options
     const userPreferredLayer = task.options?.preferredLayer;
     
@@ -365,21 +378,25 @@ export class LayerManager {
     });
 
     try {
-      return await this.executeWithLayer(analysis.preferredLayer, task);
+      return await this.executeWithLayer(analysis.preferredLayer, task, context);
     } catch (error) {
       logger.warn('Primary layer execution failed, attempting fallback', {
         primaryLayer: analysis.preferredLayer,
         error: (error as Error).message,
       });
       
-      return await this.executeWithFallback(task, analysis.preferredLayer);
+      return await this.executeWithFallback(task, analysis.preferredLayer, context);
     }
   }
 
   /**
    * Execute task with specific layer
    */
-  public async executeWithLayer(layerType: LayerType, task: any): Promise<LayerResult> {
+  public async executeWithLayer(
+    layerType: LayerType,
+    task: any,
+    context: ExecutionContext = {}
+  ): Promise<LayerResult> {
     switch (layerType) {
       case 'claude':
         const claudeLayer = await this.getClaudeLayerAsync();
@@ -388,7 +405,14 @@ export class LayerManager {
       case 'gemini': // deprecated alias
       case 'antigravity':
         const antigravityLayer = await this.getAntigravityLayerAsync();
-        return await antigravityLayer.execute(task);
+        // The trusted root travels beside the task, never inside it: workflow
+        // steps spread caller-supplied input into the task object.
+        return await antigravityLayer.execute(
+          task,
+          ...(context.trustedWorkspaceRoot === undefined
+            ? []
+            : [{ workspaceRoot: context.trustedWorkspaceRoot }])
+        );
         
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();
@@ -402,7 +426,11 @@ export class LayerManager {
   /**
    * Execute with fallback strategy
    */
-  private async executeWithFallback(task: any, failedLayer: LayerType): Promise<LayerResult> {
+  private async executeWithFallback(
+    task: any,
+    failedLayer: LayerType,
+    context: ExecutionContext = {}
+  ): Promise<LayerResult> {
     const fallbackOrder = this.getFallbackOrder(failedLayer, task);
 
     for (const layerType of fallbackOrder) {
@@ -423,7 +451,7 @@ export class LayerManager {
           originalLayer: failedLayer,
         });
 
-        return await this.executeWithLayer(layerType, task);
+        return await this.executeWithLayer(layerType, task, context);
       } catch (error) {
         logger.warn('Fallback layer also failed', {
           layer: layerType,
@@ -658,7 +686,8 @@ export class LayerManager {
     prompt: string,
     files: FileReference[],
     workflow: WorkflowType,
-    options?: ProcessingOptions
+    options?: ProcessingOptions,
+    context: ExecutionContext = {}
   ): Promise<WorkflowResult> {
     logger.info('LayerManager.processMultimodal called', {
       workflow,
@@ -672,7 +701,7 @@ export class LayerManager {
       logger.info('Using fast path for simple multimodal request');
 
       try {
-        const result = await this.processSimpleFast(prompt, files);
+        const result = await this.processSimpleFast(prompt, files, context);
 
         // Convert to WorkflowResult format
         return {

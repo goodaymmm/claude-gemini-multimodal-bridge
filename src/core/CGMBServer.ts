@@ -689,7 +689,14 @@ export class CGMBServer {
             analysisPrompt = `Analyze the content at these URLs: ${normalizedRequest.urlsDetected.join(', ')}. ${normalizedRequest.prompt}`;
           }
 
-          logger.info('Executing URL analysis via Antigravity CLI', { analysisPrompt });
+          // Length only: prompts and URLs can carry personal or confidential
+          // content, and logger metadata goes to the console and LOG_FILE
+          // unredacted. Stripping prompt text inside the layer is pointless if
+          // the routing code above logs the same text first.
+          logger.info('Executing URL analysis via Antigravity CLI', {
+            promptLength: analysisPrompt.length,
+            urlCount: webUrls.length,
+          });
 
           // Direct execution on Gemini layer for URL processing (with async initialization)
           const geminiLayer = await this.layerManager.getAntigravityLayerAsync();
@@ -723,7 +730,7 @@ export class CGMBServer {
 
         if (isSearchTask) {
           logger.info('Search keywords detected - auto-routing to Antigravity CLI layer', {
-            prompt: normalizedRequest.prompt,
+            promptLength: normalizedRequest.prompt.length,
             matchedKeywords: searchKeywords.filter(k => lowerPrompt.includes(k.toLowerCase()))
           });
 
@@ -759,7 +766,7 @@ export class CGMBServer {
 
         if ((isImageGeneration || isAudioGeneration) && normalizedRequest.files.length === 0) {
           logger.info('Generation task detected - auto-routing to AI Studio layer', {
-            prompt: normalizedRequest.prompt,
+            promptLength: normalizedRequest.prompt.length,
             isImageGeneration,
             isAudioGeneration
           });
