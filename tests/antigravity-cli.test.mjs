@@ -845,6 +845,48 @@ describe('layer-independent admission', () => {
   });
 });
 
+describe('fast path admission', () => {
+  const dir = join(tmpdir(), `cgmb-fastpath-${process.pid}`);
+
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('applies admission to the single-file analysis fast path', async () => {
+    // One- and two-file analyses skipped executeWithLayer and called
+    // AIStudioLayer directly, so the workspace and credential checks never ran
+    // for the most common MCP request shape.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+
+    const outsideDir = join(tmpdir(), `cgmb-fastpath-outside-${process.pid}`);
+    rmSync(outsideDir, { recursive: true, force: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const outside = join(outsideDir, 'notes.txt');
+    writeFileSync(outside, 'content outside the workspace');
+
+    const lm = new LayerManager({
+      claude: { timeout: 300000, max_tokens: 16384, temperature: 0.2 },
+      gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: '' },
+      aistudio: { temperature: 0.2, max_tokens: 16384, timeout: 180000, model: 'gemini-2.5-flash', api_key: '' },
+    });
+
+    try {
+      const result = await lm.processMultimodal(
+        'summarise',
+        [{ path: outside, type: 'text' }],
+        'analysis',
+        undefined,
+        { trustedWorkspaceRoot: dir }
+      );
+
+      assert.equal(result.success, false, 'a file outside the workspace must not be processed');
+    } catch (error) {
+      assert.match(String(error?.message ?? error), /outside the workspace root/);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('workspace isolation', () => {
   it('leaves no shared, predictably-named scratch directory behind', () => {
     // Regression: every run shared <tmp>/cgmb-agy-workspace and never cleaned

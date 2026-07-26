@@ -838,15 +838,21 @@ export class LayerManager {
       });
 
       try {
-        // Direct AI Studio execution for file analysis (skip 3-step workflow)
-        const aiStudioLayer = await this.getAIStudioLayerAsync();
-        const result = await aiStudioLayer.execute({
+        // Routed through executeWithLayer so admission still applies.
+        //
+        // This called AIStudioLayer.execute() directly, so the workspace
+        // confinement and credential-name checks added in the previous round
+        // never ran for one- and two-file analyses -- the most common MCP
+        // request. A file outside the workspace, or credentials.json, reached
+        // the AI Studio MCP server and was sent onward. Placing the gate in
+        // executeWithLayer only helps if every file-bearing path goes through it.
+        const result = await this.executeWithLayer('aistudio', {
           type: 'multimodal_processing',
           action: 'analyze',
           prompt,
           files,
           options: options || {}
-        });
+        }, context);
 
         // Convert to WorkflowResult format
         return {
@@ -1059,9 +1065,24 @@ export class LayerManager {
         
         // Execute step
         const result = await this.executeStep(step, stepInput, options, context);
+
+        // A failed step must reach the fallback path.
+        //
+        // executeStep catches its own exceptions and returns success:false, so
+        // the catch block below was only ever entered for errors it could not
+        // handle -- meaning a declared fallback such as aistudio_unavailable
+        // never ran, and later steps carried on with the failure as input.
+        if (!result.success) {
+          throw new CGMBError(
+            result.error ?? `Step ${step.id} failed`,
+            'STEP_FAILED',
+            step.layer
+          );
+        }
+
         results[step.id] = result;
-        
-        if (result.success && result.data) {
+
+        if (result.data) {
           stepOutputs[step.id] = { output: result.data };
         }
 
@@ -1312,17 +1333,28 @@ export class LayerManager {
     const stepGroups = this.groupStepsByRecommendedLayer(workflow.steps, analysis);
     const results: Record<string, LayerResult> = {};
 
+    // Dependency references use `@step.output`, so every execution mode has to
+    // publish the same shape. Only sequential did: hybrid and parallel passed
+    // the raw LayerResult, so `@step.output` resolved to undefined and a
+    // downstream synthesis or quality check ran with no upstream data -- then
+    // reported success because it returned something of its own.
+    const stepOutputs: Record<string, Record<string, unknown>> = {};
+
     // Execute high-priority steps first
     for (const [_priority, steps] of Object.entries(stepGroups)) {
       if (steps.length === 1) {
         // Single step - execute directly
         const step = steps[0]!;
-        const stepInput = this.resolveStepInput(step.input, results, inputData);
-        results[step.id] = await this.executeStep(step, stepInput, options, context);
+        const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
+        const result = await this.executeStep(step, stepInput, options, context);
+        results[step.id] = result;
+        if (result.success) {
+          stepOutputs[step.id] = { output: result.data };
+        }
       } else {
         // Multiple steps - execute in parallel if possible
         const promises = steps.map(async (step) => {
-          const stepInput = this.resolveStepInput(step.input, results, inputData);
+          const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
           return {
             stepId: step.id,
             result: await this.executeStep(step, stepInput, options, context),
@@ -1332,6 +1364,9 @@ export class LayerManager {
         const stepResults = await Promise.all(promises);
         stepResults.forEach(({ stepId, result }) => {
           results[stepId] = result;
+          if (result.success) {
+            stepOutputs[stepId] = { output: result.data };
+          }
         });
       }
     }

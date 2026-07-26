@@ -148,14 +148,20 @@ export class MCPConfigManager {
       };
 
       if (sameFile(detectedNodePath, process.execPath) && sameFile(detectedCgmbPath, bundledCli)) {
+        // Persist the canonical paths, not the strings that were checked.
+        //
+        // Storing the environment's own value left a check/use gap: a symlink
+        // pointing at the real Node and CLI passes realpath comparison, and
+        // retargeting it afterwards changes what Claude Code launches later.
+        // What goes into the file is what was verified.
         logger.info('Using environment-specific MCP configuration', {
-          nodePath: detectedNodePath,
-          cgmbPath: detectedCgmbPath
+          nodePath: process.execPath,
+          cgmbPath: bundledCli
         });
 
         return {
-          command: detectedNodePath,
-          args: [detectedCgmbPath, 'serve'],
+          command: process.execPath,
+          args: [bundledCli, 'serve'],
           env: {
             NODE_ENV: 'production',
             PATH: process.env.PATH || ''
