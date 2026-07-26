@@ -1201,7 +1201,18 @@ async function executeGeminiCommand(options: any) {
     let result;
     if (options.file) {
       // Process with file
-      result = await antigravityLayer.processFiles([{ path: options.file, type: 'document' }], options.prompt);
+      // A path typed on the command line is the operator's own explicit
+      // instruction, so the file's own directory is the workspace root here.
+      // The default (process.cwd()) is the right posture for MCP input, where
+      // the path may have been chosen by a prompt-injected caller, but applying
+      // it to the CLI would refuse `cgmb gemini -f` for any file outside the
+      // current directory -- a workflow that has nothing to do with the threat.
+      const filePath = path.resolve(options.file);
+      result = await antigravityLayer.processFiles(
+        [{ path: filePath, type: 'document' }],
+        options.prompt,
+        path.dirname(filePath)
+      );
     } else {
       // Text-only processing
       result = await antigravityLayer.execute({

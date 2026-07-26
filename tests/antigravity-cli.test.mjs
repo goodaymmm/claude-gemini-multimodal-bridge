@@ -368,6 +368,39 @@ describe('inlined file safety', () => {
     }
   });
 
+  it('lets an explicit caller widen the root without weakening the default', () => {
+    // The CLI passes the file's own directory because a path typed by the
+    // operator is the authorisation. MCP callers omit it and get process.cwd(),
+    // so untrusted input stays confined. Both behaviours must hold at once.
+    const outsideDir = join(tmpdir(), `cgmb-test-widen-${process.pid}`);
+    rmSync(outsideDir, { recursive: true, force: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const file = join(outsideDir, 'explicit.txt');
+    writeFileSync(file, 'explicitly requested content\n');
+
+    try {
+      // Widened by an explicit caller: allowed.
+      const built = layer.extractPrompt({
+        prompt: 'summarise',
+        workspaceRoot: outsideDir,
+        files: [{ path: file, type: 'text' }],
+      });
+      assert.match(built, /explicitly requested content/);
+
+      // Same file under a narrower root: still refused.
+      assert.throws(
+        () => layer.extractPrompt({
+          prompt: 'summarise',
+          workspaceRoot: dir,
+          files: [{ path: file, type: 'text' }],
+        }),
+        /outside the workspace root/
+      );
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails loudly when the combined budget is exceeded', () => {
     // Previously the loop logged a warning and stopped, so later files never
     // reached the model while the caller still received a successful answer.

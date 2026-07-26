@@ -358,7 +358,18 @@ export class AntigravityCLILayer implements LayerInterface {
   /**
    * Process files (basic support for text files)
    */
-  async processFiles(files: FileReference[], prompt: string): Promise<MultimodalResult> {
+  /**
+   * @param workspaceRoot Root the files must live under. Callers that received
+   * the path from a human -- the CLI, where naming the file *is* the
+   * authorisation -- may widen this. Callers handling untrusted input (MCP
+   * requests) should pass their declared workingDirectory, or omit it to get
+   * the process working directory.
+   */
+  async processFiles(
+    files: FileReference[],
+    prompt: string,
+    workspaceRoot?: string
+  ): Promise<MultimodalResult> {
     // Antigravity CLI has limited file support here - focus on text processing
     const textFiles = files.filter(f => f.type === 'text' || f.path.endsWith('.txt') || f.path.endsWith('.md'));
 
@@ -375,6 +386,7 @@ export class AntigravityCLILayer implements LayerInterface {
       type: 'multimodal',
       prompt,
       files: textFiles,
+      ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
     });
 
     return {
