@@ -345,8 +345,8 @@ export class RequestAnalyzer {
   /**
    * Determine optimal layer execution order
    */
-  private determineLayerOrder(analysis: RequestAnalysis): ('claude' | 'gemini' | 'aistudio')[] {
-    const layers: ('claude' | 'gemini' | 'aistudio')[] = [];
+  private determineLayerOrder(analysis: RequestAnalysis): ('claude' | 'antigravity' | 'gemini' | 'aistudio')[] {
+    const layers: ('claude' | 'antigravity' | 'gemini' | 'aistudio')[] = [];
     
     switch (analysis.enhancementType) {
       case 'multimodal':

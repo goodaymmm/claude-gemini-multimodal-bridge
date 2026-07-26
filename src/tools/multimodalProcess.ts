@@ -372,7 +372,8 @@ export class MultimodalProcess {
       let authResult;
       
       switch (service) {
-        case 'gemini':
+        case 'antigravity':
+        case 'gemini': // deprecated alias
           authResult = await this.authVerifier.verifyGeminiAuth();
           break;
         case 'aistudio':
@@ -558,7 +559,7 @@ export class MultimodalProcess {
   /**
    * Extract layers used from workflow result
    */
-  private extractLayersFromWorkflowResult(result: WorkflowResult): ('claude' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
+  private extractLayersFromWorkflowResult(result: WorkflowResult): ('claude' | 'antigravity' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
     const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
     const layers = new Set<typeof validLayers[number]>();
     
@@ -583,7 +584,7 @@ export class MultimodalProcess {
   /**
    * Extract layers used from result
    */
-  private extractLayersUsed(result: LayerResult): ('claude' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
+  private extractLayersUsed(result: LayerResult): ('claude' | 'antigravity' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
     const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
     const layers = new Set<typeof validLayers[number]>();
     

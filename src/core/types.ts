@@ -5,12 +5,30 @@ import { z } from 'zod';
 // ===================================
 
 // Layer Types
-export const LayerTypeSchema = z.enum(['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator']);
+//
+// The search layer is named 'antigravity' after the CLI it drives. 'gemini' is
+// retained as a deprecated alias so existing MCP clients, saved configs and
+// scripts keep working; normalizeLayerName() maps it onto the canonical name at
+// every entry point. Removing it outright would reject requests that were valid
+// one release earlier.
+export const LayerTypeSchema = z.enum([
+  'claude', 'antigravity', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator',
+]);
 export type LayerType = z.infer<typeof LayerTypeSchema>;
 
 // Target Layer Types for direct routing
-export const TargetLayerSchema = z.enum(['gemini', 'aistudio', 'adaptive']);
+export const TargetLayerSchema = z.enum(['antigravity', 'gemini', 'aistudio', 'adaptive']);
 export type TargetLayer = z.infer<typeof TargetLayerSchema>;
+
+/**
+ * Map the deprecated 'gemini' layer name onto its canonical replacement.
+ *
+ * Accepts an arbitrary string so it can sit directly on untrusted MCP input;
+ * anything else is returned unchanged for the caller's own validation to reject.
+ */
+export function normalizeLayerName<T extends string>(layer: T): T | 'antigravity' {
+  return layer === 'gemini' ? 'antigravity' : layer;
+}
 export const ExecutionModeSchema = z.enum(['sequential', 'parallel', 'adaptive']);
 export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
 export const QualityLevelSchema = z.enum(['fast', 'balanced', 'quality']);
@@ -38,7 +56,7 @@ export type FileReference = z.infer<typeof FileReferenceSchema>;
 
 // Processing Options
 export const ProcessingOptionsSchema = z.object({
-  layer_priority: z.enum(['claude', 'gemini', 'aistudio', 'adaptive']).optional(),
+  layer_priority: z.enum(['claude', 'antigravity', 'gemini', 'aistudio', 'adaptive']).optional(),
   execution_mode: z.enum(['sequential', 'parallel', 'adaptive']).optional(),
   output_format: z.string().optional(),
   quality_level: z.enum(['fast', 'balanced', 'quality']).optional(),
@@ -108,7 +126,7 @@ export type DocumentAnalysisResult = z.infer<typeof DocumentAnalysisResultSchema
 // Workflow Definitions
 export const WorkflowStepSchema = z.object({
   id: z.string(),
-  layer: z.enum(['claude', 'gemini', 'aistudio']),
+  layer: z.enum(['claude', 'antigravity', 'gemini', 'aistudio']),
   action: z.string(),
   input: z.record(z.any()),
   dependsOn: z.array(z.string()).optional(),
@@ -142,7 +160,7 @@ export const LayerResultSchema = z.object({
   data: z.any().optional(),
   error: z.string().optional(),
   metadata: z.object({
-    layer: z.enum(['claude', 'gemini', 'aistudio']),
+    layer: z.enum(['claude', 'antigravity', 'gemini', 'aistudio']),
     duration: z.number(),
     tokens_used: z.number().optional(),
     cost: z.number().optional(),
@@ -316,7 +334,7 @@ export const WorkloadAnalysisSchema = z.object({
   requiresMultimodalProcessing: z.boolean(),
   requiresGrounding: z.boolean(),
   estimatedComplexity: z.enum(['low', 'medium', 'high']),
-  recommendedLayer: z.enum(['claude', 'gemini', 'aistudio']),
+  recommendedLayer: z.enum(['claude', 'antigravity', 'gemini', 'aistudio']),
   confidence: z.number().min(0).max(1),
 });
 export type WorkloadAnalysis = z.infer<typeof WorkloadAnalysisSchema>;
@@ -590,7 +608,7 @@ export type SystemCapabilities = z.infer<typeof SystemCapabilitiesSchema>;
 // Request Analysis
 export const RequestAnalysisSchema = z.object({
   canEnhance: z.boolean(),
-  requiredCapabilities: z.array(z.enum(['claude', 'gemini', 'aistudio'])),
+  requiredCapabilities: z.array(z.enum(['claude', 'antigravity', 'gemini', 'aistudio'])),
   fallbackToOriginal: z.boolean(),
   enhancementType: z.enum(['multimodal', 'grounding', 'reasoning', 'passthrough']),
   confidence: z.number().min(0).max(1),
@@ -603,11 +621,11 @@ export type RequestAnalysis = z.infer<typeof RequestAnalysisSchema>;
 export const EnhancementPlanSchema = z.object({
   enhance: z.boolean(),
   type: z.enum(['multimodal', 'grounding', 'reasoning', 'passthrough']),
-  layers: z.array(z.enum(['claude', 'gemini', 'aistudio'])),
+  layers: z.array(z.enum(['claude', 'antigravity', 'gemini', 'aistudio'])),
   confidence: z.number().min(0).max(1),
   fallbackStrategy: z.object({
     enabled: z.boolean(),
-    fallbackTo: z.array(z.enum(['claude', 'gemini', 'aistudio'])),
+    fallbackTo: z.array(z.enum(['claude', 'antigravity', 'gemini', 'aistudio'])),
   }).optional(),
   estimatedDuration: z.number().optional(),
 });
@@ -734,7 +752,7 @@ export const ResourceEstimateSchema = z.object({
   estimated_tokens: z.number().optional(),
   complexity_score: z.number().min(0).max(10),
   recommended_execution_mode: ExecutionModeSchema,
-  required_capabilities: z.array(z.enum(['claude', 'gemini', 'aistudio'])),
+  required_capabilities: z.array(z.enum(['claude', 'antigravity', 'gemini', 'aistudio'])),
 });
 export type ResourceEstimate = z.infer<typeof ResourceEstimateSchema>;
 

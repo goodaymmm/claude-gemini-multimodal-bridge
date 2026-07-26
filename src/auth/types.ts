@@ -58,7 +58,7 @@ export interface SetupOptions {
 }
 
 // Service types for better type safety
-export type ServiceType = 'gemini' | 'aistudio' | 'claude';
+export type ServiceType = 'antigravity' | 'gemini' | 'aistudio' | 'claude';
 
 // Authentication method types
 export type AuthMethod = 'oauth' | 'api_key' | 'session';

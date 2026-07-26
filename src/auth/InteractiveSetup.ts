@@ -382,9 +382,10 @@ export class InteractiveSetup {
   /**
    * Setup specific service authentication
    */
-  async setupServiceAuth(service: 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
+  async setupServiceAuth(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
     switch (service) {
-      case 'gemini':
+      case 'antigravity':
+      case 'gemini': // deprecated alias
         return this.setupGeminiAuth();
       case 'aistudio':
         return this.setupAIStudioAuth();

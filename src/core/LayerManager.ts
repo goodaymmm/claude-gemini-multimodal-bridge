@@ -1,5 +1,5 @@
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
-import { GeminiCLILayer } from '../layers/GeminiCLILayer.js';
+import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
 import { ErrorHandler, safeExecute } from '../utils/errorHandler.js';
@@ -44,22 +44,22 @@ interface TaskAnalysis {
 
 export class LayerManager {
   private claudeLayer: ClaudeCodeLayer | null = null;
-  private geminiLayer: GeminiCLILayer | null = null;
+  private antigravityLayer: AntigravityCLILayer | null = null;
   private aiStudioLayer: AIStudioLayer | null = null;
   private config: Config;
   private layerInitialized: {
     claude: boolean;
-    gemini: boolean;
+    antigravity: boolean;
     aistudio: boolean;
   } = {
     claude: false,
-    gemini: false,
+    antigravity: false,
     aistudio: false
   };
 
   // Promise cache for async layer initialization
   private claudeLayerPromise: Promise<ClaudeCodeLayer> | null = null;
-  private geminiLayerPromise: Promise<GeminiCLILayer> | null = null;
+  private antigravityLayerPromise: Promise<AntigravityCLILayer> | null = null;
   private aiStudioLayerPromise: Promise<AIStudioLayer> | null = null;
 
   constructor(config: Config) {
@@ -88,15 +88,15 @@ export class LayerManager {
   }
 
   /**
-   * Get Gemini layer with lazy initialization
+   * Get Antigravity layer with lazy initialization
    */
-  public getGeminiLayer(): GeminiCLILayer {
-    if (!this.geminiLayer) {
-      logger.info('Lazy initializing Gemini CLI layer');
-      this.geminiLayer = new GeminiCLILayer();
-      // Gemini layer doesn't require initialization for fast path
+  public getAntigravityLayer(): AntigravityCLILayer {
+    if (!this.antigravityLayer) {
+      logger.info('Lazy initializing Antigravity CLI layer');
+      this.antigravityLayer = new AntigravityCLILayer();
+      // Antigravity layer doesn't require initialization for fast path
     }
-    return this.geminiLayer;
+    return this.antigravityLayer;
   }
 
   /**
@@ -105,8 +105,8 @@ export class LayerManager {
   public getAIStudioLayer(): AIStudioLayer {
     if (!this.aiStudioLayer) {
       logger.info('Lazy initializing AI Studio layer');
-      // Pass GeminiCLILayer reference for translation functionality
-      this.aiStudioLayer = new AIStudioLayer(this.getGeminiLayer());
+      // Pass AntigravityCLILayer reference for translation functionality
+      this.aiStudioLayer = new AIStudioLayer(this.getAntigravityLayer());
       if (!this.layerInitialized.aistudio) {
         // Initialize only when first accessed
         this.aiStudioLayer.initialize().then(() => {
@@ -142,24 +142,24 @@ export class LayerManager {
   }
 
   /**
-   * Get Gemini layer with guaranteed initialization (async)
+   * Get Antigravity layer with guaranteed initialization (async)
    */
-  public async getGeminiLayerAsync(): Promise<GeminiCLILayer> {
-    if (!this.geminiLayerPromise) {
-      this.geminiLayerPromise = (async () => {
-        if (!this.geminiLayer) {
-          logger.info('Async initializing Gemini CLI layer');
-          this.geminiLayer = new GeminiCLILayer();
+  public async getAntigravityLayerAsync(): Promise<AntigravityCLILayer> {
+    if (!this.antigravityLayerPromise) {
+      this.antigravityLayerPromise = (async () => {
+        if (!this.antigravityLayer) {
+          logger.info('Async initializing Antigravity CLI layer');
+          this.antigravityLayer = new AntigravityCLILayer();
         }
-        if (!this.layerInitialized.gemini) {
-          await this.geminiLayer.initialize();
-          this.layerInitialized.gemini = true;
-          logger.info('Gemini CLI layer initialized (async)');
+        if (!this.layerInitialized.antigravity) {
+          await this.antigravityLayer.initialize();
+          this.layerInitialized.antigravity = true;
+          logger.info('Antigravity CLI layer initialized (async)');
         }
-        return this.geminiLayer;
+        return this.antigravityLayer;
       })();
     }
-    return this.geminiLayerPromise;
+    return this.antigravityLayerPromise;
   }
 
   /**
@@ -170,9 +170,9 @@ export class LayerManager {
       this.aiStudioLayerPromise = (async () => {
         if (!this.aiStudioLayer) {
           logger.info('Async initializing AI Studio layer');
-          // Ensure Gemini layer is initialized first (needed for translation)
-          await this.getGeminiLayerAsync();
-          this.aiStudioLayer = new AIStudioLayer(this.geminiLayer!);
+          // Ensure Antigravity layer is initialized first (needed for translation)
+          await this.getAntigravityLayerAsync();
+          this.aiStudioLayer = new AIStudioLayer(this.antigravityLayer!);
         }
         if (!this.layerInitialized.aistudio) {
           await this.aiStudioLayer.initialize();
@@ -197,9 +197,9 @@ export class LayerManager {
     });
 
     try {
-      // Use simplified execution directly on Gemini layer (with async initialization)
-      const geminiLayer = await this.getGeminiLayerAsync();
-      const result = await geminiLayer.execute({
+      // Use simplified execution directly on Antigravity layer (with async initialization)
+      const antigravityLayer = await this.getAntigravityLayerAsync();
+      const result = await antigravityLayer.execute({
         type: 'text_processing',
         prompt,
         files: files || [],
@@ -291,18 +291,18 @@ export class LayerManager {
     }
     // Priority 5: Current information needs - Route to Gemini CLI for web search
     else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
-      preferredLayer = 'gemini';
-      reasoning = 'Current information or search required - Gemini CLI optimal';
+      preferredLayer = 'antigravity';
+      reasoning = 'Current information or search required - Antigravity CLI optimal';
     }
     // Priority 6: Complex reasoning or code-related prompts - Route to Claude Code
     else if (complexity === 'high' || isCodeRelated || promptLength > 2000) {
       preferredLayer = 'claude';
       reasoning = 'Complex reasoning or code analysis - Claude Code optimal';
     }
-    // Priority 7: Simple tasks - Route to Gemini CLI for speed
+    // Priority 7: Simple tasks - Route to Antigravity CLI for speed
     else if (complexity === 'low' && promptLength < 500) {
-      preferredLayer = 'gemini';
-      reasoning = 'Simple task - Gemini CLI for speed';
+      preferredLayer = 'antigravity';
+      reasoning = 'Simple task - Antigravity CLI for speed';
     }
     // Default: Route to AI Studio (primary layer)
     else {
@@ -366,9 +366,10 @@ export class LayerManager {
         const claudeLayer = await this.getClaudeLayerAsync();
         return await claudeLayer.execute(task);
         
-      case 'gemini':
-        const geminiLayer = await this.getGeminiLayerAsync();
-        return await geminiLayer.execute(task);
+      case 'gemini': // deprecated alias
+      case 'antigravity':
+        const antigravityLayer = await this.getAntigravityLayerAsync();
+        return await antigravityLayer.execute(task);
         
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();
@@ -425,18 +426,19 @@ export class LayerManager {
     switch (failedLayer) {
       case 'claude':
         // If Claude fails, try Gemini for search or AI Studio for files
-        return analysis.hasFiles ? ['aistudio', 'gemini'] : ['gemini', 'aistudio'];
+        return analysis.hasFiles ? ['aistudio', 'antigravity'] : ['antigravity', 'aistudio'];
         
-      case 'gemini':
+      case 'gemini': // deprecated alias
+      case 'antigravity':
         // If Gemini fails, prefer AI Studio, then Claude for complex tasks only
         return analysis.complexity === 'high' ? ['aistudio', 'claude'] : ['aistudio', 'claude'];
         
       case 'aistudio':
         // If AI Studio fails, prefer Gemini for search, then Claude for complex tasks
-        return analysis.complexity === 'high' ? ['gemini', 'claude'] : ['gemini', 'claude'];
+        return analysis.complexity === 'high' ? ['antigravity', 'claude'] : ['antigravity', 'claude'];
         
       default:
-        return ['aistudio', 'gemini', 'claude'];
+        return ['aistudio', 'antigravity', 'claude'];
     }
   }
 
@@ -454,9 +456,10 @@ export class LayerManager {
           await this.getAIStudioLayer().initialize();
           this.layerInitialized.aistudio = true;
           break;
-        case 'gemini':
-          await this.getGeminiLayer().initialize();
-          this.layerInitialized.gemini = true;
+        case 'gemini': // deprecated alias
+        case 'antigravity':
+          await this.getAntigravityLayer().initialize();
+          this.layerInitialized.antigravity = true;
           break;
       }
     }
@@ -662,7 +665,7 @@ export class LayerManager {
             total_duration: result.metadata?.duration || 0,
             steps_completed: 1,
             steps_failed: 0,
-            layers_used: ['gemini'],
+            layers_used: ['antigravity'],
             optimization: 'fast-path-bypass'
           }
         };
@@ -786,7 +789,7 @@ export class LayerManager {
           replace: 'document_processing',
           with: {
             id: 'fallback_processing',
-            layer: 'gemini',
+            layer: 'antigravity',
             action: 'analyze_documents',
             input: {
               documents,
@@ -1061,15 +1064,15 @@ export class LayerManager {
     }
 
     // Determine recommended layer with generation priority
-    let recommendedLayer: LayerType = 'gemini'; // Default to Gemini CLI for simple prompts
+    let recommendedLayer: LayerType = 'antigravity'; // Default to Gemini CLI for simple prompts
     
     // Check if this is a simple prompt (no files, no generation, no complex reasoning)
     const isSimplePrompt = !hasMultimodalFiles && !isGenerationRequest && !requiresComplexReasoning && !multipleSteps;
     
     // HIGHEST PRIORITY: Web search goes to Gemini CLI
     if (requiresGrounding && !hasMultimodalFiles) {
-      recommendedLayer = 'gemini';
-      logger.info('Routing to Gemini CLI for web search', {
+      recommendedLayer = 'antigravity';
+      logger.info('Routing to Antigravity CLI for web search', {
         prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 100) + '...' : 'No prompt',
         requiresGrounding: true
       });
@@ -1093,8 +1096,8 @@ export class LayerManager {
       recommendedLayer = 'aistudio';
     } else if (isSimplePrompt) {
       // Simple prompts go to Gemini CLI (2.5 Pro) for best performance
-      recommendedLayer = 'gemini';
-      logger.info('Routing simple prompt to Gemini CLI', {
+      recommendedLayer = 'antigravity';
+      logger.info('Routing simple prompt to Antigravity CLI', {
         promptLength: typeof inputData.prompt === 'string' ? inputData.prompt.length : 0,
         hasFiles: hasMultimodalFiles,
         requiresGrounding
@@ -1276,7 +1279,7 @@ export class LayerManager {
           replace: 'multimodal_analysis',
           with: {
             id: 'fallback_analysis',
-            layer: 'gemini',
+            layer: 'antigravity',
             action: 'analyze_with_grounding',
             input: {
               prompt: context.prompt,
@@ -1320,7 +1323,7 @@ export class LayerManager {
         },
         {
           id: 'quality_check',
-          layer: 'gemini',
+          layer: 'antigravity',
           action: 'validate_conversion',
           input: {
             original_files: context.files,
@@ -1435,8 +1438,9 @@ export class LayerManager {
     switch (layerType) {
       case 'claude':
         return this.getClaudeLayer();
-      case 'gemini':
-        return this.getGeminiLayer();
+      case 'gemini': // deprecated alias
+      case 'antigravity':
+        return this.getAntigravityLayer();
       case 'aistudio':
         return this.getAIStudioLayer();
       default:
@@ -1451,8 +1455,9 @@ export class LayerManager {
     switch (layerType) {
       case 'claude':
         return await this.getClaudeLayerAsync();
-      case 'gemini':
-        return await this.getGeminiLayerAsync();
+      case 'gemini': // deprecated alias
+      case 'antigravity':
+        return await this.getAntigravityLayerAsync();
       case 'aistudio':
         return await this.getAIStudioLayerAsync();
       default:

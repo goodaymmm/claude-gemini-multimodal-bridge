@@ -346,7 +346,8 @@ export class ClaudeProxy {
         } else {
           return 'synthesize_response';
         }
-      case 'gemini':
+      case 'antigravity':
+      case 'gemini': // deprecated alias
         if (analysis.enhancementType === 'grounding') {
           return 'grounded_search';
         } else {

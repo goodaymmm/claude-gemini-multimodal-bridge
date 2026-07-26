@@ -225,7 +225,7 @@ export class TimeoutManager {
    * Create timeout for MCP operations with layer-specific settings
    */
   public static createMCPTimeout(
-    layer: 'claude' | 'gemini' | 'aistudio',
+    layer: 'claude' | 'antigravity' | 'gemini' | 'aistudio',
     operation: string,
     hasFiles: boolean = false
   ): {
@@ -235,9 +235,10 @@ export class TimeoutManager {
     const environment = this.detectEnvironment();
     
     const baseTimeouts = {
-      claude: 300000,    // 5 minutes for complex reasoning
-      gemini: 60000,     // 1 minute for search/text processing
-      aistudio: 180000,  // 3 minutes for multimodal processing
+      claude: 300000,      // 5 minutes for complex reasoning
+      antigravity: 60000,  // 1 minute for search/text processing
+      gemini: 60000,       // deprecated alias for 'antigravity'
+      aistudio: 180000,    // 3 minutes for multimodal processing
     };
 
     let baseTimeout = baseTimeouts[layer];

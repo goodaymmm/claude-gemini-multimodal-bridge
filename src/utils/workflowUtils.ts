@@ -83,7 +83,7 @@ export function calculateResourceEstimate(
     complexity_score: baseValues.cpu * multiplier.score,
     estimated_duration: baseValues.duration * inputMultiplier * multiplier.duration,
     recommended_execution_mode: 'adaptive' as const,
-    required_capabilities: ['claude', 'gemini', 'aistudio'] as const,
+    required_capabilities: ['claude', 'antigravity', 'aistudio'] as const,
     estimated_cost: baseValues.cost * inputMultiplier * multiplier.cost,
   };
 }

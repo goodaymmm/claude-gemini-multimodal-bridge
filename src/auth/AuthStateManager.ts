@@ -21,7 +21,7 @@ export class AuthStateManager {
   /**
    * Get authentication status for a service with caching
    */
-  async getAuthStatus(service: 'gemini' | 'aistudio' | 'claude'): Promise<AuthStatus> {
+  async getAuthStatus(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<AuthStatus> {
     return safeExecute(
       async () => {
         // Check cache first
@@ -53,7 +53,7 @@ export class AuthStateManager {
       },
       {
         operationName: `get-auth-status-${service}`,
-        layer: service as 'gemini' | 'aistudio' | 'claude',
+        layer: service as 'antigravity' | 'gemini' | 'aistudio' | 'claude',
         timeout: 10000,
       }
     );
@@ -304,7 +304,7 @@ export class AuthStateManager {
    */
   private async validateStoredAuth(service: string): Promise<boolean> {
     try {
-      const result = await this.authVerifier.verifyServiceAuth(service as 'gemini' | 'aistudio' | 'claude');
+      const result = await this.authVerifier.verifyServiceAuth(service as 'antigravity' | 'gemini' | 'aistudio' | 'claude');
       return result.success;
     } catch {
       return false;

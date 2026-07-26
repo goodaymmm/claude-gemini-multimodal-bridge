@@ -165,7 +165,7 @@ export class AuthVerifier {
       },
       {
         operationName: 'verify-gemini-auth',
-        layer: 'gemini',
+        layer: 'antigravity',
         timeout: 10000,
       }
     );
@@ -420,9 +420,10 @@ export class AuthVerifier {
   /**
    * Verify authentication for a specific service
    */
-  async verifyServiceAuth(service: 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
+  async verifyServiceAuth(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
     switch (service) {
-      case 'gemini':
+      case 'antigravity':
+      case 'gemini': // deprecated alias
         return this.verifyGeminiAuth();
       case 'aistudio':
         return this.verifyAIStudioAuth();
@@ -480,7 +481,7 @@ export class AuthVerifier {
   /**
    * Clear authentication cache for a specific service
    */
-  clearAuthCache(service?: 'gemini' | 'aistudio' | 'claude'): void {
+  clearAuthCache(service?: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): void {
     if (service) {
       this.authCache.invalidate(service);
       logger.info('Authentication cache cleared for service', { service });
@@ -493,7 +494,7 @@ export class AuthVerifier {
   /**
    * Force refresh authentication for a service
    */
-  async forceRefreshAuth(service: 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
+  async forceRefreshAuth(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
     this.authCache.forceRefresh(service);
     return await this.verifyServiceAuth(service);
   }
@@ -588,7 +589,7 @@ export class AuthVerifier {
   /**
    * Get human-readable status for a service
    */
-  async getServiceStatus(service: 'gemini' | 'aistudio' | 'claude'): Promise<string> {
+  async getServiceStatus(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<string> {
     try {
       const result = await this.verifyServiceAuth(service);
       
@@ -607,7 +608,7 @@ export class AuthVerifier {
   /**
    * Check if service needs attention
    */
-  async serviceNeedsAttention(service: 'gemini' | 'aistudio' | 'claude'): Promise<boolean> {
+  async serviceNeedsAttention(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<boolean> {
     try {
       const result = await this.verifyServiceAuth(service);
       return !result.success && result.requiresAction;

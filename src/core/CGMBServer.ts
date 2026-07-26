@@ -28,6 +28,7 @@ import {
   // WorkflowDefinitionArgs,
   WorkflowDefinitionArgsSchema,
   WorkflowResult,
+  normalizeLayerName,
 } from './types.js';
 import { Config, ConfigSchema } from './types.js';
 
@@ -216,8 +217,8 @@ export class CGMBServer {
                 },
                 targetLayer: {
                   type: 'string',
-                  enum: ['gemini', 'aistudio', 'adaptive'],
-                  description: 'Target layer for direct routing (optional)',
+                  enum: ['antigravity', 'gemini', 'aistudio', 'adaptive'],
+                  description: 'Target layer for direct routing (optional). "gemini" is a deprecated alias for "antigravity".',
                 },
                 preformatted: {
                   type: 'boolean',
@@ -325,8 +326,8 @@ export class CGMBServer {
                   properties: {
                     layer_priority: {
                       type: 'string',
-                      enum: ['claude', 'gemini', 'aistudio', 'adaptive'],
-                      description: 'Preferred layer for processing',
+                      enum: ['claude', 'antigravity', 'gemini', 'aistudio', 'adaptive'],
+                      description: 'Preferred layer for processing. "gemini" is a deprecated alias for "antigravity".',
                     },
                     execution_mode: {
                       type: 'string',
@@ -691,7 +692,7 @@ export class CGMBServer {
           logger.info('Executing URL analysis via Gemini CLI', { analysisPrompt });
 
           // Direct execution on Gemini layer for URL processing (with async initialization)
-          const geminiLayer = await this.layerManager.getGeminiLayerAsync();
+          const geminiLayer = await this.layerManager.getAntigravityLayerAsync();
           const result = await geminiLayer.execute({
             type: 'text_processing',
             prompt: analysisPrompt,
@@ -705,7 +706,7 @@ export class CGMBServer {
             data: result.data,
             metadata: {
               ...result.metadata,
-              layer: 'gemini',
+              layer: 'antigravity',
               routing_reason: 'web_url_auto_routing',
               urls_processed: normalizedRequest.urlsDetected.length,
               processing_time: result.metadata?.duration || 0
@@ -727,7 +728,7 @@ export class CGMBServer {
           });
 
           // Direct execution on Gemini layer for search (with async initialization)
-          const geminiLayerForSearch = await this.layerManager.getGeminiLayerAsync();
+          const geminiLayerForSearch = await this.layerManager.getAntigravityLayerAsync();
           const result = await geminiLayerForSearch.execute({
             type: 'search',
             prompt: normalizedRequest.prompt,
@@ -741,7 +742,7 @@ export class CGMBServer {
             data: result.data,
             metadata: {
               ...result.metadata,
-              layer: 'gemini',
+              layer: 'antigravity',
               routing_reason: 'search_auto_routing',
               processing_time: result.metadata?.duration || 0
             }
@@ -880,12 +881,13 @@ export class CGMBServer {
    * Process preformatted request from Claude Code
    */
   private async processPreformattedRequest(request: EnhancedCGMBRequest): Promise<WorkflowResult> {
-    const targetLayer = request.targetLayer || 'adaptive';
-    
-    if (targetLayer === 'gemini' && request.formattedData?.geminiFormat) {
-      // Direct execution on Gemini layer (with async initialization)
-      logger.info('Executing preformatted request on Gemini layer');
-      const geminiLayerPreformatted = await this.layerManager.getGeminiLayerAsync();
+    // Accept the deprecated 'gemini' spelling from older clients.
+    const targetLayer = normalizeLayerName(request.targetLayer ?? 'adaptive');
+
+    if (targetLayer === 'antigravity' && request.formattedData?.geminiFormat) {
+      // Direct execution on the Antigravity layer (with async initialization)
+      logger.info('Executing preformatted request on Antigravity layer');
+      const geminiLayerPreformatted = await this.layerManager.getAntigravityLayerAsync();
       const result = await geminiLayerPreformatted.execute({
         type: 'text_processing',
         prompt: request.formattedData.geminiFormat.stdin,
@@ -903,7 +905,7 @@ export class CGMBServer {
           total_duration: result.metadata?.duration || 0,
           steps_completed: 1,
           steps_failed: 0,
-          layers_used: ['gemini'],
+          layers_used: ['antigravity'],
           optimization: 'preformatted-direct'
         }
       };
@@ -1428,7 +1430,7 @@ Solutions:
         name: 'Gemini CLI',
         check: async () => {
           try {
-            const layer = await this.layerManager.getGeminiLayerAsync();
+            const layer = await this.layerManager.getAntigravityLayerAsync();
             return await layer.isAvailable();
           } catch {
             return false;

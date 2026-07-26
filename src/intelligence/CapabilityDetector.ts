@@ -185,7 +185,8 @@ export class CapabilityDetector {
     switch (layer) {
       case 'claude':
         return capabilities.claudeCode.available && capabilities.claudeCode.authenticated;
-      case 'gemini':
+      case 'antigravity':
+      case 'gemini': // deprecated alias
         return capabilities.geminiCLI.available && capabilities.geminiCLI.authenticated;
       case 'aistudio':
         return capabilities.aiStudio.available && capabilities.aiStudio.authenticated && capabilities.aiStudio.mcpServerAvailable;

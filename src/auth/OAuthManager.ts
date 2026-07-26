@@ -81,7 +81,7 @@ export class OAuthManager {
       },
       {
         operationName: 'check-gemini-auth',
-        layer: 'gemini',
+        layer: 'antigravity',
         timeout: 10000,
       }
     );
@@ -136,7 +136,7 @@ export class OAuthManager {
       },
       {
         operationName: 'prompt-gemini-login',
-        layer: 'gemini',
+        layer: 'antigravity',
         timeout: 60000, // OAuth flow can take time
       }
     );
@@ -182,7 +182,7 @@ export class OAuthManager {
       },
       {
         operationName: 'refresh-gemini-token',
-        layer: 'gemini',
+        layer: 'antigravity',
         timeout: 30000,
       }
     );
@@ -359,7 +359,7 @@ export class OAuthManager {
   /**
    * Get authentication method for a service
    */
-  async getAuthMethod(service: 'gemini' | 'aistudio' | 'claude'): Promise<string> {
+  async getAuthMethod(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<string> {
     if (service === 'gemini' || service === 'aistudio') {
       return await this.detectAuthMethod();
     }

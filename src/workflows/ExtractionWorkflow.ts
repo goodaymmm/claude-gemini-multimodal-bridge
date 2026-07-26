@@ -334,7 +334,7 @@ export class ExtractionWorkflow extends BaseWorkflow {
       complexity_score: cpu * multiplier.complexity_score,
       estimated_duration: duration * Math.max(sizeMultiplier, countMultiplier) * typeMultiplier * multiplier.estimated_duration,
       recommended_execution_mode: 'adaptive' as const,
-      required_capabilities: ['claude', 'gemini', 'aistudio'] as const,
+      required_capabilities: ['claude', 'antigravity', 'aistudio'] as const,
       estimated_cost: cost * typeMultiplier * multiplier.estimated_cost,
     };
   }

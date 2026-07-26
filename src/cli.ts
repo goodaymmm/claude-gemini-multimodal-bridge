@@ -1373,7 +1373,7 @@ program
         workflow: options.workflow,
         options: {
           layer_priority: options.strategy === 'claude-first' ? 'claude' :
-                         options.strategy === 'gemini-first' ? 'gemini' :
+                         options.strategy === 'gemini-first' ? 'antigravity' :
                          options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
           detailed: true
         }

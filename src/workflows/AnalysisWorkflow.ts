@@ -249,7 +249,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
       estimated_tokens: baseMemory * memoryMultiplier * multiplier.estimated_tokens,
       complexity_score: Math.min(baseCPU * multiplier.complexity_score / 10, 10),
       recommended_execution_mode: 'adaptive' as const,
-      required_capabilities: ['claude', 'gemini', 'aistudio'] as const,
+      required_capabilities: ['claude', 'antigravity', 'aistudio'] as const,
     };
   }
 
@@ -397,7 +397,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
     if (this.needsGrounding(analysisType, options)) {
       steps.push({
         id: 'grounded_analysis',
-        layer: 'gemini' as const,
+        layer: 'antigravity' as const,
         action: 'grounded_search',
         input: {
           prompt: 'Enhance the analysis with current contextual information: {{initial_content_analysis}}',
@@ -608,7 +608,7 @@ export class AnalysisWorkflow extends BaseWorkflow {
         },
         {
           id: 'contextualize_trends',
-          layer: 'gemini' as const,
+          layer: 'antigravity' as const,
           action: 'grounded_search',
           input: {
             prompt: 'Provide current context for identified trends: {{identify_trends}}',

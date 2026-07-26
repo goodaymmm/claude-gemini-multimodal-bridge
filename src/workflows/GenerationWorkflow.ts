@@ -378,7 +378,7 @@ export class GenerationWorkflow extends BaseWorkflow {
       complexity_score: cpu * multiplier.complexity_score,
       estimated_duration: duration * lengthMultiplier * multiplier.estimated_duration,
       recommended_execution_mode: 'adaptive' as const,
-      required_capabilities: ['claude', 'gemini', 'aistudio'] as const,
+      required_capabilities: ['claude', 'antigravity', 'aistudio'] as const,
       estimated_cost: cost * lengthMultiplier * multiplier.estimated_cost,
     };
   }
@@ -434,7 +434,7 @@ export class GenerationWorkflow extends BaseWorkflow {
     if (this.needsGrounding(generationType, requirements)) {
       steps.push({
         id: 'research_context',
-        layer: 'gemini' as const,
+        layer: 'antigravity' as const,
         action: 'grounded_search',
         input: {
           prompt: `Research current information relevant to: ${requirements}`,

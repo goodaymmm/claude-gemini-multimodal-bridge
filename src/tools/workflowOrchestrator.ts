@@ -133,7 +133,7 @@ export class WorkflowOrchestrator {
    */
   async executePipeline(
     steps: Array<{
-      layer: 'claude' | 'gemini' | 'aistudio';
+      layer: 'claude' | 'antigravity' | 'gemini' | 'aistudio';
       action: string;
       input: any;
       dependsOn?: string[];
@@ -405,7 +405,8 @@ export class WorkflowOrchestrator {
           memory = 512;
           cpu = 1.0;
           break;
-        case 'gemini':
+        case 'antigravity':
+        case 'gemini': // deprecated alias
           duration = 30000; // 30 seconds
           cost = 0;
           memory = 256;
@@ -483,7 +484,8 @@ export class WorkflowOrchestrator {
         case 'claude':
           initPromises.push(this.claudeLayer.initialize());
           break;
-        case 'gemini':
+        case 'antigravity':
+        case 'gemini': // deprecated alias
           initPromises.push(this.geminiLayer.initialize());
           break;
         case 'aistudio':
@@ -622,7 +624,8 @@ export class WorkflowOrchestrator {
             });
             break;
             
-          case 'gemini':
+          case 'antigravity':
+          case 'gemini': // deprecated alias
             result = await this.geminiLayer.execute({
               action: step.action,
               ...stepInput,
@@ -833,7 +836,7 @@ export class WorkflowOrchestrator {
         },
         {
           id: 'contextual_grounding',
-          layer: 'gemini',
+          layer: 'antigravity',
           action: 'grounded_search',
           input: { 
             prompt: `${instructions}. Context: {{process_multimodal}}`,
@@ -880,7 +883,7 @@ export class WorkflowOrchestrator {
         },
         {
           id: 'enhance_with_search',
-          layer: 'gemini',
+          layer: 'antigravity',
           action: 'grounded_search',
           input: {
             prompt: `Enhance understanding with current information: {{extract_multimodal}}`,
@@ -922,7 +925,7 @@ export class WorkflowOrchestrator {
       steps: [
         {
           id: 'initial_research',
-          layer: 'gemini',
+          layer: 'antigravity',
           action: 'grounded_search',
           input: {
             prompt: `Research background information: ${instructions}`,

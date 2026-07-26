@@ -93,7 +93,7 @@ export class AntigravityCLILayer implements LayerInterface {
       },
       {
         operationName: 'initialize-antigravity-cli-layer',
-        layer: 'gemini',
+        layer: 'antigravity',
         timeout: 10000,
       }
     );
@@ -164,7 +164,7 @@ export class AntigravityCLILayer implements LayerInterface {
 
         // Check cache for search-enabled tasks (CGMB unique feature)
         if (task.useSearch !== false) {
-          const cachedResult = await this.searchCache.get(prompt, 'gemini');
+          const cachedResult = await this.searchCache.get(prompt, 'antigravity');
           if (cachedResult) {
             logger.debug('Cache hit for Antigravity search', {
               promptLength: prompt.length,
@@ -175,7 +175,7 @@ export class AntigravityCLILayer implements LayerInterface {
               success: true,
               data: cachedResult.content,
               metadata: {
-                layer: 'gemini' as const,
+                layer: 'antigravity' as const,
                 duration: Date.now() - startTime,
                 cache_hit: true,
                 model: this.normalizeModel(task.model, this.DEFAULT_MODEL),
@@ -198,14 +198,14 @@ export class AntigravityCLILayer implements LayerInterface {
             grounded: true,
             search_used: true,
             timestamp: Date.now()
-          }, 'gemini', duration);
+          }, 'antigravity', duration);
         }
 
         return {
           success: true,
           data: result,
           metadata: {
-            layer: 'gemini' as const,
+            layer: 'antigravity' as const,
             duration,
             cache_hit: false,
             model: this.normalizeModel(task.model, this.DEFAULT_MODEL),
@@ -215,7 +215,7 @@ export class AntigravityCLILayer implements LayerInterface {
       },
       {
         operationName: 'execute-antigravity-cli-task',
-        layer: 'gemini',
+        layer: 'antigravity',
         // Outer budget sits above the in-process timeout so `agy --print-timeout`
         // and the kill backstop both get a chance to produce a specific error.
         timeout: this.DEFAULT_TIMEOUT + 10000,
@@ -271,7 +271,7 @@ export class AntigravityCLILayer implements LayerInterface {
       files_processed: textFiles.map(f => f.path),
       processing_time: result.metadata?.duration ?? 0,
       workflow_used: 'analysis' as const,
-      layers_involved: ['gemini'] as const,
+      layers_involved: ['antigravity'] as const,
       metadata: {
         total_duration: result.metadata?.duration ?? 0,
         ...result.metadata,
