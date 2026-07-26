@@ -1,4 +1,17 @@
+import { realpathSync } from 'fs';
+import { basename, isAbsolute as isAbsolutePath, relative as relativePath, resolve as resolvePath } from 'path';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
+
+/** Names that must never be sent to any layer. Mirrors AntigravityCLILayer. */
+const CREDENTIAL_FILE_PATTERNS = [
+  /^\.env(\..*)?$/i,
+  /^\.npmrc$/i,
+  /^\.netrc$/i,
+  /^id_(rsa|dsa|ecdsa|ed25519)$/i,
+  /^credentials(\..*)?$/i,
+  /^secrets?\.[a-z0-9]+$/i,
+  /\.(pem|key|pfx|p12|keystore|jks)$/i,
+];
 import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
@@ -397,11 +410,95 @@ export class LayerManager {
   /**
    * Execute task with specific layer
    */
+  /**
+   * Refuse any file the request must not reach, before a layer is chosen.
+   *
+   * Shares the rules the Antigravity layer already applied -- canonicalise,
+   * confine to the trusted root, refuse credential names -- so they hold for
+   * AI Studio and Claude as well. The layer keeps its own checks: this is the
+   * gate, not a replacement for defence in depth.
+   */
+  private assertFilesAdmissible(task: any, context: ExecutionContext): void {
+    const files: Array<{ path?: string }> = Array.isArray(task?.files) ? task.files : [];
+    if (files.length === 0) {
+      return;
+    }
+
+    const requestedRoot = context.trustedWorkspaceRoot ?? process.cwd();
+
+    let root: string;
+    try {
+      root = realpathSync(requestedRoot);
+    } catch {
+      root = resolvePath(requestedRoot);
+    }
+
+    if (context.trustedWorkspaceBase !== undefined) {
+      let base: string;
+      try {
+        base = realpathSync(context.trustedWorkspaceBase);
+      } catch {
+        base = resolvePath(context.trustedWorkspaceBase);
+      }
+
+      const rootRel = relativePath(base, root);
+      if (rootRel.startsWith('..') || isAbsolutePath(rootRel)) {
+        throw new CGMBError(
+          `Workspace root ${root} is outside the trusted base ${base}`,
+          'UNTRUSTED_WORKSPACE_ROOT'
+        );
+      }
+    }
+
+    for (const file of files) {
+      if (typeof file?.path !== 'string' || file.path === '') {
+        continue;
+      }
+
+      let resolved: string;
+      try {
+        resolved = realpathSync(file.path);
+      } catch (error) {
+        throw new CGMBError(
+          `Could not resolve ${file.path}: ${(error as Error).message}`,
+          'UNREADABLE_FILE'
+        );
+      }
+
+      const rel = relativePath(root, resolved);
+      if (rel.startsWith('..') || isAbsolutePath(rel)) {
+        throw new CGMBError(
+          `Refusing to process ${basename(file.path)}: it resolves to ${resolved}, ` +
+          `outside the workspace root ${root}.`,
+          'FILE_OUTSIDE_WORKSPACE'
+        );
+      }
+
+      for (const name of [basename(file.path), basename(resolved)]) {
+        if (CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(name))) {
+          throw new CGMBError(
+            `Refusing to process ${name}: it matches a credential file pattern.`,
+            'CREDENTIAL_FILE_REFUSED'
+          );
+        }
+      }
+    }
+  }
+
   public async executeWithLayer(
     layerType: LayerType,
     task: any,
     context: ExecutionContext = {}
   ): Promise<LayerResult> {
+    // Admission runs before routing, for every layer.
+    //
+    // The boundary was enforced inside AntigravityCLILayer only, so a path that
+    // layer would refuse still reached AI Studio -- whose MCP server reads the
+    // file and sends it to Gemini. A prompt-injected caller could exfiltrate
+    // anything the server can read outside the workspace simply by choosing the
+    // layer. Checking here means adding a layer cannot silently opt out.
+    this.assertFilesAdmissible(task, context);
+
     switch (layerType) {
       case 'claude':
         const claudeLayer = await this.getClaudeLayerAsync();
@@ -1883,10 +1980,19 @@ export class LayerManager {
         };
       }
 
+      // Return the layer's own result, not a wrapper around it.
+      //
+      // executeWithLayer already returns a LayerResult. Re-wrapping it as
+      // { success, data: result } meant dependent steps received the envelope
+      // instead of the payload, and the response formatter could not unwrap
+      // data.data -- so a multi-step workflow succeeded while emitting
+      // "Processing completed" and handed the wrong object to the next model.
+      // (Introduced when executeStep was routed through executeWithLayer to
+      // carry the trusted workspace root.)
       return {
-        success: true,
-        data: result,
+        ...result,
         metadata: {
+          ...result.metadata,
           layer: step.layer,
           duration,
           model: step.action,

@@ -4,12 +4,13 @@ import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
-import { commandAvailable, probeCommand } from './utils/processUtils.js';
+import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
 import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
 import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
-import { execSync } from 'child_process';
 import path from 'path';
+import { dirname as pathDirname, join as pathJoin } from 'path';
+import { fileURLToPath as toPath } from 'url';
 import fs from 'fs';
 import { OAuthManager } from './auth/OAuthManager.js';
 import { AuthVerifier } from './auth/AuthVerifier.js';
@@ -457,25 +458,19 @@ program
         let foundPath = null;
         for (const command of tool.commands) {
           try {
-            const output = execSync(`which ${command} 2>/dev/null || where ${command} 2>nul`, {
-              encoding: 'utf8',
-              stdio: 'pipe',
-              timeout: 5000,
-            });
-            foundPath = output.trim().split('\n')[0];
+            // Resolve and probe through the shared helpers. This ran the
+            // shell's lookup and then interpolated its first result into
+            // another shell command, so `detect-paths` alone executed whatever
+            // agy.exe or claude.exe the project directory contained -- and a
+            // path containing a space or metacharacter broke it besides.
+            foundPath = resolveTrustedCommand(command) ?? null;
             if (foundPath) {
               console.log(`  ✅ Found: ${foundPath}`);
-              
-              // Test if it works
-              try {
-                execSync(`${foundPath} --version 2>/dev/null || ${foundPath} -v 2>/dev/null`, {
-                  stdio: 'ignore',
-                  timeout: 3000,
-                });
-                console.log(`     Works: ✅`);
-              } catch {
-                console.log(`     Works: ❌ (command failed)`);
-              }
+
+              const works =
+                probeCommand(foundPath, ['--version'], { timeoutMs: 3000 }) !== undefined ||
+                probeCommand(foundPath, ['-v'], { timeoutMs: 3000 }) !== undefined;
+              console.log(works ? '     Works: ✅' : '     Works: ❌ (command failed)');
               break;
             }
           } catch {
@@ -650,9 +645,16 @@ program
           
           // Add CGMB using new method
           console.log('Adding CGMB to Claude Code using new MCP command...');
+          // Register absolute paths, not a bare `cgmb`.
+          //
+          // The helper validated the `claude` executable but the server command
+          // it registered was still a bare name, which Claude Code re-resolves
+          // when it launches the server -- from inside a project, against that
+          // project's PATH and directory. That is a persisted execution path.
+          const bundledCli = pathJoin(pathDirname(toPath(import.meta.url)), 'cli.js');
           const addArgs = [
             'mcp', 'add', 'claude-gemini-multimodal-bridge',
-            'cgmb', 'serve', '-e', 'NODE_ENV=production',
+            process.execPath, bundledCli, 'serve', '-e', 'NODE_ENV=production',
           ];
 
           if (options.dryRun) {

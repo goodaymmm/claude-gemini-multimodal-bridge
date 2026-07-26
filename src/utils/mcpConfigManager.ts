@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -133,21 +133,40 @@ export class MCPConfigManager {
     const detectedCgmbPath = process.env.CGMB_DETECTED_PATH;
     const detectedNodePath = process.env.CGMB_DETECTED_NODE_PATH;
     
+    // These come from the environment, and `setup-mcp` loads the .env of
+    // whatever directory it runs in -- so a hostile project could otherwise
+    // persist an arbitrary command that Claude Code later executes. Accept them
+    // only when they name the running Node binary and this package's own CLI.
     if (detectedCgmbPath && detectedNodePath) {
-      // nvm/nodebrew/volta environment detected - use absolute paths
-      logger.info('Using environment-specific MCP configuration', {
-        nodePath: detectedNodePath,
-        cgmbPath: detectedCgmbPath
-      });
-      
-      return {
-        command: detectedNodePath,
-        args: [detectedCgmbPath, 'serve'],
-        env: {
-          NODE_ENV: 'production',
-          PATH: process.env.PATH || ''
+      const bundledCli = resolveBundledCli();
+      const sameFile = (a: string, b: string): boolean => {
+        try {
+          return realpathSync(a) === realpathSync(b);
+        } catch {
+          return false;
         }
       };
+
+      if (sameFile(detectedNodePath, process.execPath) && sameFile(detectedCgmbPath, bundledCli)) {
+        logger.info('Using environment-specific MCP configuration', {
+          nodePath: detectedNodePath,
+          cgmbPath: detectedCgmbPath
+        });
+
+        return {
+          command: detectedNodePath,
+          args: [detectedCgmbPath, 'serve'],
+          env: {
+            NODE_ENV: 'production',
+            PATH: process.env.PATH || ''
+          }
+        };
+      }
+
+      logger.warn('Ignoring CGMB_DETECTED_* paths: they do not match this installation', {
+        detectedNodePath,
+        detectedCgmbPath,
+      });
     }
     
     // Absolute paths, never a bare name.

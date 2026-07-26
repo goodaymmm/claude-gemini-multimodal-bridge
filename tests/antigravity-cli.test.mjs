@@ -796,6 +796,55 @@ describe('trusted root narrowing', () => {
   });
 });
 
+describe('layer-independent admission', () => {
+  const dir = join(tmpdir(), `cgmb-admission-${process.pid}`);
+
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const makeManager = () => new LayerManager({
+    claude: { timeout: 300000, max_tokens: 16384, temperature: 0.2 },
+    gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: '' },
+    aistudio: { temperature: 0.2, max_tokens: 16384, timeout: 180000, model: 'gemini-2.5-flash', api_key: '' },
+  });
+
+  it('refuses out-of-workspace and credential files for every layer', async () => {
+    // The boundary lived inside AntigravityCLILayer, so choosing 'aistudio'
+    // bypassed it entirely -- and that layer reads the file and sends it to
+    // Gemini. Admission now runs before routing.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+
+    const outsideDir = join(tmpdir(), `cgmb-admission-outside-${process.pid}`);
+    rmSync(outsideDir, { recursive: true, force: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const outside = join(outsideDir, 'secret-notes.txt');
+    writeFileSync(outside, 'content outside the workspace');
+    writeFileSync(join(dir, '.env'), 'PLACEHOLDER=not-a-real-secret');
+
+    const lm = makeManager();
+
+    try {
+      for (const layer of ['aistudio', 'claude', 'antigravity']) {
+        await assert.rejects(
+          () => lm.executeWithLayer(layer, { prompt: 'x', files: [{ path: outside, type: 'text' }] },
+            { trustedWorkspaceRoot: dir }),
+          /outside the workspace root/,
+          `${layer} must refuse a file outside the root`
+        );
+
+        await assert.rejects(
+          () => lm.executeWithLayer(layer, { prompt: 'x', files: [{ path: join(dir, '.env'), type: 'text' }] },
+            { trustedWorkspaceRoot: dir }),
+          /credential file pattern/,
+          `${layer} must refuse a credential file`
+        );
+      }
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('workspace isolation', () => {
   it('leaves no shared, predictably-named scratch directory behind', () => {
     // Regression: every run shared <tmp>/cgmb-agy-workspace and never cleaned
