@@ -20,10 +20,17 @@ export class AuthVerifier {
     this.oauthManager = new OAuthManager();
     this.authCache = AuthCache.getInstance();
     
-    // Setup periodic cache cleanup (every 30 minutes)
-    setInterval(() => {
+    // Setup periodic cache cleanup (every 30 minutes).
+    //
+    // unref'd so it never by itself keeps the process alive: the long-running
+    // MCP server has plenty of other handles, but a one-shot `cgmb` command
+    // that merely constructs an AuthVerifier would otherwise hang for 30
+    // minutes at exit. That is why the CLI has to call process.exit()
+    // explicitly, and why a test importing LayerManager never terminates.
+    const cleanupTimer = setInterval(() => {
       this.authCache.cleanup();
     }, 30 * 60 * 1000);
+    cleanupTimer.unref();
   }
 
   /**
