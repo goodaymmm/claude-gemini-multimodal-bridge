@@ -1,4 +1,7 @@
 import { spawn } from 'child_process';
+import { mkdirSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
@@ -36,6 +39,7 @@ export class AntigravityCLILayer implements LayerInterface {
   private searchCache: SearchCache;
   private agyPath: string = 'agy';
   private agyVersion?: string;
+  private cachedWorkspaceDir?: string;
   private isInitialized = false;
 
   // Antigravity responds slower than the old Gemini CLI, so the default budget is higher.
@@ -366,8 +370,17 @@ export class AntigravityCLILayer implements LayerInterface {
 
       // `agy` is a real executable on every platform (not a .cmd shim), so `shell`
       // is unnecessary here. Avoiding it also avoids Windows quoting hazards.
+      //
+      // Isolation matters: agy is a coding agent, and the prompt arrives from an
+      // MCP caller. Inheriting the CGMB process's cwd would put the repository
+      // (including .env) inside its workspace, and inheriting process.env would
+      // hand it AI_STUDIO_API_KEY and friends. Run it in an empty scratch
+      // directory with only the variables it needs to find its own config and
+      // credentials.
       const child = spawn(this.agyPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: this.workspaceDir,
+        env: this.buildChildEnv(),
         ...(isWindows ? { windowsHide: true } : {}),
       });
 
@@ -442,8 +455,13 @@ export class AntigravityCLILayer implements LayerInterface {
           child.kill('SIGTERM');
         }
 
+        // `child.killed` only means a signal was delivered, so it flips to true
+        // even when the process ignores SIGTERM and keeps running. Gate the
+        // escalation on the process actually having exited instead, otherwise
+        // SIGKILL is never sent and agy survives in the background.
         setTimeout(() => {
-          if (!child.killed) {
+          if (child.exitCode === null && child.signalCode === null) {
+            logger.warn('Antigravity CLI ignored SIGTERM, escalating', { pid: child.pid });
             if (isWindows) {
               child.kill();
             } else {
@@ -461,6 +479,49 @@ export class AntigravityCLILayer implements LayerInterface {
         }
       }, this.DEFAULT_TIMEOUT + 5000);
     });
+  }
+
+  /**
+   * An empty directory used as the CLI's workspace so it never sees the
+   * repository it is running inside. Created lazily and reused.
+   */
+  private get workspaceDir(): string {
+    if (!this.cachedWorkspaceDir) {
+      const dir = join(tmpdir(), 'cgmb-agy-workspace');
+      mkdirSync(dir, { recursive: true });
+      this.cachedWorkspaceDir = dir;
+    }
+    return this.cachedWorkspaceDir;
+  }
+
+  /**
+   * Minimal environment for the CLI child process.
+   *
+   * Passes only what agy needs to locate itself, its config and its keyring,
+   * so secrets held by CGMB (AI_STUDIO_API_KEY, CLAUDE_API_KEY, ...) are never
+   * exposed to an agent that can be steered by an untrusted prompt.
+   */
+  private buildChildEnv(): NodeJS.ProcessEnv {
+    const allowed = [
+      'PATH', 'Path', 'PATHEXT',
+      'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+      'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+      'SystemRoot', 'SystemDrive', 'windir', 'TEMP', 'TMP', 'TMPDIR',
+      'LANG', 'LC_ALL', 'TZ',
+      'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR',
+      'DBUS_SESSION_BUS_ADDRESS', // Linux Secret Service (keyring) access
+      'DISPLAY', 'WAYLAND_DISPLAY',
+      'CODEX_HOME', 'GEMINI_HOME',
+    ];
+
+    const env: NodeJS.ProcessEnv = {};
+    for (const key of allowed) {
+      const value = process.env[key];
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
+    return env;
   }
 
   /**

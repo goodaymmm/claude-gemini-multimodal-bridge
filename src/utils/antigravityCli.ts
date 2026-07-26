@@ -1,3 +1,4 @@
+import { spawn } from 'child_process';
 import { join } from 'path';
 import { logger } from './logger.js';
 
@@ -22,6 +23,23 @@ export const AGY_INSTALL_HINT =
     ? 'irm https://antigravity.google/cli/install.ps1 | iex'
     : 'curl -fsSL https://antigravity.google/cli/install.sh | bash';
 
+/**
+ * Why an auth probe came back negative. Distinguishing these matters: a network
+ * blip must not be presented to the user as "you are signed out".
+ */
+export type AntigravityAuthOutcome =
+  | 'authenticated'
+  | 'unauthenticated'
+  | 'unavailable'
+  | 'timeout'
+  | 'not-installed';
+
+export interface AntigravityAuthProbe {
+  authenticated: boolean;
+  outcome: AntigravityAuthOutcome;
+  error?: string;
+}
+
 export interface AntigravityBinary {
   /** Path or bare command used to invoke the CLI. */
   path: string;
@@ -33,6 +51,79 @@ export interface AntigravityBinary {
 
 let cachedBinary: AntigravityBinary | undefined;
 let cachedBinaryResolved = false;
+
+interface CommandResult {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  timedOut: boolean;
+}
+
+/**
+ * Run a helper command and collect its output.
+ *
+ * Uses spawn rather than execFile for one non-obvious reason: `agy models`
+ * drains stdin to EOF before it writes anything, and execFile always wires
+ * stdin to a pipe it never closes, so the probe hung until its own timeout
+ * fired (measured: 12s+ vs 3.2s with stdin closed). `agy --version` answers
+ * before it touches stdin, which is why binary detection looked healthy while
+ * every auth probe timed out. Closing stdin is therefore load-bearing, not
+ * hygiene.
+ *
+ * Also async on purpose: a synchronous child blocks the MCP server's event
+ * loop, which additionally prevents the caller's own timeout timer from firing.
+ *
+ * Rejects only when the process could not be spawned (e.g. ENOENT).
+ */
+async function runCommand(
+  command: string,
+  args: string[],
+  timeoutMs: number
+): Promise<CommandResult> {
+  return new Promise<CommandResult>((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      // Escalate only if the process is genuinely still alive. `child.killed`
+      // only means a signal was delivered, so it cannot be used for this.
+      setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
+      }, 2000).unref();
+    }, timeoutMs);
+    timer.unref();
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+
+    child.on('error', error => {
+      if (settled) { return; }
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on('close', code => {
+      if (settled) { return; }
+      settled = true;
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code, timedOut });
+    });
+  });
+}
 
 /** Compare dotted version strings: isVersionAtLeast('1.1.7', '1.1.7') === true */
 export function isVersionAtLeast(actual: string, minimum: string): boolean {
@@ -66,19 +157,19 @@ export function looksLikeAgyBinary(candidate: string): boolean {
 /**
  * Run a candidate binary with `--version`.
  *
- * Uses execFileSync with an argv array (no shell) so paths containing spaces
- * resolve correctly and shell metacharacters inside an env-var value are never
- * interpreted.
+ * Uses an argv array (no shell) so paths containing spaces resolve correctly and
+ * shell metacharacters inside an env-var value are never interpreted.
  */
 async function probeVersion(candidate: string): Promise<string | undefined> {
   try {
-    const { execFileSync } = await import('child_process');
-    const output = execFileSync(candidate, ['--version'], {
-      encoding: 'utf8',
-      timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    return output.trim().split('\n')[0]?.trim();
+    const result = await runCommand(candidate, ['--version'], 5000);
+    if (result.code !== 0) {
+      return undefined;
+    }
+    // An empty first line is not a version; treat it as "not found" so callers
+    // do not record a binary they cannot verify.
+    const firstLine = result.stdout.trim().split('\n')[0]?.trim() ?? '';
+    return firstLine === '' ? undefined : firstLine;
   } catch {
     return undefined;
   }
@@ -119,7 +210,6 @@ export async function findAntigravityBinary(
     return cachedBinary;
   }
 
-  const { execSync } = await import('child_process');
   const isWindows = process.platform === 'win32';
 
   const finish = (binary: AntigravityBinary | undefined): AntigravityBinary | undefined => {
@@ -184,11 +274,10 @@ export async function findAntigravityBinary(
     });
   }
 
-  // 3. Platform path lookup
+  // 3. Platform path lookup (async: see runCommand)
   try {
-    const lookup = isWindows ? 'where agy 2>nul' : 'which agy 2>/dev/null';
-    const result = execSync(lookup, { encoding: 'utf8', timeout: 5000 });
-    const firstPath = result.split('\n')[0]?.trim();
+    const lookup = await runCommand(isWindows ? 'where' : 'which', ['agy'], 5000);
+    const firstPath = lookup.code === 0 ? lookup.stdout.split('\n')[0]?.trim() : undefined;
     if (firstPath) {
       const version = await probeVersion(firstPath);
       if (version) {
@@ -228,30 +317,61 @@ export async function findAntigravityBinary(
  * the cheapest reliable probe.
  */
 export async function probeAntigravityAuth(
-  binaryPath?: string
-): Promise<{ authenticated: boolean; error?: string }> {
+  binaryPath?: string,
+  options: { timeoutMs?: number } = {}
+): Promise<AntigravityAuthProbe> {
   const resolved = binaryPath ?? (await findAntigravityBinary())?.path;
   if (!resolved) {
-    return { authenticated: false, error: 'Antigravity CLI (agy) is not installed' };
+    return {
+      authenticated: false,
+      outcome: 'not-installed',
+      error: 'Antigravity CLI (agy) is not installed',
+    };
   }
 
-  try {
-    const { execFileSync } = await import('child_process');
-    const output = execFileSync(resolved, ['models'], {
-      encoding: 'utf8',
-      timeout: 15000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+  // `agy models` measures ~3.2s on a warm profile. Keep the budget comfortably
+  // above that but below the 10s safeExecute window the callers run under, so a
+  // stuck probe surfaces as 'timeout' here rather than aborting the caller.
+  const timeout = options.timeoutMs ?? 8000;
 
-    if (output.trim()) {
-      return { authenticated: true };
+  try {
+    const result = await runCommand(resolved, ['models'], timeout);
+
+    if (result.timedOut) {
+      return {
+        authenticated: false,
+        outcome: 'timeout',
+        error: `\`agy models\` did not respond within ${timeout}ms`,
+      };
     }
 
-    return { authenticated: false, error: '`agy models` returned no models' };
+    if (result.code === 0 && result.stdout.trim()) {
+      return { authenticated: true, outcome: 'authenticated' };
+    }
+
+    const message = result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
+
+    // A transport failure says nothing about credentials. Reporting it as
+    // "unauthenticated" would send users through a pointless sign-in.
+    if (/network|ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN|unavailable/i.test(message)) {
+      return { authenticated: false, outcome: 'unavailable', error: message };
+    }
+
+    // Exit 0 with no models means the CLI ran but could not answer.
+    if (result.code === 0) {
+      return {
+        authenticated: false,
+        outcome: 'unavailable',
+        error: '`agy models` returned no models',
+      };
+    }
+
+    return { authenticated: false, outcome: 'unauthenticated', error: message };
   } catch (error) {
     return {
       authenticated: false,
-      error: error instanceof Error ? error.message : String(error),
+      outcome: 'not-installed',
+      error: (error as Error).message,
     };
   }
 }

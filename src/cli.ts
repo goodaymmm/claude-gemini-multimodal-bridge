@@ -3,7 +3,7 @@
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
 import { DEFAULT_ANTIGRAVITY_MODEL } from './core/types.js';
-import { AGY_INSTALL_HINT } from './utils/antigravityCli.js';
+import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { logger } from './utils/logger.js';
 import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
 import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
@@ -172,7 +172,7 @@ program
       
       // Check for required tools
       await checkDependency('claude', 'Claude Code CLI');
-      await checkDependency('gemini', 'Gemini CLI');
+      await checkAntigravityDependency();
       
       // Create configuration file if it doesn't exist
       const envPath = path.join(process.cwd(), '.env');
@@ -358,7 +358,7 @@ program
       
       const tools = [
         { name: 'Claude Code', commands: ['claude', 'claude-code'], env: 'CLAUDE_CODE_PATH' },
-        { name: 'Gemini CLI', commands: ['gemini'], env: 'GEMINI_CLI_PATH' },
+        { name: 'Antigravity CLI', commands: ['agy'], env: 'ANTIGRAVITY_CLI_PATH' },
         { name: 'Node.js', commands: ['node'], env: 'NODE_PATH' },
         { name: 'NPM', commands: ['npm'], env: 'NPM_PATH' }
       ];
@@ -743,8 +743,11 @@ program
           check: () => checkCommand('claude --version')
         },
         {
-          name: 'Gemini CLI',
-          check: () => checkCommand('gemini --help')
+          name: 'Antigravity CLI',
+          check: async () => {
+            const binary = await findAntigravityBinary();
+            return binary !== undefined && binary.versionSupported;
+          }
         }
       ];
       
@@ -2110,6 +2113,28 @@ async function checkDependency(command: string, name: string): Promise<void> {
     logger.warn(`⚠ ${name} not found in PATH`);
     logger.info(`Please install ${name} and ensure it's in your PATH`);
   }
+}
+
+/**
+ * Report on the search-layer CLI using the same resolver the runtime uses, so a
+ * `cgmb setup` result can never disagree with what the layer will actually do.
+ */
+async function checkAntigravityDependency(): Promise<void> {
+  const binary = await findAntigravityBinary();
+
+  if (!binary) {
+    logger.warn('⚠ Antigravity CLI (agy) not found');
+    logger.info(`Install it with: ${AGY_INSTALL_HINT}`);
+    return;
+  }
+
+  if (!binary.versionSupported) {
+    logger.warn(`⚠ Antigravity CLI ${binary.version ?? 'unknown'} is too old (need ${MIN_AGY_VERSION}+)`);
+    logger.info('Update it with: agy update');
+    return;
+  }
+
+  logger.info(`✓ Antigravity CLI is installed (${binary.version ?? 'version unknown'})`);
 }
 
 async function checkCommand(command: string): Promise<boolean> {

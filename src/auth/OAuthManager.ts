@@ -27,80 +27,52 @@ export class OAuthManager {
           return cached;
         }
 
-        // Priority 1: ask the Antigravity CLI itself.
-        // `agy` stores its OAuth tokens in the OS keyring, so there is no
-        // credential file to inspect and no `agy auth` subcommand. `agy models`
-        // round-trips to the server, so it succeeds only when authenticated.
+        // A live `agy models` call is the ONLY proof that the search layer can
+        // serve a request.
+        //
+        // Antigravity keeps its OAuth tokens in the OS keyring. A leftover
+        // ~/.gemini/oauth_creds.json or GEMINI_API_KEY says nothing about that
+        // session, and on an upgraded machine both are likely to still be
+        // present. Accepting them here reported the layer as healthy — cached
+        // for hours by AuthVerifier — while every real request failed, which is
+        // strictly worse than reporting the truth.
         const binary = await findAntigravityBinary();
-        if (binary) {
-          const probe = await probeAntigravityAuth(binary.path);
-          if (probe.authenticated) {
-            const status: AuthStatus = {
-              isAuthenticated: true,
-              method: 'oauth',
-              userInfo: {
-                planType: 'free',
-                email: undefined,
-                quotaRemaining: undefined
-              }
-            };
-
-            this.updateCache('gemini', status);
-            return status;
-          }
-
-          logger.debug('Antigravity CLI present but not authenticated', { error: probe.error });
+        if (!binary) {
+          return {
+            isAuthenticated: false,
+            method: 'oauth',
+            userInfo: undefined,
+          };
         }
 
-        // Priority 2: legacy Gemini CLI OAuth credentials.
-        // Only meaningful on machines that still have the retired CLI installed;
-        // kept so an in-progress migration does not lose a working setup.
-        const oauthFile = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
+        const probe = await probeAntigravityAuth(binary.path);
 
-        if (fs.existsSync(oauthFile)) {
-          try {
-            const creds = JSON.parse(fs.readFileSync(oauthFile, 'utf8'));
-            
-            // If credentials exist (access_token or refresh_token), consider authenticated
-            if (creds.access_token || creds.refresh_token) {
-              const status: AuthStatus = {
-                isAuthenticated: true,
-                method: 'oauth',
-                userInfo: {
-                  planType: 'free',
-                  email: undefined,
-                  quotaRemaining: undefined
-                }
-              };
-              
-              this.updateCache('gemini', status);
-              return status;
-            }
-          } catch (error) {
-            logger.warn('OAuth credentials file exists but could not be read', { 
-              error: error instanceof Error ? error.message : String(error) 
-            });
-          }
-        }
-        
-        // Check API Key as fallback
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (apiKey && apiKey.length > 10) {
+        if (probe.authenticated) {
           const status: AuthStatus = {
             isAuthenticated: true,
-            method: 'api_key',
+            method: 'oauth',
             userInfo: {
               planType: 'free',
               email: undefined,
               quotaRemaining: undefined
             }
           };
-          
+
           this.updateCache('gemini', status);
           return status;
         }
-        
-        // No authentication found
+
+        // Do not cache transient failures: a network blip is not a sign-out, and
+        // caching it would keep the layer marked dead long after it recovered.
+        if (probe.outcome === 'timeout' || probe.outcome === 'unavailable') {
+          logger.warn('Antigravity CLI reachable but the auth probe did not complete', {
+            outcome: probe.outcome,
+            error: probe.error,
+          });
+        } else {
+          logger.debug('Antigravity CLI is installed but not signed in', { error: probe.error });
+        }
+
         return {
           isAuthenticated: false,
           method: 'oauth',
