@@ -14,7 +14,7 @@ import {
 import { LayerTypeSchema, TargetLayerSchema, narrowTrustedRoot, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer, isInlinableTextFile } from '../dist/layers/AntigravityCLILayer.js';
-import { buildSpawnTarget, isUntrustedBinaryLocation, resolveWindowsCommand } from '../dist/utils/processUtils.js';
+import { buildSpawnTarget, isUntrustedBinaryLocation, resolveTrustedCommand, resolveWindowsCommand } from '../dist/utils/processUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === 'win32';
@@ -689,6 +689,19 @@ describe('binary discovery trust', () => {
 
     // A real installation outside the tree stays usable.
     assert.equal(isUntrustedBinaryLocation(join(tmpdir(), 'agy', 'bin', 'agy.exe')), false);
+  });
+
+  it('applies the trust check to explicit paths on every platform', () => {
+    // buildSpawnTarget returned the command untouched off Windows, so a bare
+    // `claude` was handed to spawn for PATH to resolve -- and PATH routinely
+    // leads with ./node_modules/.bin, inside the repository.
+    const inTree = join(process.cwd(), 'node_modules', '.bin', 'claude');
+    assert.equal(resolveTrustedCommand(inTree), undefined, 'an in-tree path must be refused');
+    assert.throws(() => buildSpawnTarget(inTree, ['--version']), /Could not resolve a trusted/);
+
+    // An explicit path outside the tree is still honoured.
+    const outside = join(tmpdir(), 'tools', 'claude');
+    assert.equal(resolveTrustedCommand(outside), outside);
   });
 
   it('fails closed rather than falling back to a bare command name', { skip: !isWindows && 'Windows-only behaviour' }, () => {

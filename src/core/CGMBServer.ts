@@ -1311,11 +1311,31 @@ Solutions:
         '• Process: "CGMB process files..."';
     }
 
+    // A failed result must reach the wire as a failure.
+    //
+    // formatResponse ignored result.success entirely and, when it could not
+    // extract data, substituted "Processing completed" -- so a workflow whose
+    // steps failed produced a CallToolResult with no isError, which upstream
+    // handlers record as success. Partial failures were worse: the first
+    // successful step's data was returned and the later failures disappeared.
+    const failed = result?.success === false;
+
     return {
       content: [{
         type: 'text',
-        text: responseText
-      }]
+        text: failed
+          ? `${responseText}
+
+❌ This request did not complete successfully.` +
+            (typeof result?.error === 'string' ? `
+Error: ${result.error}` : '') +
+            (typeof result?.metadata?.steps_failed === 'number'
+              ? `
+Failed steps: ${result.metadata.steps_failed}`
+              : '')
+          : responseText
+      }],
+      ...(failed ? { isError: true } : {})
     };
   }
 

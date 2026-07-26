@@ -80,9 +80,11 @@ function lookupHelper(): string {
  * version probe -- both of which run during server start-up, before the user
  * asks for anything, and both inheriting the environment.
  */
-export function resolveWindowsCommand(command: string): string | undefined {
-  if (!isWindows() || /[\\/]/.test(command) || /\.[a-z]+$/i.test(command)) {
-    return command;
+export function resolveTrustedCommand(command: string): string | undefined {
+  // An explicit path is the caller's own decision, but it still must not point
+  // into the working tree.
+  if (/[\\/]/.test(command)) {
+    return isUntrustedBinaryLocation(command) ? undefined : command;
   }
 
   try {
@@ -116,6 +118,11 @@ export function resolveWindowsCommand(command: string): string | undefined {
   }
 }
 
+/** @deprecated Renamed to resolveTrustedCommand; the check now applies on every platform. */
+export function resolveWindowsCommand(command: string): string | undefined {
+  return resolveTrustedCommand(command);
+}
+
 /**
  * Decide how to invoke `command` with `args` without using a shell.
  *
@@ -124,11 +131,12 @@ export function resolveWindowsCommand(command: string): string | undefined {
  * travel on stdin, never in argv.
  */
 export function buildSpawnTarget(command: string, args: string[]): SpawnTarget {
-  if (!isWindows()) {
-    return { file: command, args, spawnOptions: {} };
-  }
-
-  const resolved = resolveWindowsCommand(command);
+  // Resolution and the trust check run on every platform. Returning the command
+  // untouched off Windows meant AuthVerifier, CapabilityDetector and
+  // ClaudeCodeLayer all handed a bare `claude` to spawn for PATH to resolve --
+  // and PATH routinely leads with ./node_modules/.bin, which is inside the
+  // repository. Round 14 only closed the Windows half of this.
+  const resolved = resolveTrustedCommand(command);
 
   if (resolved === undefined) {
     throw new Error(
@@ -137,8 +145,8 @@ export function buildSpawnTarget(command: string, args: string[]): SpawnTarget {
     );
   }
 
-  // Real executables can be spawned directly; only batch shims need cmd.exe.
-  if (!/\.(cmd|bat)$/i.test(resolved)) {
+  // Only Windows batch shims need cmd.exe; everything else spawns directly.
+  if (!isWindows() || !/\.(cmd|bat)$/i.test(resolved)) {
     return { file: resolved, args, spawnOptions: {} };
   }
 

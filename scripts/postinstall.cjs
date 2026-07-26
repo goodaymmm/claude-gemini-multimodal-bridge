@@ -132,9 +132,9 @@ async function setupAIStudioMCP() {
 const MIN_AGY_VERSION = '1.1.7';
 
 /** Read `agy --version`, or undefined when it cannot be determined. */
-function agyVersion() {
+function agyVersion(agyPath) {
   try {
-    const out = execFileSync('agy', ['--version'], {
+    const out = execFileSync(agyPath, ['--version'], {
       encoding: 'utf8',
       timeout: 10000,
       stdio: 'pipe',
@@ -144,6 +144,58 @@ function agyVersion() {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Resolve `agy` to a trusted absolute path, or undefined.
+ *
+ * Mirrors src/utils/processUtils.ts. This script cannot import it -- npm runs
+ * postinstall before the TypeScript build exists -- so the check is duplicated
+ * rather than skipped.
+ *
+ * Both `where` and a bare-name spawn can resolve inside the working directory
+ * on Windows, so `npm install` alone would otherwise execute an agy.exe
+ * committed to a repository, inheriting the postinstall environment.
+ */
+function resolveTrustedAgy() {
+  const realpathOrSelf = target => {
+    try {
+      return fs.realpathSync(target);
+    } catch {
+      return target;
+    }
+  };
+
+  const cwd = realpathOrSelf(path.resolve(process.cwd()));
+  const isUntrusted = candidate => {
+    const resolved = realpathOrSelf(path.resolve(candidate));
+    const rel = path.relative(cwd, resolved);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  };
+
+  const helper = process.platform === 'win32'
+    ? path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'where.exe')
+    : '/usr/bin/which';
+
+  try {
+    const output = execFileSync(helper, ['agy'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: 'pipe',
+      windowsHide: true,
+    });
+
+    for (const line of output.split('\n')) {
+      const candidate = line.trim();
+      if (candidate !== '' && !isUntrusted(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // fall through to undefined
+  }
+
+  return undefined;
 }
 
 /** Compare dotted versions: isVersionAtLeast('1.1.7', '1.1.7') === true */
@@ -179,12 +231,17 @@ function setupAntigravityCLI() {
     ? 'irm https://antigravity.google/cli/install.ps1 | iex'
     : 'curl -fsSL https://antigravity.google/cli/install.sh | bash';
 
-  if (commandExists('agy')) {
+  // Existence and the version probe must agree on one verified path. Checking
+  // with commandExists and then probing by bare name resolved twice, and the
+  // second resolution had no trust check at all.
+  const agyPath = resolveTrustedAgy();
+
+  if (agyPath) {
     // Presence alone is not enough: builds before 1.1.7 print nothing when
     // stdout is not a terminal and still exit 0, so CGMB would silently
     // receive empty answers. Report that as a problem now rather than at
     // runtime.
-    const version = agyVersion();
+    const version = agyVersion(agyPath);
 
     if (version && isVersionAtLeast(version, MIN_AGY_VERSION)) {
       log(`✅ Antigravity CLI (agy) ${version} found`, 'success');

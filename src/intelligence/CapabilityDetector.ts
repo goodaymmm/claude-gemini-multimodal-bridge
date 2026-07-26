@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { buildSpawnTarget, resolveWindowsCommand } from '../utils/processUtils.js';
 import { AvailableCapabilities, EnhancementPlan } from '../core/types.js';
 import { logger } from '../utils/logger.js';
