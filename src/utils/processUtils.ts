@@ -80,7 +80,7 @@ function lookupHelper(): string {
  * version probe -- both of which run during server start-up, before the user
  * asks for anything, and both inheriting the environment.
  */
-export function resolveWindowsCommand(command: string): string {
+export function resolveWindowsCommand(command: string): string | undefined {
   if (!isWindows() || /[\\/]/.test(command) || /\.[a-z]+$/i.test(command)) {
     return command;
   }
@@ -101,9 +101,18 @@ export function resolveWindowsCommand(command: string): string {
       return candidate;
     }
 
-    return command;
+    // Fail closed.
+    //
+    // Returning the bare command handed it straight to spawn/execFile, and on a
+    // default Windows install the executable search includes the current
+    // directory -- so rejecting a planted candidate only to fall back to the
+    // bare name would run that very file. (This machine sets
+    // NoDefaultCurrentDirectoryInExePath=1, which masks the behaviour locally;
+    // most machines do not.) With nothing trustworthy found there is nothing
+    // safe to run.
+    return undefined;
   } catch {
-    return command;
+    return undefined;
   }
 }
 
@@ -120,6 +129,13 @@ export function buildSpawnTarget(command: string, args: string[]): SpawnTarget {
   }
 
   const resolved = resolveWindowsCommand(command);
+
+  if (resolved === undefined) {
+    throw new Error(
+      `Could not resolve a trusted "${command}" executable. Candidates inside the working ` +
+      `directory are refused, and no other match was found on PATH.`
+    );
+  }
 
   // Real executables can be spawned directly; only batch shims need cmd.exe.
   if (!/\.(cmd|bat)$/i.test(resolved)) {

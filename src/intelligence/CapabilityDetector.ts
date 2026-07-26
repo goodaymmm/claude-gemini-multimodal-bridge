@@ -1,4 +1,5 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
+import { buildSpawnTarget, resolveWindowsCommand } from '../utils/processUtils.js';
 import { AvailableCapabilities, EnhancementPlan } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
@@ -209,13 +210,17 @@ export class CapabilityDetector {
         };
       }
 
-      // Get version
+      // Probe the resolved path with an argv array -- never a shell string,
+      // and never a bare name that would be resolved a second time.
       let version: string | undefined;
       try {
-        const output = execSync('claude --version', { 
-          encoding: 'utf8', 
+        const target = buildSpawnTarget(claudePath, ['--version']);
+        const output = execFileSync(target.file, target.args, {
+          encoding: 'utf8',
           timeout: 5000,
-          stdio: 'pipe'
+          stdio: 'pipe',
+          windowsHide: true,
+          ...target.spawnOptions,
         });
         version = output.trim();
       } catch {
@@ -318,25 +323,17 @@ export class CapabilityDetector {
    * Find executable path for a command
    */
   private async findExecutablePath(command: string): Promise<string | undefined> {
+    // Delegates to the shared resolver rather than shelling out.
+    //
+    // This used to run `which`/`where` through a shell and return result[0]
+    // unmodified, bypassing the trust check entirely -- so a claude.cmd or
+    // claude.exe in the working tree was discovered here and then executed by
+    // the version probe below, during capability detection. Fixing
+    // processUtils alone would not have closed this path.
     try {
-      const output = execSync(`which ${command}`, { 
-        encoding: 'utf8',
-        timeout: 5000,
-        stdio: 'pipe'
-      });
-      return output.trim();
+      return resolveWindowsCommand(command);
     } catch {
-      try {
-        // Try alternative method for Windows
-        const output = execSync(`where ${command}`, { 
-          encoding: 'utf8',
-          timeout: 5000,
-          stdio: 'pipe'
-        });
-        return output.split('\n')[0]?.trim();
-      } catch {
-        return undefined;
-      }
+      return undefined;
     }
   }
 

@@ -14,7 +14,7 @@ import {
 import { LayerTypeSchema, TargetLayerSchema, narrowTrustedRoot, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer, isInlinableTextFile } from '../dist/layers/AntigravityCLILayer.js';
-import { buildSpawnTarget, isUntrustedBinaryLocation } from '../dist/utils/processUtils.js';
+import { buildSpawnTarget, isUntrustedBinaryLocation, resolveWindowsCommand } from '../dist/utils/processUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === 'win32';
@@ -689,6 +689,20 @@ describe('binary discovery trust', () => {
 
     // A real installation outside the tree stays usable.
     assert.equal(isUntrustedBinaryLocation(join(tmpdir(), 'agy', 'bin', 'agy.exe')), false);
+  });
+
+  it('fails closed rather than falling back to a bare command name', { skip: !isWindows && 'Windows-only behaviour' }, () => {
+    // Returning the bare name after rejecting every candidate handed it to
+    // spawn, and on a default Windows install the executable search includes
+    // the current directory -- so the rejected file would run anyway. There is
+    // nothing safe to execute when no trusted candidate exists.
+    const missing = `cgmb-no-such-tool-${process.pid}`;
+    assert.equal(resolveWindowsCommand(missing), undefined, 'an unresolvable name must not be returned');
+    assert.throws(
+      () => buildSpawnTarget(missing, ['--version']),
+      /Could not resolve a trusted/,
+      'buildSpawnTarget must refuse rather than spawn a bare name'
+    );
   });
 });
 

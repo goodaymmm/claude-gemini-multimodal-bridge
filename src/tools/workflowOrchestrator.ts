@@ -79,14 +79,24 @@ export class WorkflowOrchestrator {
         
         const totalDuration = Date.now() - startTime;
         
+        // Derive success from the steps, not from having reached this line.
+        //
+        // With continueOnError (which the multimodal pipeline uses), failed
+        // steps are kept and execution continues -- but the result was still
+        // reported as success:true, and steps_completed counted the failures
+        // too. A caller whose Antigravity or AI Studio step failed received a
+        // successful workflow built on missing data.
+        const failedSteps = this.countFailedSteps(stepResults);
+        const completedSteps = Object.values(stepResults).filter(step => step.success).length;
+
         return {
-          success: true,
+          success: failedSteps === 0,
           results: stepResults,
           summary: finalResult.summary,
           metadata: {
             total_duration: totalDuration,
-            steps_completed: Object.keys(stepResults).length,
-            steps_failed: this.countFailedSteps(stepResults),
+            steps_completed: completedSteps,
+            steps_failed: failedSteps,
             total_cost: this.calculateTotalCost(stepResults),
           },
         };
