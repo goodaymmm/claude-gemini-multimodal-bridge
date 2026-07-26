@@ -152,7 +152,7 @@ export class CGMBServer {
               '  - Input formats and requirements\n' +
               '  - Capabilities and features\n' +
               '  - Limitations and quotas\n' +
-              '• Layers: gemini (text/search), aistudio (multimodal), adaptive',
+              '• Layers: antigravity (text/search), aistudio (multimodal), adaptive',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -165,7 +165,7 @@ export class CGMBServer {
               '\n' +
               '📋 **Supported Commands** (auto-detected from prompt):\n' +
               '• chat/ask/tell → Interactive conversation\n' +
-              '• search/find/look up → Web search via Gemini CLI\n' +
+              '• search/find/look up → Web search via Antigravity CLI\n' +
               '• analyze/review/examine → Document/file analysis\n' +
               '• generate/create image → Image generation via AI Studio\n' +
               '• generate/create audio/speech → Audio generation via AI Studio\n' +
@@ -175,7 +175,7 @@ export class CGMBServer {
               '• translate/convert → Translation/conversion\n' +
               '\n' +
               '🔧 **Features**:\n' +
-              '• URL Detection: https:// links processed directly by Gemini CLI\n' +
+              '• URL Detection: https:// links processed directly by Antigravity CLI\n' +
               '• Path Resolution: ./relative → /absolute using workingDirectory\n' +
               '• File Validation: Checks existence and read permissions\n' +
               '• Smart Routing: Auto-selects optimal AI layer\n' +
@@ -673,8 +673,8 @@ export class CGMBServer {
             }
           }
 
-          // Route web URLs through Gemini CLI (search/browse)
-          logger.info('Web URLs - routing to Gemini CLI layer', {
+          // Route web URLs through the Antigravity CLI (search/browse)
+          logger.info('Web URLs - routing to Antigravity CLI layer', {
             urls: webUrls.length > 0 ? webUrls.map(u => u.url) : normalizedRequest.urlsDetected
           });
 
@@ -689,7 +689,7 @@ export class CGMBServer {
             analysisPrompt = `Analyze the content at these URLs: ${normalizedRequest.urlsDetected.join(', ')}. ${normalizedRequest.prompt}`;
           }
 
-          logger.info('Executing URL analysis via Gemini CLI', { analysisPrompt });
+          logger.info('Executing URL analysis via Antigravity CLI', { analysisPrompt });
 
           // Direct execution on Gemini layer for URL processing (with async initialization)
           const geminiLayer = await this.layerManager.getAntigravityLayerAsync();
@@ -716,13 +716,13 @@ export class CGMBServer {
           return this.formatResponse(urlResponse, normalizedRequest.hasCGMB);
         }
 
-        // 2.5 Search Auto-routing: If search keywords detected (no files), route directly to Gemini CLI
+        // 2.5 Search Auto-routing: If search keywords detected (no files), route directly to Antigravity CLI
         const searchKeywords = ['search', 'find', 'look up', 'lookup', 'what is', 'latest', 'news', 'current', 'today', '検索', '最新', 'ニュース'];
         const lowerPrompt = normalizedRequest.prompt.toLowerCase();
         const isSearchTask = searchKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase())) && normalizedRequest.files.length === 0;
 
         if (isSearchTask) {
-          logger.info('Search keywords detected - auto-routing to Gemini CLI layer', {
+          logger.info('Search keywords detected - auto-routing to Antigravity CLI layer', {
             prompt: normalizedRequest.prompt,
             matchedKeywords: searchKeywords.filter(k => lowerPrompt.includes(k.toLowerCase()))
           });

@@ -1031,7 +1031,7 @@ program
     }
   });
 
-// ADVANCED/TROUBLESHOOTING: Direct Gemini CLI command  
+// ADVANCED/TROUBLESHOOTING: Direct Antigravity CLI command  
 program
   .command('gemini')
   .description('⚠️  ADVANCED: Direct Antigravity CLI access (troubleshooting only - use cgmb chat instead)')
@@ -1683,9 +1683,9 @@ program
           }
         }
         
-        // Handle regular web URLs with Gemini CLI
+        // Handle regular web URLs with the Antigravity CLI
         if (webUrls.length > 0) {
-          console.log('🔍 Web URL(s) detected - routing to Gemini CLI for current information...');
+          console.log('🔍 Web URL(s) detected - routing to Antigravity CLI for current information...');
           console.log('💡 Tip: For best results, use CGMB within Claude Code:');
           console.log('   "CGMB search for the latest AI developments"\n');
 
