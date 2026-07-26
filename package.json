@@ -125,6 +125,7 @@
   },
   "files": [
     "dist",
+    ".claude",
     "scripts/postinstall.cjs",
     "scripts/setup.sh",
     "scripts/verify-dependencies.sh",

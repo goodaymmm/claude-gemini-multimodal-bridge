@@ -1,5 +1,6 @@
 import { execFileSync, execSync, spawn } from 'child_process';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
 
 // Task interface for better type safety
@@ -401,7 +402,7 @@ export class ClaudeCodeLayer implements LayerInterface {
         // piped input before giving up, printing
         // "no stdin data received in 3s" to stderr and taxing every call.
         stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: process.cwd(),
+        cwd: this.packageRoot,
         env: this.buildChildEnv(),
         windowsHide: true,
         ...target.spawnOptions,
@@ -452,6 +453,27 @@ export class ClaudeCodeLayer implements LayerInterface {
         reject(error);
       });
     });
+  }
+
+  /**
+   * Directory the spawned Claude Code process runs in.
+   *
+   * Claude Code loads CLAUDE.md, .claude/settings.json and any skills from its
+   * working directory, so cwd decides what governs CGMB's internal reasoning
+   * calls. It used to be process.cwd() -- whatever directory the MCP server
+   * happened to be launched from, i.e. the end user's project. That made the
+   * layer's behaviour depend on an unrelated repository's instructions and
+   * permissions, and meant CGMB's own .claude/ configuration was never read.
+   * Verified empirically: a CLAUDE.md in the cwd is picked up, one outside it
+   * is not.
+   *
+   * Pinned to the package root so the layer behaves identically wherever CGMB
+   * is invoked from. Callers pass absolute paths, so nothing depends on the
+   * user's cwd.
+   */
+  private get packageRoot(): string {
+    // dist/layers/ClaudeCodeLayer.js -> package root
+    return join(dirname(fileURLToPath(import.meta.url)), '..', '..');
   }
 
   /**

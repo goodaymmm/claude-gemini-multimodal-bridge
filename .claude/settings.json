@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "model": "claude-sonnet-5",
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Write(./.env)",
+      "Write(./.env.*)"
+    ],
+    "allow": [
+      "Read(./src/**)",
+      "Read(./dist/**)",
+      "Read(./package.json)",
+      "Read(./README.md)"
+    ]
+  }
+}
