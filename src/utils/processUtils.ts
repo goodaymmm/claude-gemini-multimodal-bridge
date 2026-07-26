@@ -158,3 +158,41 @@ export function buildSpawnTarget(command: string, args: string[]): SpawnTarget {
     spawnOptions: { windowsVerbatimArguments: true },
   };
 }
+
+/**
+ * Run a trusted external command and return its stdout, or undefined.
+ *
+ * The single entry point every probe should use. Sixteen review rounds found
+ * the same defect in eight different places -- a command name interpolated
+ * into a shell string, resolved by the shell against PATH or the current
+ * directory, bypassing whatever trust check the previous fix had added. Fixing
+ * them one at a time did not converge; routing them all through here does.
+ *
+ * Returns undefined when the command cannot be resolved to a trusted path or
+ * exits non-zero, so callers cannot mistake "did not run" for "ran and said
+ * nothing".
+ */
+export function probeCommand(
+  command: string,
+  args: string[],
+  options: { timeoutMs?: number } = {}
+): string | undefined {
+  try {
+    const target = buildSpawnTarget(command, args);
+    const output = execFileSync(target.file, target.args, {
+      encoding: 'utf8',
+      timeout: options.timeoutMs ?? 5000,
+      stdio: 'pipe',
+      windowsHide: true,
+      ...target.spawnOptions,
+    });
+    return typeof output === 'string' ? output : String(output);
+  } catch {
+    return undefined;
+  }
+}
+
+/** True when a command resolves to a trusted executable that runs successfully. */
+export function commandAvailable(command: string, args: string[] = ['--version']): boolean {
+  return probeCommand(command, args) !== undefined;
+}

@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
+import { probeCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
 import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
 import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
@@ -603,7 +604,10 @@ program
         if (skipClaudeProbe) {
           throw new Error('Claude version probe skipped by request');
         }
-        claudeVersion = execSync('claude --version', { encoding: 'utf8' }).trim();
+        claudeVersion = (probeCommand('claude', ['--version']) ?? '').trim();
+        if (claudeVersion === '') {
+          throw new Error('claude --version produced no output');
+        }
         console.log(`Claude Code CLI version: ${claudeVersion}`);
       } catch (error) {
         console.log('⚠️  Could not detect Claude Code CLI version');
@@ -612,9 +616,14 @@ program
       // Check if claude mcp command is available (v1.0.35+)
       let hasNewMCPCommand = false;
       
-      if (process.env.CGMB_NO_CLAUDE_EXEC !== 'true') {
+      // Every Claude invocation below honours skipClaudeProbe, not just the
+       // version check. Guarding only the first one meant setup-only mode still
+       // ran `claude mcp --help` -- through a shell, which re-resolved the name.
+      if (!skipClaudeProbe) {
         try {
-          execSync('claude mcp --help', { stdio: 'ignore' });
+          if (probeCommand('claude', ['mcp', '--help']) === undefined) {
+            throw new Error('claude mcp --help unavailable');
+          }
           hasNewMCPCommand = true;
           console.log('✅ Detected new Claude Code CLI with mcp command support\n');
         } catch {
@@ -623,14 +632,14 @@ program
       }
       
       // If new MCP command is available, use it instead
-      if (hasNewMCPCommand && !options.force && process.env.CGMB_NO_CLAUDE_EXEC !== 'true') {
+      if (hasNewMCPCommand && !options.force && !skipClaudeProbe) {
         try {
           // Check if already configured with new method
-          const mcpListOutput = execSync('claude mcp list', { encoding: 'utf8' });
+          const mcpListOutput = probeCommand('claude', ['mcp', 'list']) ?? '';
           if (mcpListOutput.includes('claude-gemini-multimodal-bridge')) {
             console.log('✅ CGMB is already configured in Claude Code MCP');
             console.log('\nCurrent configuration:');
-            const mcpGetOutput = execSync('claude mcp get claude-gemini-multimodal-bridge', { encoding: 'utf8' });
+            const mcpGetOutput = probeCommand('claude', ['mcp', 'get', 'claude-gemini-multimodal-bridge']) ?? '';
             console.log(mcpGetOutput);
             
             if (!options.force) {
@@ -641,14 +650,19 @@ program
           
           // Add CGMB using new method
           console.log('Adding CGMB to Claude Code using new MCP command...');
-          const addCommand = 'claude mcp add claude-gemini-multimodal-bridge cgmb serve -e NODE_ENV=production';
-          
+          const addArgs = [
+            'mcp', 'add', 'claude-gemini-multimodal-bridge',
+            'cgmb', 'serve', '-e', 'NODE_ENV=production',
+          ];
+
           if (options.dryRun) {
-            console.log(`🧪 Dry Run: Would execute: ${addCommand}`);
+            console.log(`🧪 Dry Run: Would execute: claude ${addArgs.join(' ')}`);
             return;
           }
-          
-          execSync(addCommand, { stdio: 'inherit' });
+
+          if (probeCommand('claude', addArgs, { timeoutMs: 30000 }) === undefined) {
+            throw new Error('claude mcp add did not complete');
+          }
           console.log('\n✅ Successfully added CGMB to Claude Code MCP!');
           console.log('\nNext steps:');
           console.log('1. Restart Claude Code to load the new MCP configuration');

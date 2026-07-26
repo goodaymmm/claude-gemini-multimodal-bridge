@@ -335,9 +335,20 @@ ANTIGRAVITY_MODEL=gemini-3.6-flash-low
 // Detect Node.js environment
 async function detectNodeEnvironment() {
   try {
-    const lookup = process.platform === 'win32' ? 'where' : 'which';
-    const cgmbPath = execSync(`${lookup} cgmb`, { encoding: 'utf8' }).trim().split('\n')[0].trim();
+    // Use the CLI shipped in this package, not whatever `where cgmb` finds.
+    //
+    // On Windows npm's global bin is cgmb.cmd, and the MCP configuration stores
+    // this value as a script argument to node.exe -- producing
+    // `node cgmb.cmd serve`, which fails with a SyntaxError. The check only
+    // asserted the value was non-empty, so postinstall reported "configured"
+    // for a configuration that could never start. __dirname is inside the
+    // installed package, so dist/cli.js is unambiguous and directly runnable.
+    const cgmbPath = path.join(__dirname, '..', 'dist', 'cli.js');
     const nodePath = process.execPath; // Current Node.js path
+
+    if (!fs.existsSync(cgmbPath)) {
+      throw new Error('dist/cli.js is not present; build the package first');
+    }
     
     return {
       cgmbPath,

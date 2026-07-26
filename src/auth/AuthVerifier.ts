@@ -3,7 +3,7 @@ import { execFileSync, execSync } from 'child_process';
 import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
-import { buildSpawnTarget } from '../utils/processUtils.js';
+import { buildSpawnTarget, commandAvailable } from '../utils/processUtils.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';
 import { AuthCache } from './AuthCache.js';
@@ -597,7 +597,11 @@ export class AuthVerifier {
     }
     // Fallback: try running claude --version
     try {
-      execSync('claude --version', { stdio: 'ignore', timeout: 5000 });
+      // Trusted resolution: a shell string here re-resolved `claude` against
+      // PATH and the working directory, outside every check.
+      if (!commandAvailable('claude')) {
+        throw new Error('claude is not available');
+      }
       return true;
     } catch {
       return false;

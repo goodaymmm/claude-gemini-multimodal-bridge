@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
+import { commandAvailable } from './processUtils.js';
 import { logger } from './logger.js';
 
 /**
@@ -536,8 +537,10 @@ If the MCP server doesn't load:
     // Check CGMB command availability
     let cgmbAvailable = false;
     try {
-      const { execSync } = require('child_process');
-      execSync('cgmb --version', { stdio: 'ignore', timeout: 5000 });
+      // Same rule as every other probe: resolve, then run by absolute path.
+      if (!commandAvailable('cgmb')) {
+        throw new Error('cgmb is not available');
+      }
       cgmbAvailable = true;
     } catch {
       cgmbAvailable = false;

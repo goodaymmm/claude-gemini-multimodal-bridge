@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { ClaudeRequest, ClaudeResponse, EnhancementPlan, RequestAnalysis } from '../core/types.js';
+import { resolveTrustedCommand } from '../utils/processUtils.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { RequestAnalyzer } from './RequestAnalyzer.js';
@@ -280,21 +281,15 @@ export class ClaudeProxy {
       }
     }
     
-    // Try system PATH
-    try {
-      const { execSync } = await import('child_process');
-      const output = execSync('which claude 2>/dev/null || where claude 2>nul', { 
-        encoding: 'utf8',
-        stdio: 'pipe'
-      });
-      
-      const paths = output.trim().split('\n').filter(p => p && !p.includes('cgmb'));
-      if (paths.length > 0) {
-        logger.debug('Found Claude in PATH', { path: paths[0] });
-        return paths[0] || null;
-      }
-    } catch {
-      // System PATH lookup failed
+    // System PATH, through the shared trusted resolver.
+    //
+    // This ran `which claude || where claude` in a shell and took the first
+    // line unchecked, so a claude binary inside the working tree was adopted
+    // here regardless of any check applied elsewhere.
+    const resolved = resolveTrustedCommand('claude');
+    if (resolved !== undefined && !resolved.includes('cgmb')) {
+      logger.debug('Found Claude in PATH', { path: resolved });
+      return resolved;
     }
     
     logger.error('Original Claude Code not found');
