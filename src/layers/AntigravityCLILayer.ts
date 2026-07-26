@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { closeSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync } from 'fs';
+import { closeSync, fstatSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, relative as relativePath } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
@@ -699,12 +699,22 @@ export class AntigravityCLILayer implements LayerInterface {
         }
       };
 
-      child.stdout?.on('data', (data) => {
-        stdout += data.toString();
+      // setEncoding before the listeners, so Node's decoder holds partial
+      // multi-byte sequences across chunk boundaries.
+      //
+      // Calling toString() on each Buffer decoded chunks independently: a UTF-8
+      // character split across two data events became U+FFFD on both sides.
+      // Chunk boundaries are arbitrary, so ordinary Japanese answers could come
+      // back quietly corrupted -- and be returned as a success and cached.
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+
+      child.stdout?.on('data', (chunk: string) => {
+        stdout += chunk;
       });
 
-      child.stderr?.on('data', (data) => {
-        stderr += data.toString();
+      child.stderr?.on('data', (chunk: string) => {
+        stderr += chunk;
       });
 
       child.on('close', (code) => {
@@ -977,6 +987,19 @@ export class AntigravityCLILayer implements LayerInterface {
       // the same descriptor closes the fstat/read race, and re-deriving the
       // real path *from the open handle* closes the resolve/open race, because
       // that path describes the object actually opened.
+      // Identity of the object that passed validation, captured before open.
+      // Comparing dev/ino after opening detects a swap that a second path
+      // resolution cannot: an attacker who points the path at a secret, lets
+      // open() follow it, then restores the original link produces a matching
+      // re-resolved path while the descriptor still holds the secret.
+      let validatedIdentity: { dev: number; ino: number } | undefined;
+      try {
+        const pre = lstatSync(resolvedPath);
+        validatedIdentity = { dev: pre.dev, ino: pre.ino };
+      } catch {
+        validatedIdentity = undefined;
+      }
+
       let fd: number;
       try {
         fd = openSync(resolvedPath, 'r');
@@ -996,27 +1019,16 @@ export class AntigravityCLILayer implements LayerInterface {
           );
         }
 
-        // Re-verify against what was actually opened, not what was resolved
-        // earlier. A swap between resolve and open changes this result.
-        const openedPath = realpathSync(resolvedPath);
-        if (openedPath !== resolvedPath) {
+        // The descriptor must refer to the object that was validated. Identity
+        // comes from fstat on the open handle, so a path swapped and restored
+        // around open() cannot disguise it.
+        if (
+          validatedIdentity === undefined ||
+          stats.dev !== validatedIdentity.dev ||
+          stats.ino !== validatedIdentity.ino
+        ) {
           throw new Error(
             `${basename(file.path)} changed while it was being opened; refusing to send it.`
-          );
-        }
-
-        const openedRelative = relativePath(workspaceRoot, openedPath);
-        if (openedRelative.startsWith('..') || isAbsolute(openedRelative)) {
-          throw new Error(
-            `Refusing to send ${basename(file.path)}: it resolves to ${openedPath}, ` +
-            `outside the workspace root ${workspaceRoot}.`
-          );
-        }
-
-        if (SECRET_FILE_PATTERNS.some(pattern => pattern.test(basename(openedPath)))) {
-          throw new Error(
-            `Refusing to send ${basename(openedPath)} to the Antigravity CLI: it matches a ` +
-            `credential file pattern.`
           );
         }
 

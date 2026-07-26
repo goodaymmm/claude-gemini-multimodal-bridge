@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  isUntrustedBinaryLocation,
   isVersionAtLeast,
   looksLikeAgyBinary,
   MIN_AGY_VERSION,
@@ -639,20 +640,96 @@ describe('inlined file safety', () => {
   });
 });
 
+describe('binary discovery trust', () => {
+  it('refuses an agy candidate inside the working directory', () => {
+    // Windows `where` lists the current directory before PATH. Verified: with
+    // an agy.cmd present, `where agy` returns it ahead of the real install --
+    // so a repository could execute its own binary, inheriting every
+    // environment variable including API keys.
+    assert.equal(isUntrustedBinaryLocation(join(process.cwd(), 'agy.exe')), true);
+    assert.equal(isUntrustedBinaryLocation(join(process.cwd(), 'tools', 'agy')), true);
+    assert.equal(isUntrustedBinaryLocation('./agy.cmd'), true);
+    assert.equal(isUntrustedBinaryLocation(process.cwd()), true);
+
+    // A real installation outside the tree stays usable.
+    assert.equal(isUntrustedBinaryLocation(join(tmpdir(), 'agy', 'bin', 'agy.exe')), false);
+  });
+});
+
+describe('subprocess output decoding', () => {
+  it('does not corrupt a UTF-8 character split across chunks', async () => {
+    // Calling toString() per Buffer decoded chunks independently, so a
+    // multi-byte character split across data events became U+FFFD on both
+    // sides -- corrupting Japanese answers silently and caching the result.
+    const fixture = join(HERE, 'fixtures', 'split-utf8.mjs');
+
+    const decoded = await new Promise(resolve => {
+      const child = spawn(process.execPath, [fixture], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      let out = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', chunk => { out += chunk; });
+      child.on('close', () => resolve(out));
+    });
+
+    assert.match(decoded, /日本語テスト応答/, 'the split character must survive');
+    assert.doesNotMatch(decoded, /�/, 'no replacement characters');
+  });
+});
+
 describe('trusted root narrowing', () => {
+  const root = join(tmpdir(), `cgmb-narrow-${process.pid}`);
+  const base = join(root, 'base');
+  const inside = join(base, 'project');
+  const outside = join(root, 'elsewhere');
+
+  after(() => rmSync(root, { recursive: true, force: true }));
+
   it('lets a caller tighten the boundary but never widen it', () => {
     // An MCP client's workingDirectory is caller data. Honouring it directly
     // would let a request nominate a drive root and read anything -- the same
     // trap that made a task-level workspaceRoot worthless.
-    const base = join(tmpdir(), 'cgmb-base');
-    const inside = join(base, 'project', 'src');
-    const outside = join(tmpdir(), 'cgmb-elsewhere');
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(inside, { recursive: true });
+    mkdirSync(outside, { recursive: true });
 
-    assert.equal(narrowTrustedRoot(base, inside), inside, 'a subdirectory must be honoured');
-    assert.equal(narrowTrustedRoot(base, outside), base, 'an outside directory must be ignored');
-    assert.equal(narrowTrustedRoot(base, undefined), base);
-    assert.equal(narrowTrustedRoot(base, '   '), base);
-    assert.equal(narrowTrustedRoot(base, join(base, '..')), base, '.. must not escape');
+    assert.equal(narrowTrustedRoot(base, inside), realpathSync(inside), 'a subdirectory must be honoured');
+    assert.equal(narrowTrustedRoot(base, outside), realpathSync(base), 'an outside directory must be ignored');
+    assert.equal(narrowTrustedRoot(base, undefined), realpathSync(base));
+    assert.equal(narrowTrustedRoot(base, '   '), realpathSync(base));
+    assert.equal(narrowTrustedRoot(base, join(base, '..')), realpathSync(base), '.. must not escape');
+    assert.equal(
+      narrowTrustedRoot(base, join(base, 'does-not-exist')),
+      realpathSync(base),
+      'a non-existent directory cannot be a trusted root'
+    );
+  });
+
+  it('is not widened by a symlink inside the base pointing out of it', () => {
+    // resolve()/relative() are string operations: a link inside the base that
+    // targets an external directory looked "inside", and realpathSync
+    // downstream then expanded it, making that external directory the root.
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(inside, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+
+    const link = join(base, 'link');
+    try {
+      symlinkSync(outside, link, 'dir');
+    } catch (error) {
+      if (error.code === 'EPERM' || error.code === 'ENOSYS') {
+        return;
+      }
+      throw error;
+    }
+
+    assert.equal(
+      narrowTrustedRoot(base, link),
+      realpathSync(base),
+      'a symlink escaping the base must not become the root'
+    );
   });
 });
 

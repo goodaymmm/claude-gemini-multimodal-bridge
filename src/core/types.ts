@@ -1,3 +1,4 @@
+import { realpathSync } from 'fs';
 import { isAbsolute as pathIsAbsolute, relative as pathRelative, resolve as pathResolve } from 'path';
 import { z } from 'zod';
 
@@ -52,10 +53,30 @@ export function narrowTrustedRoot(base: string, requested?: string): string {
     return base;
   }
 
-  const resolvedBase = pathResolve(base);
-  const resolvedRequested = pathResolve(requested);
+  // Canonicalise both sides before comparing.
+  //
+  // resolve() and relative() are pure string operations: a symlink inside the
+  // base pointing outside it looked "inside", and downstream realpathSync then
+  // expanded it, making that external directory the workspace root. A caller
+  // could therefore widen the boundary with a link it controls.
+  let resolvedBase: string;
+  let resolvedRequested: string;
+  try {
+    resolvedBase = realpathSync(pathResolve(base));
+  } catch {
+    resolvedBase = pathResolve(base);
+  }
+
+  try {
+    resolvedRequested = realpathSync(pathResolve(requested));
+  } catch {
+    // A directory that does not exist cannot be trusted as a root.
+    return resolvedBase;
+  }
+
   const relative = pathRelative(resolvedBase, resolvedRequested);
 
+  // '' means the same directory; otherwise it must descend without escaping.
   const escapes = relative.startsWith('..') || pathIsAbsolute(relative);
   return escapes ? resolvedBase : resolvedRequested;
 }

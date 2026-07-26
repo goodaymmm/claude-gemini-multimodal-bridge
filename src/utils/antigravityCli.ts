@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { join } from 'path';
+import { isAbsolute as isAbsolutePath, join, relative as relativePath, resolve as resolvePath } from 'path';
 import { logger } from './logger.js';
 
 /**
@@ -175,16 +175,31 @@ async function probeVersion(candidate: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * True when a discovered path must not be executed.
+ *
+ * Windows `where` searches the current directory before PATH, and CreateProcess
+ * does the same for a bare command name. Verified: with an `agy.cmd` in the
+ * working directory, `where agy` returns it ahead of the real installation. A
+ * repository containing that file would therefore run its own binary as soon as
+ * CGMB was invoked from that directory -- with the full environment, API keys
+ * included. Anything at or under the working directory is refused.
+ */
+export function isUntrustedBinaryLocation(candidate: string): boolean {
+  const resolved = resolvePath(candidate);
+  const cwd = resolvePath(process.cwd());
+  const rel = relativePath(cwd, resolved);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolutePath(rel));
+}
+
 function candidateInstallPaths(): string[] {
   return process.platform === 'win32'
     ? [
-        'agy',
         join(process.env.LOCALAPPDATA ?? '', 'agy', 'bin', 'agy.exe'),
         join(process.env.USERPROFILE ?? '', 'AppData', 'Local', 'agy', 'bin', 'agy.exe'),
         join(process.env.USERPROFILE ?? '', '.local', 'bin', 'agy.exe'),
       ]
     : [
-        'agy',
         join(process.env.HOME ?? '', '.local', 'bin', 'agy'),
         '/usr/local/bin/agy',
         '/opt/homebrew/bin/agy',
@@ -250,6 +265,14 @@ export async function findAntigravityBinary(
       logger.warn(
         'GEMINI_CLI_PATH does not point at the Antigravity CLI and was ignored. ' +
         'Set ANTIGRAVITY_CLI_PATH to the `agy` executable instead.',
+        { path: candidate.value }
+      );
+      continue;
+    }
+
+    if (isUntrustedBinaryLocation(candidate.value)) {
+      logger.warn(
+        `${candidate.source} points inside the working directory and was ignored.`,
         { path: candidate.value }
       );
       continue;
