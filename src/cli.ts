@@ -313,17 +313,27 @@ program
         process.exit(0);
       }
       
+      // Keep the result: both APIs report failure by returning success=false,
+      // and discarding it made `cgmb auth` print "completed successfully" and
+      // exit 0 for an unauthenticated setup -- which deployment automation
+      // would read as a working install.
+      let authSucceeded: boolean;
+
       if (options.interactive) {
-        await interactiveSetup.runAuthSetupWizard();
+        authSucceeded = (await interactiveSetup.runAuthSetupWizard()).success;
       } else if (options.service) {
         logger.info(`Setting up authentication for ${options.service}...`);
-        await interactiveSetup.setupServiceAuth(options.service as any);
+        authSucceeded = (await interactiveSetup.setupServiceAuth(options.service as any)).success;
       } else {
         logger.info('Running full authentication setup...');
-        await interactiveSetup.runAuthSetupWizard();
+        authSucceeded = (await interactiveSetup.runAuthSetupWizard()).success;
       }
-      
-      // Explicit exit after authentication completion
+
+      if (!authSucceeded) {
+        logger.error('Authentication setup did not complete. See the errors above.');
+        process.exit(1);
+      }
+
       logger.info('Authentication setup completed successfully');
       process.exit(0);
       
@@ -381,8 +391,10 @@ program
       
       console.log('');
       
-      // Exit immediately after displaying results (matching image/audio generation pattern)
-      process.exit(0);
+      // The exit code must agree with what was just printed: reporting
+      // NEEDS ATTENTION and exiting 0 let automation treat an unauthenticated
+      // system as ready.
+      process.exit(result.overall ? 0 : 1);
       
     } catch (error) {
       logger.error('Failed to check authentication status', error as Error);

@@ -544,6 +544,30 @@ describe('inlined file safety', () => {
       'a shifted PDF signature must still be caught'
     );
 
+    // Shifted well past any fixed window: a magic-offset search cannot catch
+    // this, so the UTF-16 plausibility check has to.
+    const farShifted = join(dir, 'far-shifted.txt');
+    writeFileSync(farShifted, Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('AAAAAAAAAAAAAAAA', 'ascii'),
+      Buffer.from('%PDF-1.4 stream endstream obj endobj xref trailer', 'ascii'),
+    ]));
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'x', files: [{ path: farShifted, type: 'text' }] }, dir),
+      /not text/,
+      'ASCII data behind a UTF-16 BOM must be refused however far the signature is shifted'
+    );
+
+    // Genuine UTF-16 text must still be accepted.
+    const realUtf16 = join(dir, 'real-utf16.txt');
+    writeFileSync(realUtf16, Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('GENUINE UTF16 DOCUMENT TEXT', 'utf16le'),
+    ]));
+    const utf16Built = layer.extractPrompt(
+      { prompt: 'x', files: [{ path: realUtf16, type: 'text' }] }, dir);
+    assert.match(utf16Built, /GENUINE UTF16 DOCUMENT TEXT/);
+
     // Prose that merely mentions the signature further in must still pass.
     const prose = join(dir, 'about-pdf.md');
     writeFileSync(prose, 'This document explains how a PDF header such as %PDF-1.4 works.\n');

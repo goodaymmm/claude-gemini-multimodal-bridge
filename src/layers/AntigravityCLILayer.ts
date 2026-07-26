@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, Stats, statSync } from 'fs';
+import { closeSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, relative as relativePath } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
@@ -150,6 +150,8 @@ function decodeAsText(buffer: Buffer): string | undefined {
     // behind a UTF-16 BOM decodes to control characters and unpaired
     // surrogates rather than to NUL bytes.
     let control = 0;
+    let asciiPairs = 0;
+
     for (const char of text) {
       const code = char.codePointAt(0) ?? 0;
       if (code === 0 || (code >= 0xd800 && code <= 0xdfff)) {
@@ -158,8 +160,25 @@ function decodeAsText(buffer: Buffer): string | undefined {
       if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d && code !== 0x0c) {
         control++;
       }
+      // Both halves printable ASCII means two ASCII bytes were read as one
+      // UTF-16 unit -- the signature of ASCII data wearing a UTF-16 BOM.
+      const low = code & 0xff;
+      const high = code >> 8;
+      if (low >= 0x20 && low <= 0x7e && high >= 0x20 && high <= 0x7e) {
+        asciiPairs++;
+      }
     }
+
     if (text.length > 0 && control / text.length >= 0.02) {
+      return undefined;
+    }
+
+    // Chasing signature offsets is a losing game: any fixed magic window can be
+    // evaded by shifting the payload one code unit further. This checks the
+    // property that made the evasion possible instead. Genuine UTF-16LE text
+    // has high bytes that are mostly 0x00 (Latin) or in script ranges, so a
+    // high proportion of ASCII/ASCII pairs means the file is not UTF-16 at all.
+    if (text.length >= 8 && asciiPairs / text.length >= 0.3) {
       return undefined;
     }
 
@@ -948,47 +967,56 @@ export class AntigravityCLILayer implements LayerInterface {
         );
       }
 
-      // Check the size before reading anything.
+      // One file descriptor for validation and reading.
       //
-      // readFileSync pulled the whole file into a Buffer and then decoded it to
-      // a string before any limit was applied, so pointing at a large file in
-      // the workspace stalled the event loop and allocated twice its size --
-      // even when it was about to be rejected as oversized or binary. The outer
-      // timeout cannot interrupt synchronous I/O.
-      let stats: Stats;
+      // Previously the path was resolved with realpathSync, checked, then
+      // re-opened by statSync and again by readFileSync. Between those calls a
+      // concurrent process could swap notes.txt for a symlink to a secret: the
+      // name and root checks had already passed against the old target, and the
+      // new one was what got read and transmitted. A file that grew after the
+      // stat could likewise defeat the size limit. Opening once and using the
+      // same handle for fstat and the bounded read removes the window.
+      let fd: number;
       try {
-        stats = statSync(resolvedPath);
+        fd = openSync(resolvedPath, 'r');
       } catch (error) {
         throw new Error(
           `Could not read ${file.path} for Antigravity CLI processing: ${(error as Error).message}`
         );
       }
 
-      if (!stats.isFile()) {
-        throw new Error(
-          `${basename(file.path)} is not a regular file and will not be sent to the Antigravity CLI.`
-        );
-      }
-
-      if (stats.size > MAX_INLINED_FILE_BYTES) {
-        throw new Error(
-          `${basename(file.path)} is ${stats.size} bytes, over the ` +
-          `${MAX_INLINED_FILE_BYTES}-byte limit for a single inlined file. ` +
-          `Split the document or use the AI Studio layer.`
-        );
-      }
-
-      // Read and validate as separate steps: the catch below is only for I/O
-      // failures, and must not re-wrap the deliberate rejections that follow.
       let bytes: Buffer;
       try {
-        bytes = readFileSync(resolvedPath);
-      } catch (error) {
-        // Fail loudly: a silently skipped file produces an answer about
-        // nothing, which is worse than an error the caller can act on.
-        throw new Error(
-          `Could not read ${file.path} for Antigravity CLI processing: ${(error as Error).message}`
-        );
+        const stats = fstatSync(fd);
+
+        if (!stats.isFile()) {
+          throw new Error(
+            `${basename(file.path)} is not a regular file and will not be sent to the Antigravity CLI.`
+          );
+        }
+
+        if (stats.size > MAX_INLINED_FILE_BYTES) {
+          throw new Error(
+            `${basename(file.path)} is ${stats.size} bytes, over the ` +
+            `${MAX_INLINED_FILE_BYTES}-byte limit for a single inlined file. ` +
+            `Split the document or use the AI Studio layer.`
+          );
+        }
+
+        // Read one byte past the limit so growth between fstat and read is
+        // detected rather than silently truncated.
+        const buffer = Buffer.allocUnsafe(MAX_INLINED_FILE_BYTES + 1);
+        const read = readSync(fd, buffer, 0, buffer.length, 0);
+
+        if (read > MAX_INLINED_FILE_BYTES) {
+          throw new Error(
+            `${basename(file.path)} grew past the ${MAX_INLINED_FILE_BYTES}-byte limit while being read.`
+          );
+        }
+
+        bytes = Buffer.from(buffer.subarray(0, read));
+      } finally {
+        closeSync(fd);
       }
 
       {

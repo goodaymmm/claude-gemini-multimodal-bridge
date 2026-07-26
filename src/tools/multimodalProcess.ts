@@ -1,4 +1,5 @@
 import {
+  ExecutionContext,
   FileReference,
   LayerResult,
   MultimodalFile,
@@ -51,7 +52,12 @@ export class MultimodalProcess {
   /**
    * Main multimodal processing method
    */
-  async processMultimodal(args: MultimodalProcessArgs): Promise<MultimodalProcessResult> {
+  async processMultimodal(
+    args: MultimodalProcessArgs,
+    // Separate argument, not a field on args: MultimodalProcessArgs comes from
+    // MCP input, and a trusted root a caller can set is not a trust boundary.
+    context: ExecutionContext = {}
+  ): Promise<MultimodalProcessResult> {
     return safeExecute(
       async () => {
         const startTime = Date.now();
@@ -72,13 +78,18 @@ export class MultimodalProcess {
         await this.verifyRequiredAuthentications(validatedArgs);
         
         // Execute processing workflow
-        const result = await this.executeWorkflow(validatedArgs, processedFiles);
+        const result = await this.executeWorkflow(validatedArgs, processedFiles, context);
         
         const totalDuration = Date.now() - startTime;
         
+        // Report what actually happened. Hard-coding success:true meant a
+        // failed workflow -- including one that never read the requested files
+        // because the fallback layer refused them -- was returned as a
+        // completed result and the CLI exited 0.
         return {
-          success: true,
-          content: result.summary || 'Processing completed',
+          success: result.success,
+          ...(result.success ? {} : { error: 'Workflow execution failed' }),
+          content: result.summary || (result.success ? 'Processing completed' : 'Processing failed'),
           files_processed: processedFiles.map(f => f.path),
           processing_time: totalDuration,
           workflow_used: validatedArgs.workflow,
@@ -438,7 +449,8 @@ export class MultimodalProcess {
    */
   private async executeWorkflow(
     args: MultimodalProcessArgs,
-    files: MultimodalFile[]
+    files: MultimodalFile[],
+    context: ExecutionContext = {}
   ): Promise<WorkflowResult> {
     return retry(
       async () => {
@@ -458,7 +470,7 @@ export class MultimodalProcess {
         });
 
         // Execute through layer manager with intelligent routing
-        return await this.layerManager.processMultimodal(workflowTask.instructions, workflowTask.files, workflowTask.workflowType, workflowTask.options);
+        return await this.layerManager.processMultimodal(workflowTask.instructions, workflowTask.files, workflowTask.workflowType, workflowTask.options, context);
       },
       {
         maxAttempts: 3,
