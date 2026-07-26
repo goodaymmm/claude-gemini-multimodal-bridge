@@ -448,6 +448,43 @@ describe('inlined file safety', () => {
     }
   });
 
+  it('re-checks the root against the trusted base when files are read', () => {
+    // Narrowing returns only the narrowed path, so a subdirectory that was
+    // inside the base at request time could be swapped for a link to somewhere
+    // external before the files were read -- moving the boundary silently.
+    // The base travels separately and is re-checked at the moment of use.
+    const outsideRoot = join(tmpdir(), `cgmb-test-outside-base-${process.pid}`);
+    rmSync(outsideRoot, { recursive: true, force: true });
+    mkdirSync(outsideRoot, { recursive: true });
+    const target = join(outsideRoot, 'target.txt');
+    writeFileSync(target, 'content outside the trusted base\n');
+
+    try {
+      // Root outside the base: refused before any file is touched.
+      assert.throws(
+        () => layer.extractPrompt(
+          { prompt: 'x', files: [{ path: target, type: 'text' }] },
+          outsideRoot,
+          dir
+        ),
+        /outside the trusted base/,
+        'a root outside the base must be refused'
+      );
+
+      // Root inside the base: still works.
+      const inside = join(dir, 'inside-base.txt');
+      writeFileSync(inside, 'content inside the base\n');
+      const built = layer.extractPrompt(
+        { prompt: 'x', files: [{ path: inside, type: 'text' }] },
+        dir,
+        dir
+      );
+      assert.match(built, /content inside the base/);
+    } finally {
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
   it('fails loudly when the combined budget is exceeded', () => {
     // Previously the loop logged a warning and stopped, so later files never
     // reached the model while the caller still received a successful answer.

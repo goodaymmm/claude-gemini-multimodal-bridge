@@ -398,7 +398,7 @@ export class AntigravityCLILayer implements LayerInterface {
    */
   async execute(
     task: AntigravityTask,
-    options: { workspaceRoot?: string } = {}
+    options: { workspaceRoot?: string; workspaceBase?: string } = {}
   ): Promise<LayerResult> {
     const startTime = Date.now();
 
@@ -416,7 +416,7 @@ export class AntigravityCLILayer implements LayerInterface {
           promptLength: task.prompt?.length ?? 0,
         });
 
-        const prompt = this.extractPrompt(task, options.workspaceRoot);
+        const prompt = this.extractPrompt(task, options.workspaceRoot, options.workspaceBase);
         if (!prompt.trim()) {
           throw new Error('No prompt provided for Antigravity CLI execution');
         }
@@ -879,7 +879,11 @@ export class AntigravityCLILayer implements LayerInterface {
   /**
    * Extract prompt from task (unified method)
    */
-  private extractPrompt(task: AntigravityTask, workspaceRootOverride?: string): string {
+  private extractPrompt(
+    task: AntigravityTask,
+    workspaceRootOverride?: string,
+    workspaceBase?: string
+  ): string {
     const prompt = task.prompt ?? task.request ?? task.input ?? '';
 
     if (!task.files || task.files.length === 0) {
@@ -919,6 +923,27 @@ export class AntigravityCLILayer implements LayerInterface {
       throw new Error(
         `Could not resolve the workspace root ${requestedRoot}: ${(error as Error).message}`
       );
+    }
+
+    // Re-check the root against the outer boundary now, not only when the
+    // request was accepted. A subdirectory that was inside the base at
+    // validation time can be swapped for a link to somewhere external before
+    // the files are read, silently moving the boundary.
+    if (workspaceBase !== undefined) {
+      let base: string;
+      try {
+        base = realpathSync(workspaceBase);
+      } catch {
+        base = workspaceBase;
+      }
+
+      const rootRelative = relativePath(base, workspaceRoot);
+      if (rootRelative.startsWith('..') || isAbsolute(rootRelative)) {
+        throw new Error(
+          `The workspace root ${workspaceRoot} is outside the trusted base ${base}; ` +
+          `refusing to read any files.`
+        );
+      }
     }
 
     for (const file of task.files) {

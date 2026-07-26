@@ -37,6 +37,17 @@ export interface ExecutionContext {
    * validated. Absent means the process working directory.
    */
   trustedWorkspaceRoot?: string;
+
+  /**
+   * Outer boundary the root itself must stay inside.
+   *
+   * Kept separately because narrowing returns only the narrowed path, and a
+   * subdirectory validated at request time can be replaced with a symlink or
+   * junction to somewhere external before the files are read -- which would
+   * make that external directory the effective root. Re-checking the root
+   * against this base at the moment of use closes that window.
+   */
+  trustedWorkspaceBase?: string;
 }
 
 /**

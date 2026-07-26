@@ -230,9 +230,14 @@ export class LayerManager {
           files: files || [],
           useSearch: true // Enable search by default for current information
         },
-        ...(context.trustedWorkspaceRoot === undefined
-          ? []
-          : [{ workspaceRoot: context.trustedWorkspaceRoot }])
+        {
+          ...(context.trustedWorkspaceRoot === undefined
+            ? {}
+            : { workspaceRoot: context.trustedWorkspaceRoot }),
+          ...(context.trustedWorkspaceBase === undefined
+            ? {}
+            : { workspaceBase: context.trustedWorkspaceBase }),
+        }
       );
 
       logger.info('Fast processing completed', {
@@ -407,12 +412,14 @@ export class LayerManager {
         const antigravityLayer = await this.getAntigravityLayerAsync();
         // The trusted root travels beside the task, never inside it: workflow
         // steps spread caller-supplied input into the task object.
-        return await antigravityLayer.execute(
-          task,
+        return await antigravityLayer.execute(task, {
           ...(context.trustedWorkspaceRoot === undefined
-            ? []
-            : [{ workspaceRoot: context.trustedWorkspaceRoot }])
-        );
+            ? {}
+            : { workspaceRoot: context.trustedWorkspaceRoot }),
+          ...(context.trustedWorkspaceBase === undefined
+            ? {}
+            : { workspaceBase: context.trustedWorkspaceBase }),
+        });
         
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();

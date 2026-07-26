@@ -846,6 +846,10 @@ export class CGMBServer {
           // boundary. narrowTrustedRoot ignores anything outside the server's
           // own working directory rather than honouring it as a wider root.
           {
+            // The base is the server's own directory and never moves; the root
+            // may only narrow within it, and is re-checked against the base
+            // when files are actually read.
+            trustedWorkspaceBase: process.cwd(),
             trustedWorkspaceRoot: narrowTrustedRoot(
               process.cwd(),
               normalizedRequest.workingDirectory

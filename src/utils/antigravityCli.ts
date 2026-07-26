@@ -299,7 +299,16 @@ export async function findAntigravityBinary(
 
   // 3. Platform path lookup (async: see runCommand)
   try {
-    const lookup = await runCommand(isWindows ? 'where' : 'which', ['agy'], 5000);
+    // Absolute path for the lookup helper itself.
+    //
+    // A planted where.exe in the working directory did NOT take precedence in
+    // testing -- Node resolves a bare name against PATH, not cwd, when
+    // shell:false -- but naming the system copy removes any dependence on that
+    // behaviour holding across Node versions and platforms.
+    const lookupCommand = isWindows
+      ? join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'where.exe')
+      : 'which';
+    const lookup = await runCommand(lookupCommand, ['agy'], 5000);
     const firstPath = lookup.code === 0 ? lookup.stdout.split('\n')[0]?.trim() : undefined;
     if (firstPath) {
       const version = await probeVersion(firstPath);
@@ -314,6 +323,16 @@ export async function findAntigravityBinary(
 
   // 4. Known installer targets
   for (const candidate of candidateInstallPaths()) {
+    // These are absolute paths built from LOCALAPPDATA/HOME, so they are
+    // normally nowhere near the working tree -- but the check costs nothing and
+    // covers a machine whose cwd happens to sit under one of those roots.
+    if (isUntrustedBinaryLocation(candidate)) {
+      logger.warn('Ignoring an install-target candidate inside the working directory', {
+        path: candidate,
+      });
+      continue;
+    }
+
     const version = await probeVersion(candidate);
     if (version) {
       logger.debug('Found Antigravity CLI at', { path: candidate, version });

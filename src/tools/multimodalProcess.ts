@@ -576,7 +576,7 @@ export class MultimodalProcess {
    * Extract layers used from workflow result
    */
   private extractLayersFromWorkflowResult(result: WorkflowResult): ('claude' | 'antigravity' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
-    const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
+    const validLayers = ['claude', 'antigravity', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
     const layers = new Set<typeof validLayers[number]>();
     
     Object.values(result.results).forEach(layerResult => {
@@ -601,7 +601,7 @@ export class MultimodalProcess {
    * Extract layers used from result
    */
   private extractLayersUsed(result: LayerResult): ('claude' | 'antigravity' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
-    const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
+    const validLayers = ['claude', 'antigravity', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
     const layers = new Set<typeof validLayers[number]>();
     
     if (result.metadata?.layer && validLayers.includes(result.metadata.layer as any)) {

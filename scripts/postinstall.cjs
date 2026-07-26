@@ -437,6 +437,17 @@ async function main() {
     
     // Show completion summary
     showCompletionSummary(results);
+
+    // The search layer cannot work without agy, so a missing or outdated
+    // install is a setup failure -- the same verdict setup.sh and `cgmb setup`
+    // already give it. Printing "Ready to use" and exiting 0 let npm and any
+    // automation record a broken install as successful.
+    if (!results['Antigravity CLI']) {
+      log('', 'info');
+      log('Setup incomplete: the Antigravity CLI is missing or older than 1.1.7.', 'error');
+      log('The web-search layer will not work until it is installed and signed in.', 'info');
+      process.exitCode = 1;
+    }
     
   } catch (error) {
     log(`❌ Setup failed with error: ${error.message}`, 'error');
