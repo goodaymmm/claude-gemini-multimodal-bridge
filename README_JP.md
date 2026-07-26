@@ -4,7 +4,7 @@
 
 ### *AIの力を、ひとつに。*
 
-**Claude Code、Gemini CLI、Google AI Studioをシームレスに統合するMCPブリッジ**
+**Claude Code、Antigravity CLI、Google AI Studioをシームレスに統合するMCPブリッジ**
 
 [🇺🇸 English](README.md) • [📦 NPM](https://www.npmjs.com/package/claude-gemini-multimodal-bridge) • [🐛 Issues](https://github.com/goodaymmm/claude-gemini-multimodal-bridge/issues)
 
@@ -36,7 +36,7 @@
 
 ### 🔄 マルチモデルオーケストレーション
 
-Claude の**推論力**、Gemini CLI の**検索力**、AI Studio の**生成力**を最適に統合。2026年のAIトレンド「専門AIの協調」を先取り
+Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生成力**を最適に統合。2026年のAIトレンド「専門AIの協調」を先取り
 
 </td>
 <td width="33%" align="center">
@@ -64,10 +64,10 @@ Anthropic Model Context Protocol準拠。95%の自己修復率でエンタープ
 |------|------|
 | 🪟 **Windows完全対応** | CLI/MCP両方でネイティブサポート |
 | 📝 **OCR処理強化** | スキャンPDFの自動テキスト抽出 |
-| 🚀 **最新Geminiモデル** | `gemini-2.5-flash`, `gemini-3-flash` 対応 |
+| 🚀 **モデル** | AI Studio: `gemini-2.5-flash` / 検索: `gemini-3.6-flash-low` (agy) |
 | 🔐 **OAuth認証** | Claude Code互換のファイルベース認証 |
 | 🌐 **自動翻訳** | 画像生成時の日本語→英語翻訳 |
-| 📊 **スマートルーティング** | PDF URLはAI Studioへ、WebページはGemini CLIへ |
+| 📊 **スマートルーティング** | PDF URLはAI Studioへ、WebページはAntigravity CLIへ |
 | ⚡ **パフォーマンス最適化** | タイムアウト短縮、遅延読み込み、キャッシング |
 | 🛡️ **エラー回復** | 指数バックオフによる95%の自己修復 |
 
@@ -79,14 +79,14 @@ Anthropic Model Context Protocol準拠。95%の自己修復率でエンタープ
 flowchart TD
     A[Claude Code] --> B[CGMB]
 
-    B --> C[Gemini CLI]
+    B --> C[Antigravity CLI]
     B --> D[Claude Code]
     B --> E[AI Studio]
 ```
 
 | レイヤー | 得意分野 | タイムアウト |
 |:--------:|:---------|:-----------:|
-| 🔍 Gemini CLI | Web検索、リアルタイム情報 | 30秒 |
+| 🔍 Antigravity CLI (`agy`) | Web検索、リアルタイム情報 | 30秒 |
 | 🧠 Claude Code | 複雑な推論、コード分析 | 300秒 |
 | 🎨 AI Studio | 画像生成、音声合成、OCR | 120秒 |
 
@@ -98,7 +98,7 @@ flowchart TD
 
 - **Node.js** ≥ 22.0.0
 - **Claude Code CLI** インストール済み
-- **Gemini CLI** (自動インストール)
+- **Antigravity CLI** (`agy`) 1.1.7 以上 — 別途インストールが必要（下記参照）
 
 ### 📦 インストール
 
@@ -107,7 +107,7 @@ npm install -g claude-gemini-multimodal-bridge
 ```
 
 > 💡 postinstallスクリプトが自動で:
-> - Gemini CLI をインストール
+> - Antigravity CLI の有無を確認し、未導入ならインストール手順を表示
 > - Claude Code MCP統合をセットアップ
 > - `.env` テンプレートを作成
 > - システム要件を検証
@@ -122,11 +122,29 @@ AI_STUDIO_API_KEY=your_api_key_here
 
 🔗 APIキー取得: https://aistudio.google.com/app/apikey
 
-### 🎯 Gemini CLI 認証
+### 🎯 Antigravity CLI のセットアップ
+
+Google は 2026-06-18 に Gemini CLI の個人向け提供を終了しました。検索レイヤーは
+後継の Antigravity CLI (`agy`) で動作します。npm では配布されていないため、
+別途インストールしてください:
 
 ```bash
-gemini
+# Windows (PowerShell)
+irm https://antigravity.google/cli/install.ps1 | iex
+
+# macOS / Linux
+curl -fsSL https://antigravity.google/cli/install.sh | bash
 ```
+
+インストール後、一度だけ起動してサインインします。ブラウザが開き、OAuth トークンは
+OS のキーリングに保存されます。API キーも `agy auth` サブコマンドも存在しません:
+
+```bash
+agy
+```
+
+`agy models` で確認できます。CGMB は **agy 1.1.7 以上**が必要です
+（それ以前のビルドは stdout が端末でない場合に何も出力しません）。
 
 ### 💬 Claude Code で使い始める
 
@@ -164,7 +182,7 @@ CGMBはClaude Codeとシームレスに統合。**「CGMB」キーワード**を
 
 1. Claude Code リクエストに **「CGMB」** を含める
 2. CGMB が最適な AI レイヤーに自動ルーティング:
-   - **🔍 Gemini CLI**: Web検索、最新情報
+   - **🔍 Antigravity CLI**: Web検索、最新情報
    - **🎨 AI Studio**: 画像、音声、ファイル処理
    - **🧠 Claude Code**: 複雑な推論、コード分析
 
@@ -174,7 +192,7 @@ CGMBはClaude Codeとシームレスに統合。**「CGMB」キーワード**を
 
 | 用途 | モデルID | レイヤー |
 |:----:|:---------|:-------:|
-| 🔍 Web検索 | `gemini-3-flash` | Gemini CLI |
+| 🔍 Web検索 | `gemini-3.6-flash-low` | Antigravity CLI |
 | 🎨 画像生成 | `gemini-2.5-flash-image` | AI Studio |
 | 🎵 音声生成 | `gemini-2.5-flash-preview-tts` | AI Studio |
 | 📄 ドキュメント処理 | `gemini-2.5-flash` | AI Studio |
@@ -286,7 +304,7 @@ CGMBはv1.1.0でWindows環境を**完全サポート**:
 | CLI | ✅ すべてのコマンドが動作 |
 | MCP統合 | ✅ MCPツール呼び出しが正常動作 |
 | パス解決 | ✅ `C:\path\to\file` 形式を自動処理 |
-| Gemini CLI | ✅ Windows版との完全な互換性 |
+| Antigravity CLI | ✅ Windows版との完全な互換性 |
 
 ```powershell
 # パスは絶対パスを推奨
@@ -310,7 +328,7 @@ CGMBはLinuxおよびWSL環境で**完全に動作**:
 | CLI | ✅ すべてのコマンドが動作 |
 | MCP統合 | ✅ MCPツール呼び出しが正常動作 |
 | パス解決 | ✅ `/mnt/` WSLパス、Unixパス対応 |
-| Gemini CLI | ✅ Linux版との完全な互換性 |
+| Antigravity CLI | ✅ Linux版との完全な互換性 |
 
 ```bash
 # Unixパス形式で使用
@@ -387,7 +405,7 @@ src/
 
 ### 🔧 関連ツール
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+- [Antigravity CLI](https://antigravity.google/docs/cli)
 - [Google AI Studio](https://aistudio.google.com/)
 - [MCP](https://modelcontextprotocol.io/)
 
