@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { Stats, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, Stats, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, relative as relativePath } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
