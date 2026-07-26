@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import { existsSync, mkdirSync } from 'fs';
+import { resolveTrustedCommand } from './processUtils.js';
 import { join, normalize } from 'path';
 import { homedir } from 'os';
 
@@ -17,18 +18,10 @@ const isWindows = process.platform === 'win32';
  */
 export function findExecutable(command: string): string | undefined {
   try {
-    const cmd = isWindows
-      ? `where ${command} 2>nul`
-      : `which ${command} 2>/dev/null`;
-
-    const output = execSync(cmd, {
-      encoding: 'utf8',
-      timeout: 5000,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    // Return first line (Windows 'where' may return multiple paths)
-    return output.split('\n')[0]?.trim() || undefined;
+    // Shell lookup replaced by the shared resolver: `where`/`which` through a
+    // shell returned the first hit unchecked, including one inside the working
+    // tree.
+    return resolveTrustedCommand(command);
   } catch {
     return undefined;
   }
@@ -41,12 +34,7 @@ export function findExecutable(command: string): string | undefined {
  */
 export function commandExists(command: string): boolean {
   try {
-    const cmd = isWindows
-      ? `where ${command} 2>nul`
-      : `which ${command} 2>/dev/null`;
-
-    execSync(cmd, { stdio: 'ignore', timeout: 5000 });
-    return true;
+    return resolveTrustedCommand(command) !== undefined;
   } catch {
     return false;
   }

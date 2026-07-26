@@ -507,6 +507,13 @@ async function main() {
     // install is a setup failure -- the same verdict setup.sh and `cgmb setup`
     // already give it. Printing "Ready to use" and exiting 0 let npm and any
     // automation record a broken install as successful.
+    if (!results['MCP Integration']) {
+      log('', 'info');
+      log('Setup incomplete: MCP integration was not configured.', 'error');
+      log('Run it manually with: cgmb setup-mcp', 'info');
+      process.exitCode = 1;
+    }
+
     if (!results['Antigravity CLI']) {
       log('', 'info');
       log('Setup incomplete: the Antigravity CLI is missing or older than 1.1.7.', 'error');

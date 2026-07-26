@@ -1,9 +1,16 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { commandAvailable } from './processUtils.js';
 import { logger } from './logger.js';
+
+/** Absolute path to this package's own CLI entry point. */
+function resolveBundledCli(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '..', 'cli.js');
+}
 
 /**
  * MCP Configuration Manager
@@ -143,10 +150,16 @@ export class MCPConfigManager {
       };
     }
     
-    // Default configuration for standard environments
+    // Absolute paths, never a bare name.
+    //
+    // `command: 'cgmb'` was re-resolved when Claude Code launched the server --
+    // against PATH, and the working directory on Windows -- so a repository
+    // could supply the server binary. On Windows the global shim is cgmb.cmd,
+    // which also fails when passed to node as a script. Pointing at this
+    // package's own dist/cli.js removes both problems.
     return {
-      command: 'cgmb',
-      args: ['serve'],
+      command: process.execPath,
+      args: [resolveBundledCli(), 'serve'],
       env: {
         NODE_ENV: 'production'
       }

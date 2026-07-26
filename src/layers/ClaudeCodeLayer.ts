@@ -452,12 +452,20 @@ export class ClaudeCodeLayer implements LayerInterface {
       child.on('close', (code) => {
         clearTimeout(timeoutId);
         
-        if (code === 0) {
+        if (code === 0 && output.trim() !== '') {
           logger.debug('Claude command completed successfully', {
             outputLength: output.length,
             code,
           });
           resolve(output);
+        } else if (code === 0) {
+          // Exit 0 with no output is not an answer. It was resolved as one, so
+          // upper layers reported success and substituted placeholders like
+          // "Reasoning completed" -- and no fallback to another layer occurred.
+          reject(new Error(
+            'Claude Code exited successfully but produced no output' +
+            (errorOutput.trim() ? `: ${errorOutput.trim()}` : '. Check the CLI version and permissions.')
+          ));
         } else {
           const error = `Claude Code exited with code ${code}: ${errorOutput}`;
           logger.error('Claude command failed', { code, error: errorOutput });

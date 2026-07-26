@@ -4,7 +4,7 @@ import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
-import { probeCommand } from './utils/processUtils.js';
+import { commandAvailable, probeCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
 import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
 import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
@@ -855,7 +855,7 @@ program
         },
         {
           name: 'Claude Code CLI',
-          check: () => checkCommand('claude --version')
+          check: () => checkCommand('claude', ['--version'])
         },
         {
           name: 'Antigravity CLI',
@@ -2229,10 +2229,10 @@ program
 
 // Helper functions
 async function checkDependency(command: string, name: string): Promise<void> {
-  try {
-    execSync(`which ${command}`, { stdio: 'ignore' });
+  // `which ${command}` through a shell resolved the name outside every check.
+  if (commandAvailable(command)) {
     logger.info(`✓ ${name} is installed`);
-  } catch (error) {
+  } else {
     logger.warn(`⚠ ${name} not found in PATH`);
     logger.info(`Please install ${name} and ensure it's in your PATH`);
   }
@@ -2269,13 +2269,19 @@ async function checkAntigravityDependency(): Promise<boolean> {
   return true;
 }
 
-async function checkCommand(command: string): Promise<boolean> {
-  try {
-    execSync(command, { stdio: 'ignore' });
-    return true;
-  } catch (error) {
-    throw new Error(`Command failed: ${command}`);
+/**
+ * Probe a command by name and argv -- never a shell string.
+ *
+ * This took a whole command line and handed it to execSync, so `cgmb verify`
+ * resolved `claude` through a shell: the working directory on Windows, a
+ * polluted PATH anywhere. Running the recommended diagnostic was enough to
+ * execute a repository-local binary with the AI Studio key in its environment.
+ */
+async function checkCommand(command: string, args: string[] = ['--version']): Promise<boolean> {
+  if (!commandAvailable(command, args)) {
+    throw new Error(`Command failed: ${command} ${args.join(' ')}`);
   }
+  return true;
 }
 
 // Handle unknown options with helpful error messages
