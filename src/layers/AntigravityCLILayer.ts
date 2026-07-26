@@ -117,12 +117,23 @@ function decodeAsText(buffer: Buffer): string | undefined {
     return undefined;
   }
 
-  // Magic bytes are checked on the body, after any BOM is stripped. Checking
-  // the original buffer let `FF FE` followed by PDF or ZIP bytes slip past --
-  // the BOM shifted every signature out of position.
+  // Container signatures are searched in a short leading window, not just at
+  // offset 0.
+  //
+  // Matching only offset 0 of the body was still evadable: `FF FE 41 00` in
+  // front of `%PDF-1.4` decodes as valid UTF-16 with no control characters or
+  // surrogates, and pushes the signature to offset 2 where nothing looked. The
+  // window is deliberately tiny -- prose that happens to contain "%PDF" later
+  // in the file is unaffected.
+  const MAGIC_SEARCH_WINDOW = 8;
   for (const magic of BINARY_MAGIC) {
-    if (body.length >= magic.length && magic.every((byte, i) => body[i] === byte)) {
-      return undefined;
+    for (const region of [buffer, body]) {
+      const limit = Math.min(MAGIC_SEARCH_WINDOW, region.length - magic.length);
+      for (let offset = 0; offset <= limit; offset++) {
+        if (magic.every((byte, i) => region[offset + i] === byte)) {
+          return undefined;
+        }
+      }
     }
   }
 

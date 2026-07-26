@@ -530,6 +530,27 @@ describe('inlined file safety', () => {
     );
   });
 
+  it('refuses a container signature shifted behind a UTF-16 prefix', () => {
+    // Matching magic only at offset 0 was evadable: FF FE 41 00 decodes as a
+    // valid UTF-16 'A' and pushes %PDF to offset 2, where nothing looked.
+    const shifted = join(dir, 'shifted.txt');
+    writeFileSync(shifted, Buffer.concat([
+      Buffer.from([0xff, 0xfe, 0x41, 0x00]),
+      Buffer.from('%PDF-1.4', 'ascii'),
+    ]));
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'x', files: [{ path: shifted, type: 'text' }] }, dir),
+      /not text/,
+      'a shifted PDF signature must still be caught'
+    );
+
+    // Prose that merely mentions the signature further in must still pass.
+    const prose = join(dir, 'about-pdf.md');
+    writeFileSync(prose, 'This document explains how a PDF header such as %PDF-1.4 works.\n');
+    const built = layer.extractPrompt({ prompt: 'x', files: [{ path: prose, type: 'text' }] }, dir);
+    assert.match(built, /explains how a PDF header/);
+  });
+
   it('accepts source files through the public processFiles filter', () => {
     // processFiles used to admit only type==='text' or .txt/.md, while
     // extractPrompt accepted anything decodable. The CLI sets type:'document',

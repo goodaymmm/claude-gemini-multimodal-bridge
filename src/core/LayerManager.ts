@@ -973,7 +973,8 @@ export class LayerManager {
           step,
           workflow,
           error as Error,
-          options
+          options,
+          context
         );
         
         if (fallbackResult) {
@@ -1241,7 +1242,8 @@ export class LayerManager {
     failedStep: WorkflowStep,
     workflow: ExecutionPlan,
     error: Error,
-    options: ExecutionOptions
+    options: ExecutionOptions,
+    context: ExecutionContext = {}
   ): Promise<LayerResult | null> {
     if (!workflow.fallbackStrategies) {
       return null;
@@ -1267,7 +1269,11 @@ export class LayerManager {
         failedStep.input
       );
       
-      return await this.executeStep(strategy.with, fallbackInput, options);
+      // The fallback must run under the same trusted root as the step it
+      // replaces. Defaulting to an empty context here meant the Antigravity
+      // fallback fell back to process.cwd(): wider than intended in some
+      // layouts, and wrong enough to refuse legitimate files in others.
+      return await this.executeStep(strategy.with, fallbackInput, options, context);
     } catch (fallbackError) {
       logger.error(`Fallback strategy failed for step ${failedStep.id}`, fallbackError as Error);
       return null;

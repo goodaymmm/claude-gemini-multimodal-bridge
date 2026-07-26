@@ -311,7 +311,13 @@ main() {
     check_node_version
     check_npm
     install_claude_code
-    check_antigravity_cli || true
+
+    # Record the result rather than discarding it. `|| true` kept the script
+    # running (which is right -- the remaining steps are still useful), but the
+    # summary then declared success and exited 0 with no working search layer.
+    antigravity_ok=0
+    check_antigravity_cli || antigravity_ok=1
+
     install_dependencies
     setup_environment
     create_directories
@@ -320,6 +326,12 @@ main() {
     show_next_steps
     
     echo
+    if [ "$antigravity_ok" -ne 0 ]; then
+        log_error "CGMB setup incomplete: the Antigravity CLI is missing or older than $MIN_AGY_VERSION."
+        log_info "Install or update it, then re-run: npm run setup"
+        exit 1
+    fi
+
     log_success "CGMB setup completed!"
 }
 

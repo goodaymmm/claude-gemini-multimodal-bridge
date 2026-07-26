@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
-import { DEFAULT_ANTIGRAVITY_MODEL } from './core/types.js';
+import { DEFAULT_ANTIGRAVITY_MODEL, FileReference } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { logger } from './utils/logger.js';
 import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
@@ -2040,15 +2040,23 @@ program
       
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => layerManager.executeWithOptimalLayer({
-          prompt: options.prompt,
-          files: fileRefs,
-          options: {
-            workflow: options.workflow,
-            outputFormat: options.output,
-            execution_mode: 'adaptive'
-          }
-        }),
+        () => layerManager.executeWithOptimalLayer(
+          {
+            prompt: options.prompt,
+            files: fileRefs,
+            options: {
+              workflow: options.workflow,
+              outputFormat: options.output,
+              execution_mode: 'adaptive'
+            }
+          },
+          // Same reasoning as `analyze`: files named on the command line are
+          // the operator's instruction. Without this, a file outside cwd was
+          // refused by the Antigravity fallback, and the Claude fallback after
+          // it does not inline file contents -- so the command could answer
+          // without ever reading the file and still exit 0.
+          { trustedWorkspaceRoot: commonParentDirectory(fileRefs.map((f: FileReference) => f.path)) }
+        ),
         'multimodal-process',
         300000 // 5 minutes base, automatically adjusted for environment and file count
       );
