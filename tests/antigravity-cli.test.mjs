@@ -13,7 +13,7 @@ import {
 } from '../dist/utils/antigravityCli.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
-import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
+import { AntigravityCLILayer, isInlinableTextFile } from '../dist/layers/AntigravityCLILayer.js';
 import { buildSpawnTarget } from '../dist/utils/processUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -504,6 +504,47 @@ describe('inlined file safety', () => {
     ]));
     const built = layer.extractPrompt({ prompt: 'x', files: [{ path: utf16, type: 'text' }] }, dir);
     assert.match(built, /UTF16 CONTENT MARKER/, 'UTF-16 must be decoded, not mangled');
+  });
+
+  it('refuses binary hidden behind a UTF-16 BOM, and odd-length UTF-16', () => {
+    // The magic-byte check ran against the original buffer, so a UTF-16 BOM
+    // shifted every signature out of position and let PDF/ZIP bytes through as
+    // mojibake. Odd-length input silently lost its final byte.
+    const bomPdf = join(dir, 'utf16-pdf.txt');
+    writeFileSync(bomPdf, Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]),
+    ]));
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'x', files: [{ path: bomPdf, type: 'text' }] }, dir),
+      /not text/,
+      'a PDF behind a UTF-16 BOM must be refused'
+    );
+
+    const odd = join(dir, 'utf16-odd.txt');
+    writeFileSync(odd, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from([0x41, 0x00, 0x42])]));
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'x', files: [{ path: odd, type: 'text' }] }, dir),
+      /not text/,
+      'odd-length UTF-16 must be refused rather than truncated'
+    );
+  });
+
+  it('accepts source files through the public processFiles filter', () => {
+    // processFiles used to admit only type==='text' or .txt/.md, while
+    // extractPrompt accepted anything decodable. The CLI sets type:'document',
+    // so `cgmb gemini -f module.ts` failed before reaching the real check.
+    for (const name of ['module.ts', 'data.json', 'Dockerfile']) {
+      const p = join(dir, name);
+      writeFileSync(p, 'source content\n');
+      assert.equal(
+        isInlinableTextFile({ path: p, type: 'document' }),
+        true,
+        `${name} must pass the shared admission test regardless of caller type`
+      );
+    }
+
+    assert.equal(isInlinableTextFile({ path: join(dir, 'report.pdf'), type: 'text' }), false);
   });
 
   it('rejects an oversized file without reading it', () => {

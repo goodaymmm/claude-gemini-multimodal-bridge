@@ -83,6 +83,38 @@ function renderLayerData(data: unknown): string {
   return JSON.stringify(data, null, 2);
 }
 
+/**
+ * Deepest directory containing every given path.
+ *
+ * Used to derive a trusted workspace root from paths the operator named on the
+ * command line: naming them *is* the authorisation, so the root is as tight as
+ * those paths allow rather than the process working directory, which may not
+ * contain them at all.
+ */
+function commonParentDirectory(paths: string[]): string {
+  if (paths.length === 0) {
+    return process.cwd();
+  }
+
+  const dirs = paths.map(p => path.dirname(path.resolve(p)));
+  let common = dirs[0] ?? process.cwd();
+
+  for (const dir of dirs.slice(1)) {
+    while (path.relative(common, dir).startsWith('..')) {
+      const parent = path.dirname(common);
+      if (parent === common) {
+        // Different drives or roots: nothing narrower than the filesystem root
+        // contains both, so fall back to the working directory rather than
+        // silently widening to everything.
+        return process.cwd();
+      }
+      common = parent;
+    }
+  }
+
+  return common;
+}
+
 function showGeminiHelp() {
   console.log('🔧 CGMB Gemini - Advanced/Troubleshooting tool only');
   console.log('');
@@ -871,20 +903,24 @@ program
         
         // Test server initialization (lightweight test)
         logger.info('\n🚀 Testing server initialization...');
+        // A failed initialization is a verification failure, not a footnote:
+        // `cgmb serve` would hit the same error moments later, so reporting
+        // "ready to use" and exiting 0 makes verify useless for CI or for
+        // deciding whether an install is good.
+        let server: CGMBServer | undefined;
         try {
-          const server = new CGMBServer();
+          server = new CGMBServer();
           await server.initialize();
           logger.info('✓ Server initialization test passed');
-          
-          // Ensure any resources are cleaned up
+        } catch (initError) {
+          logger.error('✗ Server initialization failed', initError as Error);
+          logger.info('`cgmb serve` will fail with the same error until this is resolved.');
+          process.exit(1);
+        } finally {
+          // Always release a partially initialized server.
           if (server && typeof (server as any).cleanup === 'function') {
             await (server as any).cleanup();
           }
-        } catch (initError) {
-          logger.warn('Server initialization test failed, but basic checks passed', {
-            error: (initError as Error).message
-          });
-          logger.info('✓ Basic verification completed (server test skipped)');
         }
         
         logger.info('\n✨ CGMB is ready to use!');
@@ -1911,16 +1947,24 @@ program
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => layerManager.executeWithOptimalLayer({
-          prompt: analysisPrompt,
-          files: fileReferences,
-          options: {
-            analysisType: options.type,
-            depth: 'deep',
-            multiplePDFs: pdfFiles.length > 1,
-            preferredLayer: userPreferredLayer
-          }
-        }),
+        () => layerManager.executeWithOptimalLayer(
+          {
+            prompt: analysisPrompt,
+            files: fileReferences,
+            options: {
+              analysisType: options.type,
+              depth: 'deep',
+              multiplePDFs: pdfFiles.length > 1,
+              preferredLayer: userPreferredLayer
+            }
+          },
+          // Paths named on the command line are the operator's own
+          // instruction, so their common parent is the trusted root. Without
+          // this, `cgmb analyze <file outside cwd> --layer gemini` -- and the
+          // AI Studio fallback for any such file -- was refused because the
+          // layer defaulted to process.cwd().
+          { trustedWorkspaceRoot: commonParentDirectory(fileReferences.map(f => f.path)) }
+        ),
         'analyze-documents',
         240000 // 4 minutes base, automatically adjusted for environment and file count
       );

@@ -778,10 +778,17 @@ export class LayerManager {
     });
 
     // Execute the workflow
-    return this.executeWorkflow(executionPlan, { prompt, files }, {
-      executionMode: options?.execution_mode || 'adaptive',
-      timeout: options?.timeout || 300000,
-    });
+    return this.executeWorkflow(
+      executionPlan,
+      { prompt, files },
+      {
+        executionMode: options?.execution_mode || 'adaptive',
+        timeout: options?.timeout || 300000,
+      },
+      // The fast path above is only chosen when there are no files, so without
+      // this the context was discarded for exactly the requests that carry them.
+      context
+    );
   }
 
   /**
@@ -860,7 +867,11 @@ export class LayerManager {
   public async executeWorkflow(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
-    options: ExecutionOptions
+    options: ExecutionOptions,
+    // Deliberately a separate argument rather than a field on ExecutionOptions:
+    // that type is part of the public surface, so a caller could set its own
+    // root and defeat the confinement it is meant to enforce.
+    context: ExecutionContext = {}
   ): Promise<WorkflowResult> {
     const startTime = Date.now();
     logger.info('Starting workflow execution', {
@@ -873,13 +884,13 @@ export class LayerManager {
 
       switch (options.executionMode) {
         case 'sequential':
-          results = await this.executeSequential(workflow, inputData, options);
+          results = await this.executeSequential(workflow, inputData, options, context);
           break;
         case 'parallel':
-          results = await this.executeParallel(workflow, inputData, options);
+          results = await this.executeParallel(workflow, inputData, options, context);
           break;
         case 'adaptive':
-          results = await this.executeAdaptive(workflow, inputData, options);
+          results = await this.executeAdaptive(workflow, inputData, options, context);
           break;
         default:
           throw new CGMBError(
@@ -928,7 +939,8 @@ export class LayerManager {
   private async executeSequential(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
-    options: ExecutionOptions
+    options: ExecutionOptions,
+    context: ExecutionContext = {}
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
     const stepOutputs: Record<string, Record<string, unknown>> = {};
@@ -942,7 +954,7 @@ export class LayerManager {
         const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
         
         // Execute step
-        const result = await this.executeStep(step, stepInput, options);
+        const result = await this.executeStep(step, stepInput, options, context);
         results[step.id] = result;
         
         if (result.success && result.data) {
@@ -991,7 +1003,8 @@ export class LayerManager {
   private async executeParallel(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
-    options: ExecutionOptions
+    options: ExecutionOptions,
+    context: ExecutionContext = {}
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
     
@@ -1002,7 +1015,7 @@ export class LayerManager {
       const promises = level.map(async (step) => {
         try {
           const stepInput = this.resolveStepInput(step.input, results, inputData);
-          const result = await this.executeStep(step, stepInput, options);
+          const result = await this.executeStep(step, stepInput, options, context);
           return { stepId: step.id, result };
         } catch (error) {
           logger.error(`Step ${step.id} failed in parallel execution`, error as Error);
@@ -1035,7 +1048,8 @@ export class LayerManager {
   private async executeAdaptive(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
-    options: ExecutionOptions
+    options: ExecutionOptions,
+    context: ExecutionContext = {}
   ): Promise<Record<string, LayerResult>> {
     // Analyze the workload to determine the best execution strategy
     const analysis = await this.analyzeWorkload(workflow, inputData);
@@ -1044,13 +1058,13 @@ export class LayerManager {
 
     if (analysis.requiresComplexReasoning) {
       // Use Claude-heavy sequential approach
-      return this.executeSequential(workflow, inputData, options);
+      return this.executeSequential(workflow, inputData, options, context);
     } else if (analysis.estimatedComplexity === 'low') {
       // Use parallel execution for simple tasks
-      return this.executeParallel(workflow, inputData, options);
+      return this.executeParallel(workflow, inputData, options, context);
     } else {
       // Use hybrid approach
-      return this.executeHybrid(workflow, inputData, options, analysis);
+      return this.executeHybrid(workflow, inputData, options, analysis, context);
     }
   }
 
@@ -1186,7 +1200,8 @@ export class LayerManager {
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
     options: ExecutionOptions,
-    analysis: WorkloadAnalysis
+    analysis: WorkloadAnalysis,
+    context: ExecutionContext = {}
   ): Promise<Record<string, LayerResult>> {
     // Group steps by recommended layer and execute accordingly
     const stepGroups = this.groupStepsByRecommendedLayer(workflow.steps, analysis);
@@ -1198,14 +1213,14 @@ export class LayerManager {
         // Single step - execute directly
         const step = steps[0]!;
         const stepInput = this.resolveStepInput(step.input, results, inputData);
-        results[step.id] = await this.executeStep(step, stepInput, options);
+        results[step.id] = await this.executeStep(step, stepInput, options, context);
       } else {
         // Multiple steps - execute in parallel if possible
         const promises = steps.map(async (step) => {
           const stepInput = this.resolveStepInput(step.input, results, inputData);
           return {
             stepId: step.id,
-            result: await this.executeStep(step, stepInput, options),
+            result: await this.executeStep(step, stepInput, options, context),
           };
         });
 
@@ -1796,7 +1811,8 @@ export class LayerManager {
   private async executeStep(
     step: WorkflowStep,
     input: Record<string, unknown>,
-    options: ExecutionOptions
+    options: ExecutionOptions,
+    context: ExecutionContext = {}
   ): Promise<LayerResult> {
     const startTime = Date.now();
     
@@ -1818,8 +1834,13 @@ export class LayerManager {
       };
 
       // Execute the step with timeout
+      // Route through executeWithLayer so the trusted root reaches the layer.
+      // Calling layer.execute() directly here dropped the context, which meant
+      // the confinement fell back to process.cwd() for every workflow step --
+      // including the Antigravity quality check in conversion workflows and the
+      // fallback used when AI Studio fails.
       const result = await safeExecute(
-        () => layer.execute(executionParams),
+        () => this.executeWithLayer(step.layer, executionParams, context),
         {
           operationName: `execute-step-${step.id}`,
           layer: step.layer,

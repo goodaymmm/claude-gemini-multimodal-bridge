@@ -254,21 +254,21 @@ verify_installation() {
     
     if command_exists claude; then
         log_success "✓ Claude Code CLI"
-        ((checks_passed++))
+        checks_passed=$((checks_passed + 1))
     else
         log_error "✗ Claude Code CLI"
     fi
     
     if check_antigravity_cli >/dev/null 2>&1; then
         log_success "✓ Antigravity CLI (agy) >= $MIN_AGY_VERSION"
-        ((checks_passed++))
+        checks_passed=$((checks_passed + 1))
     else
         log_error "✗ Antigravity CLI (agy) missing or older than $MIN_AGY_VERSION"
     fi
     
     if [ -f .env ]; then
         log_success "✓ Environment configuration"
-        ((checks_passed++))
+        checks_passed=$((checks_passed + 1))
     else
         log_error "✗ Environment configuration"
     fi

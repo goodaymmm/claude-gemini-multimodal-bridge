@@ -76,7 +76,7 @@ const BINARY_MAGIC: ReadonlyArray<readonly number[]> = [
  * read as UTF-8 and answered from mojibake. This is only a cheap first pass --
  * decodeAsText() inspects the actual bytes and is the real gate.
  */
-function isInlinableTextFile(file: FileReference): boolean {
+export function isInlinableTextFile(file: FileReference): boolean {
   // basename() handles both separators, so no path parsing here.
   const name = basename(file.path).toLowerCase();
   const lastDot = name.lastIndexOf('.');
@@ -117,34 +117,64 @@ function decodeAsText(buffer: Buffer): string | undefined {
     return undefined;
   }
 
+  // Magic bytes are checked on the body, after any BOM is stripped. Checking
+  // the original buffer let `FF FE` followed by PDF or ZIP bytes slip past --
+  // the BOM shifted every signature out of position.
   for (const magic of BINARY_MAGIC) {
-    if (buffer.length >= magic.length && magic.every((byte, i) => buffer[i] === byte)) {
+    if (body.length >= magic.length && magic.every((byte, i) => body[i] === byte)) {
       return undefined;
     }
   }
 
-  if (encoding === 'utf8') {
-    // Every byte is checked, not just a prefix: a text header followed by a
-    // binary tail used to pass because only the first 8KB was sampled.
+  if (encoding === 'utf16le') {
+    // An odd byte count cannot be UTF-16: decoding would silently drop the
+    // last byte.
+    if (body.length % 2 !== 0) {
+      return undefined;
+    }
+
+    const text = body.toString('utf16le');
+
+    // Validate the decoded code points, not the raw bytes: arbitrary binary
+    // behind a UTF-16 BOM decodes to control characters and unpaired
+    // surrogates rather than to NUL bytes.
     let control = 0;
-    for (const byte of body) {
-      if (byte === 0) {
+    for (const char of text) {
+      const code = char.codePointAt(0) ?? 0;
+      if (code === 0 || (code >= 0xd800 && code <= 0xdfff)) {
         return undefined;
       }
-      if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x0c) {
+      if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d && code !== 0x0c) {
         control++;
       }
     }
-    if (body.length > 0 && control / body.length >= 0.02) {
+    if (text.length > 0 && control / text.length >= 0.02) {
       return undefined;
     }
+
+    return text;
   }
 
-  const text = body.toString(encoding);
+  // UTF-8: every byte is checked, not just a prefix -- a text header followed
+  // by a binary tail used to pass because only the first 8KB was sampled.
+  let control = 0;
+  for (const byte of body) {
+    if (byte === 0) {
+      return undefined;
+    }
+    if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x0c) {
+      control++;
+    }
+  }
+  if (body.length > 0 && control / body.length >= 0.02) {
+    return undefined;
+  }
+
+  const text = body.toString('utf8');
 
   // A fatal decode check: re-encoding a valid string round-trips. Mojibake
-  // from a mis-guessed encoding does not.
-  if (encoding === 'utf8' && !Buffer.from(text, 'utf8').equals(body)) {
+  // from invalid UTF-8 does not.
+  if (!Buffer.from(text, 'utf8').equals(body)) {
     return undefined;
   }
 
@@ -457,11 +487,21 @@ export class AntigravityCLILayer implements LayerInterface {
     prompt: string,
     workspaceRoot?: string
   ): Promise<MultimodalResult> {
-    // Antigravity CLI has limited file support here - focus on text processing
-    const textFiles = files.filter(f => f.type === 'text' || f.path.endsWith('.txt') || f.path.endsWith('.md'));
+    // One admission test, not two.
+    //
+    // This used to accept only type==='text' or a .txt/.md suffix, while
+    // extractPrompt accepts anything that is not a known binary format and
+    // decodes as text. The CLI sets type:'document' for `-f`, so
+    // `cgmb gemini -f module.ts` failed here with "only supports text files"
+    // even though the layer can read it perfectly well. Reusing the same
+    // predicate keeps the two paths from disagreeing again.
+    const textFiles = files.filter(isInlinableTextFile);
 
     if (textFiles.length === 0) {
-      throw new Error('Antigravity CLI layer only supports text files. Use AI Studio layer for other file types.');
+      throw new Error(
+        'None of the requested files are text. The Antigravity CLI layer cannot read binary ' +
+        'formats; use the AI Studio layer for PDF, Office and image files.'
+      );
     }
 
     logger.debug('Processing text files with Antigravity CLI', {
