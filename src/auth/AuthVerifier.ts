@@ -62,7 +62,7 @@ export class AuthVerifier {
 
         const services = {
           gemini: await this.verifyGeminiAuth(),
-          aistudio: await this.verifyAIStudioAuth(),
+          aistudio: await this.verifyAIStudioAuth(options),
           claude: await this.verifyClaudeCodeAuth(),
         };
 
@@ -185,7 +185,7 @@ export class AuthVerifier {
    * Verify AI Studio authentication with intelligent caching
    * Enhanced to address authentication issues from Error.md with 24-hour cache
    */
-  async verifyAIStudioAuth(): Promise<AuthResult> {
+  async verifyAIStudioAuth(options: { live?: boolean } = {}): Promise<AuthResult> {
     // Check cache first (24-hour TTL for API keys)
     const cachedResult = this.authCache.get('aistudio');
     if (cachedResult) {
@@ -284,6 +284,43 @@ export class AuthVerifier {
             requiresAction: true,
             actionInstructions: 'Verify your API key from https://aistudio.google.com/app/apikey and update AI_STUDIO_API_KEY in your .env file',
           };
+        }
+
+        // A well-formed key is not a working key.
+        //
+        // The format check only asserts "starts with AI, at least 20 chars", so
+        // a revoked, deleted or entirely fabricated key of the right shape was
+        // reported as authenticated. That defeated the point of the live
+        // verification added for the setup wizard and `cgmb auth-status`, which
+        // exist precisely to answer "does this actually work right now?".
+        // The probe is skipped for cached//routine checks to avoid a network
+        // round trip on every call.
+        if (options.live) {
+          const probe = await this.probeAIStudioKey(apiKey);
+
+          if (!probe.ok) {
+            const result: AuthResult = {
+              success: false,
+              status: {
+                isAuthenticated: false,
+                method: 'api_key',
+                userInfo: undefined,
+              },
+              error: probe.transient
+                ? `Could not reach the Gemini API to verify the key: ${probe.error}`
+                : `AI Studio rejected the API key: ${probe.error}`,
+              requiresAction: !probe.transient,
+              actionInstructions: probe.transient
+                ? 'Check network connectivity and retry'
+                : 'Reissue the key at https://aistudio.google.com/app/apikey and update AI_STUDIO_API_KEY',
+            };
+
+            // Do not cache a transient network failure as a credential problem.
+            if (!probe.transient) {
+              this.authCache.set('aistudio', result);
+            }
+            return result;
+          }
         }
 
         // MCP server check removed - using built-in MCP server (src/mcp-servers/ai-studio-mcp-server.ts)
@@ -441,6 +478,42 @@ export class AuthVerifier {
         return this.verifyClaudeCodeAuth();
       default:
         throw new Error(`Unknown service: ${service}`);
+    }
+  }
+
+  /**
+   * Ask the Gemini API whether a key actually works.
+   *
+   * Uses a metadata read rather than a generation call: it is cheap, consumes
+   * no generation quota, and still requires a valid credential. Distinguishes a
+   * rejected key from a network fault so a blip is never reported as "your key
+   * is invalid".
+   */
+  private async probeAIStudioKey(
+    apiKey: string
+  ): Promise<{ ok: boolean; transient?: boolean; error?: string }> {
+    const TIMEOUT_MS = 8000;
+
+    try {
+      const { GoogleGenAI } = await import('@google/genai');
+      const client = new GoogleGenAI({ apiKey });
+
+      const probe = client.models.get({ model: 'gemini-2.5-flash' });
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS).unref()
+      );
+
+      await Promise.race([probe, timeout]);
+      return { ok: true };
+    } catch (error) {
+      const message = (error as Error).message ?? String(error);
+
+      // 401/403 and explicit key errors mean the credential is bad. Anything
+      // else -- DNS, timeouts, 5xx, quota -- says nothing about the key itself.
+      const rejected = /401|403|API[_ ]?key|unauthenticated|permission denied|invalid.*credential/i
+        .test(message);
+
+      return { ok: false, transient: !rejected, error: message };
     }
   }
 

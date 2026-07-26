@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { basename, join } from 'path';
+import { basename, isAbsolute, join, relative as relativePath } from 'path';
 import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
@@ -31,14 +31,38 @@ const INLINABLE_TEXT_EXTENSIONS = new Set([
   'html', 'htm', 'css', 'log', 'rst', 'ini', 'cfg',
 ]);
 
-/** True when a file is a plain-text format this layer may inline. */
+/**
+ * True when a file is a plain-text format this layer may inline.
+ *
+ * Deliberately ignores FileReference.type: it is caller-supplied and arrives
+ * from MCP input, so trusting it let a PDF labelled type:'text' through to be
+ * read as UTF-8 and answered from mojibake. The extension is checked here and
+ * the decoded bytes are checked in looksLikeText() before anything is sent.
+ */
 function isInlinableTextFile(file: FileReference): boolean {
-  if (file.type === 'text') {
+  const ext = file.path.toLowerCase().split('.').pop() ?? '';
+  return INLINABLE_TEXT_EXTENSIONS.has(ext);
+}
+
+/**
+ * True when decoded content really is text.
+ *
+ * An allowed extension is not proof: a .txt can hold anything. NUL bytes and a
+ * scattering of U+FFFD are what a mis-decoded binary looks like, and feeding
+ * that to the model produces a confident answer about noise.
+ */
+function looksLikeText(content: string): boolean {
+  // String.fromCharCode(0) avoids writing a raw NUL or an escape into source.
+  if (content.indexOf(String.fromCharCode(0)) !== -1) {
+    return false;
+  }
+
+  if (content.length === 0) {
     return true;
   }
 
-  const ext = file.path.toLowerCase().split('.').pop() ?? '';
-  return INLINABLE_TEXT_EXTENSIONS.has(ext);
+  const replacements = (content.match(/�/g) ?? []).length;
+  return replacements === 0 || replacements / content.length < 0.001;
 }
 
 /**
@@ -71,6 +95,8 @@ interface AntigravityTask {
   needsGrounding?: boolean;
   files?: FileReference[];
   model?: string;
+  /** Root that inlined files must live under. Defaults to process.cwd(). */
+  workspaceRoot?: string;
   [key: string]: unknown;
 }
 
@@ -692,25 +718,28 @@ export class AntigravityCLILayer implements LayerInterface {
     // Paths cannot work either: the CLI runs in an empty scratch directory
     // with no access to the caller's files, by design.
     const sections: string[] = [];
-    let budget = MAX_TOTAL_INLINED_CHARS;
+    let used = 0;
+
+    // Files must live under this root. Defaults to the process working
+    // directory, which is the project the operator invoked CGMB from; MCP
+    // callers should pass their declared workingDirectory instead.
+    const requestedRoot = typeof task.workspaceRoot === 'string' && task.workspaceRoot.trim()
+      ? task.workspaceRoot
+      : process.cwd();
+
+    let workspaceRoot: string;
+    try {
+      workspaceRoot = realpathSync(requestedRoot);
+    } catch (error) {
+      throw new Error(
+        `Could not resolve the workspace root ${requestedRoot}: ${(error as Error).message}`
+      );
+    }
 
     for (const file of task.files) {
-      // Only ever inline formats that are actually text.
-      //
-      // Reading a PDF or DOCX as UTF-8 yields mojibake, and the CLI answers it
-      // as if it were a document -- a plausible, wrong summary reported as
-      // success. LayerManager hands the original file list to this layer when
-      // AI Studio fails, so binaries genuinely arrive here.
-      if (!isInlinableTextFile(file)) {
-        throw new Error(
-          `The Antigravity CLI layer cannot read ${basename(file.path)} (type "${file.type}"). ` +
-          `Only plain-text formats can be inlined; use the AI Studio layer for PDF, Office and image files.`
-        );
-      }
-
-      // Resolve symlinks before deciding anything: a link innocuously named
-      // notes.txt can point at a credential file, and both the name check and
-      // the operator's expectations would otherwise be based on the link.
+      // Resolve symlinks first: a link innocuously named notes.txt can point at
+      // a credential file, and every check below would otherwise judge the link
+      // rather than what is actually about to be transmitted.
       let resolvedPath: string;
       try {
         resolvedPath = realpathSync(file.path);
@@ -720,6 +749,27 @@ export class AntigravityCLILayer implements LayerInterface {
         );
       }
 
+      // Confine reads to the workspace root.
+      //
+      // The name denylist alone was never sufficient: it cannot enumerate every
+      // credential file, and anything readable outside the workspace --
+      // application_default_credentials.json, source trees, an unrelated
+      // repository -- could be inlined and transmitted on the strength of a
+      // caller-supplied absolute path. A prompt-injected MCP caller is exactly
+      // the threat. Root confinement is the primary control; the denylist stays
+      // as a second line for files inside the workspace.
+      const relative = relativePath(workspaceRoot, resolvedPath);
+      if (relative.startsWith('..') || isAbsolute(relative)) {
+        throw new Error(
+          `Refusing to send ${basename(file.path)} to the Antigravity CLI: it resolves to ` +
+          `${resolvedPath}, outside the workspace root ${workspaceRoot}. ` +
+          `Pass a workspaceRoot that contains the file if this is intended.`
+        );
+      }
+
+      // Credentials are checked before file type so the refusal names the real
+      // reason. A .env would otherwise be rejected merely as "not a text
+      // format", which tells the operator nothing about why it matters.
       for (const candidate of [basename(file.path), basename(resolvedPath)]) {
         if (SECRET_FILE_PATTERNS.some(pattern => pattern.test(candidate))) {
           throw new Error(
@@ -729,39 +779,66 @@ export class AntigravityCLILayer implements LayerInterface {
         }
       }
 
+      // Only ever inline formats that are actually text.
+      //
+      // Reading a PDF or DOCX as UTF-8 yields mojibake, and the CLI answers it
+      // as if it were a document -- a plausible, wrong summary reported as
+      // success. LayerManager hands the original file list to this layer when
+      // AI Studio fails, so binaries genuinely arrive here.
+      if (!isInlinableTextFile(file)) {
+        throw new Error(
+          `The Antigravity CLI layer cannot read ${basename(file.path)}. ` +
+          `Only plain-text formats can be inlined; use the AI Studio layer for PDF, Office and image files.`
+        );
+      }
+
+      // Read and validate as separate steps: the catch below is only for I/O
+      // failures, and must not re-wrap the deliberate rejections that follow.
+      let content: string;
       try {
-        const content = readFileSync(resolvedPath, 'utf8');
-
-        // Budget across all files, not per file: the previous per-file cap let
-        // a handful of documents add up well past what one request can carry.
-        const allowance = Math.min(MAX_INLINED_FILE_CHARS, budget);
-        const truncated = content.length > allowance;
-        const body = truncated ? `${content.slice(0, allowance)}\n[truncated]` : content;
-        budget -= Math.min(content.length, allowance);
-
-        sections.push(`--- FILE: ${basename(file.path)} ---\n${body}`);
-
-        if (truncated) {
-          logger.warn('File truncated before sending to Antigravity CLI', {
-            path: file.path,
-            length: content.length,
-            limit: allowance,
-          });
-        }
-
-        if (budget <= 0) {
-          logger.warn('Inline budget exhausted; remaining files were not sent', {
-            sent: sections.length,
-            total: task.files.length,
-          });
-          break;
-        }
+        content = readFileSync(resolvedPath, 'utf8');
       } catch (error) {
         // Fail loudly: a silently skipped file produces an answer about
         // nothing, which is worse than an error the caller can act on.
         throw new Error(
           `Could not read ${file.path} for Antigravity CLI processing: ${(error as Error).message}`
         );
+      }
+
+      {
+        // An allowed extension is not proof of text: verify the decoded bytes.
+        // Answering mojibake produces a confident summary of noise.
+        if (!looksLikeText(content)) {
+          throw new Error(
+            `${basename(file.path)} does not decode as UTF-8 text and will not be sent to the ` +
+            `Antigravity CLI. Use the AI Studio layer for binary formats.`
+          );
+        }
+
+        if (content.length > MAX_INLINED_FILE_CHARS) {
+          // Do not truncate silently: a summary or comparison built from part
+          // of a document is wrong in a way the caller cannot see.
+          throw new Error(
+            `${basename(file.path)} is ${content.length} characters, over the ` +
+            `${MAX_INLINED_FILE_CHARS}-character limit for a single inlined file. ` +
+            `Split the document or use the AI Studio layer.`
+          );
+        }
+
+        used += content.length;
+
+        if (used > MAX_TOTAL_INLINED_CHARS) {
+          // Likewise for the combined budget. Previously the loop logged a
+          // warning and broke, so files silently never reached the model while
+          // the caller still received a successful-looking answer.
+          throw new Error(
+            `The requested files total more than ${MAX_TOTAL_INLINED_CHARS} characters, ` +
+            `which exceeds what one Antigravity CLI request can carry. ` +
+            `Send fewer files per request.`
+          );
+        }
+
+        sections.push(`--- FILE: ${basename(file.path)} ---\n${content}`);
       }
     }
 
@@ -836,24 +913,30 @@ export class AntigravityCLILayer implements LayerInterface {
         .replace(/^["']|["']$/g, '')
         .trim();
 
-    // Headings like "**Option 1**" or "**1. Natural translation**" label the
-    // choices; they are not the translation. Taking one produced a confident
-    // wrong prompt, so candidates that look like labels are rejected.
+    // Label detection keys on structure, not vocabulary.
+    //
+    // An earlier version rejected any line starting with anime/cinematic/
+    // photorealistic that later contained "style", "prompt" or "translation".
+    // Those are ordinary words in an image prompt: "Anime style illustration of
+    // a cat" was discarded and the Japanese original was sent to the image API
+    // instead -- a worse outcome than the chattiness it was guarding against.
     const isLabel = (line: string): boolean =>
-      /^(here|options?|option\s*\d|translations?|notes?|alternatives?|choices?)\b/i.test(line) ||
-      /^(natural|literal|photorealistic|cinematic|anime)\b.*(translation|prompt|style)\b/i.test(line) ||
+      /^(here are|here is|options?|option\s*\d|alternatives?|choices?|notes?)\b/i.test(line) ||
       line.endsWith(':');
+
+    const lines = raw.split('\n').map(stripMarkers).filter(line => line.length > 0);
+
+    // A single-line reply is the requested shape; take it verbatim. Only a
+    // multi-line reply needs disambiguating.
+    if (lines.length === 1 && lines[0] !== undefined) {
+      return this.capTranslation(lines[0], original);
+    }
 
     const highlighted = [...raw.matchAll(/\*\*"?([^"*\n]{3,300})"?\*\*/g)]
       .map(match => stripMarkers(match[1] ?? ''))
       .filter(line => line.length >= 3 && !isLabel(line));
 
-    const candidates = highlighted.length > 0
-      ? highlighted
-      : raw
-          .split('\n')
-          .map(stripMarkers)
-          .filter(line => line.length > 0 && !isLabel(line));
+    const candidates = highlighted.length > 0 ? highlighted : lines.filter(line => !isLabel(line));
 
     const picked = candidates.find(line => line.length >= 3);
 
@@ -864,18 +947,28 @@ export class AntigravityCLILayer implements LayerInterface {
       return original;
     }
 
-    // Leave headroom under the image API's 480-character prompt limit for the
-    // safety prefixes the AI Studio layer prepends.
+    return this.capTranslation(picked, original);
+  }
+
+  /**
+   * Keep a translation inside the image API's prompt budget.
+   *
+   * The API rejects prompts over 480 characters; 400 leaves headroom for the
+   * safety prefix the AI Studio layer prepends.
+   */
+  private capTranslation(text: string, original: string): string {
     const MAX_TRANSLATION_LENGTH = 400;
-    if (picked.length > MAX_TRANSLATION_LENGTH) {
-      logger.warn('Translation was longer than the image-prompt budget and was truncated', {
-        length: picked.length,
-        limit: MAX_TRANSLATION_LENGTH,
-      });
-      return picked.slice(0, MAX_TRANSLATION_LENGTH).trim();
+
+    if (text.length <= MAX_TRANSLATION_LENGTH) {
+      return text;
     }
 
-    return picked;
+    logger.warn('Translation was longer than the image-prompt budget and was truncated', {
+      length: text.length,
+      limit: MAX_TRANSLATION_LENGTH,
+      original,
+    });
+    return text.slice(0, MAX_TRANSLATION_LENGTH).trim();
   }
 
   async translateToEnglish(text: string, sourceLang: string): Promise<string> {

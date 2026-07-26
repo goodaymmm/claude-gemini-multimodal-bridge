@@ -108,24 +108,33 @@ export class InteractiveSetup {
         // as a successful setup.
         const verification = await this.authVerifier.verifyAllAuthentications({ live: true });
 
+        // The live result is authoritative: rebuild the outcome from it rather
+        // than merging into the per-step lists.
+        //
+        // Merging was wrong twice over. Errors recorded during a step survived
+        // even when the final check passed, so a recovered service still
+        // reported PARTIAL. And the two sides use different names for the same
+        // layer -- steps say "antigravity", verification says "gemini" -- so a
+        // success registered both while a failure removed neither.
+        servicesConfigured.length = 0;
+        const stepDiagnostics = [...errors];
+        errors.length = 0;
+
         for (const [service, result] of Object.entries(verification.services)) {
+          const name = service === 'gemini' ? 'antigravity' : service;
+
           if (result.success) {
-            if (!servicesConfigured.includes(service)) {
-              servicesConfigured.push(service);
-            }
-            continue;
+            servicesConfigured.push(name);
+          } else {
+            errors.push(`${name}: ${result.error ?? 'verification failed'}`);
           }
+        }
 
-          // Drop any step that claimed success but cannot be confirmed live.
-          const index = servicesConfigured.indexOf(service);
-          if (index !== -1) {
-            servicesConfigured.splice(index, 1);
-          }
-
-          const message = `${service}: ${result.error ?? 'verification failed'}`;
-          if (!errors.some(existing => existing.startsWith(`${service}:`))) {
-            errors.push(message);
-          }
+        if (stepDiagnostics.length > 0) {
+          logger.debug('Setup steps reported issues before final verification', {
+            stepDiagnostics,
+            finalOverall: verification.overall,
+          });
         }
         
         // Generate next steps

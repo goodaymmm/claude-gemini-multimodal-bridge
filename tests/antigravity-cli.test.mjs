@@ -246,7 +246,7 @@ describe('credential file guard', () => {
       // Exercised through extractPrompt, the point of disclosure, so the test
       // stays hermetic: execute() would spawn a live agy auth probe.
       assert.throws(
-        () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: p, type: 'text' }] }),
+        () => layer.extractPrompt({ prompt: 'summarise', workspaceRoot: dir, files: [{ path: p, type: 'text' }] }),
         /credential file pattern/,
         `${name} must be refused`
       );
@@ -258,6 +258,7 @@ describe('credential file guard', () => {
     writeFileSync(doc, 'CGMB regression note.\n', { encoding: 'utf8' });
     const built = layer.extractPrompt({
       prompt: 'summarise',
+      workspaceRoot: dir,
       files: [{ path: doc, type: 'text' }],
     });
     assert.match(built, /CGMB regression note/);
@@ -283,6 +284,14 @@ describe('translation sanitiser', () => {
     assert.equal(clean('- A cat on a sofa'), 'A cat on a sofa');
     assert.equal(clean('> A cat on a sofa'), 'A cat on a sofa');
     assert.equal(clean('### A cat on a sofa'), 'A cat on a sofa');
+  });
+
+  it('keeps single-line prompts that mention a style', () => {
+    // A vocabulary-based label heuristic rejected these as headings, so the
+    // Japanese original was sent to the image API instead of the translation.
+    assert.equal(clean('Anime style illustration of a cat'), 'Anime style illustration of a cat');
+    assert.equal(clean('Cinematic shot of a mountain landscape'), 'Cinematic shot of a mountain landscape');
+    assert.equal(clean('Photorealistic portrait of a dog'), 'Photorealistic portrait of a dog');
   });
 
   it('does not mistake a section label for the translation', () => {
@@ -318,9 +327,79 @@ describe('inlined file safety', () => {
     writeFileSync(pdf, Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x00, 0x01]));
 
     assert.throws(
-      () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: pdf, type: 'pdf' }] }),
+      () => layer.extractPrompt({ prompt: 'summarise', workspaceRoot: dir, files: [{ path: pdf, type: 'pdf' }] }),
       /cannot read report\.pdf/,
       'PDF must be refused, not silently mis-read'
+    );
+  });
+
+  it('refuses files outside the workspace root, and allows files inside it', () => {
+    // Root confinement is the primary control: a name denylist cannot enumerate
+    // every credential file, and a caller-supplied absolute path could
+    // otherwise reach anything readable on the machine.
+    const inside = join(dir, 'inside.txt');
+    writeFileSync(inside, 'workspace content\n');
+
+    const outsideDir = join(tmpdir(), `cgmb-test-outside-${process.pid}`);
+    rmSync(outsideDir, { recursive: true, force: true });
+    mkdirSync(outsideDir, { recursive: true });
+    const outside = join(outsideDir, 'elsewhere.txt');
+    writeFileSync(outside, 'content outside the workspace\n');
+
+    try {
+      assert.throws(
+        () => layer.extractPrompt({
+          prompt: 'summarise',
+          workspaceRoot: dir,
+          files: [{ path: outside, type: 'text' }],
+        }),
+        /outside the workspace root/,
+        'a path outside the root must be refused'
+      );
+
+      const built = layer.extractPrompt({
+        prompt: 'summarise',
+        workspaceRoot: dir,
+        files: [{ path: inside, type: 'text' }],
+      });
+      assert.match(built, /workspace content/);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails loudly when the combined budget is exceeded', () => {
+    // Previously the loop logged a warning and stopped, so later files never
+    // reached the model while the caller still received a successful answer.
+    const big = 'a'.repeat(90000);
+    const files = [];
+    for (let i = 0; i < 4; i++) {
+      const p = join(dir, `bulk-${i}.txt`);
+      writeFileSync(p, big);
+      files.push({ path: p, type: 'text' });
+    }
+
+    assert.throws(
+      () => layer.extractPrompt({ prompt: 'compare', workspaceRoot: dir, files }),
+      /exceeds what one Antigravity CLI request can carry/,
+      'exceeding the total budget must fail, not silently drop files'
+    );
+  });
+
+  it('rejects binary content even when the caller claims it is text', () => {
+    // FileReference.type comes from MCP input, so it cannot be trusted; the
+    // decoded bytes are what matter.
+    const disguised = join(dir, 'disguised.txt');
+    writeFileSync(disguised, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0xff, 0xfe]));
+
+    assert.throws(
+      () => layer.extractPrompt({
+        prompt: 'summarise',
+        workspaceRoot: dir,
+        files: [{ path: disguised, type: 'text' }],
+      }),
+      /does not decode as UTF-8 text/,
+      'binary content behind a .txt name must be refused'
     );
   });
 
@@ -341,7 +420,7 @@ describe('inlined file safety', () => {
     }
 
     assert.throws(
-      () => layer.extractPrompt({ prompt: 'summarise', files: [{ path: link, type: 'text' }] }),
+      () => layer.extractPrompt({ prompt: 'summarise', workspaceRoot: dir, files: [{ path: link, type: 'text' }] }),
       /credential file pattern/,
       'a link named notes.txt must not smuggle a credential file through'
     );
