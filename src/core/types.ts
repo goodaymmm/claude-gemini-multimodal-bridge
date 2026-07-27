@@ -17,7 +17,11 @@ export const LayerTypeSchema = z.enum([
 export type LayerType = z.infer<typeof LayerTypeSchema>;
 
 // Target Layer Types for direct routing
-export const TargetLayerSchema = z.enum(['antigravity', 'gemini', 'aistudio', 'adaptive']);
+// `claude` was missing here while LayerTypeSchema had it, so a request naming
+// it failed validation, fell through to the legacy shape with targetLayer
+// undefined, and was routed to whichever layer the analyser preferred --
+// measured: the search layer answered a request that asked for Claude.
+export const TargetLayerSchema = z.enum(['antigravity', 'gemini', 'aistudio', 'claude', 'adaptive']);
 export type TargetLayer = z.infer<typeof TargetLayerSchema>;
 
 /**

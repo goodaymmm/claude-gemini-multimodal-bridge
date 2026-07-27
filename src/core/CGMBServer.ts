@@ -34,6 +34,7 @@ import { Config, ConfigSchema } from './types.js';
 import { isOneOf } from './types.js';
 import { LegacyCGMBRequestSchema, ProcessingOptions } from './types.js';
 import { pickFinalResultText } from '../utils/workflowUtils.js';
+import { LayerResult, LayerType } from './types.js';
 import { AI_MODELS } from './types.js';
 
 // Read version from package.json
@@ -221,8 +222,8 @@ export class CGMBServer {
                 },
                 targetLayer: {
                   type: 'string',
-                  enum: ['antigravity', 'gemini', 'aistudio', 'adaptive'],
-                  description: 'Target layer for direct routing (optional). "gemini" is a deprecated alias for "antigravity".',
+                  enum: ['antigravity', 'gemini', 'aistudio', 'claude', 'adaptive'],
+                  description: 'Target layer for direct routing (optional). "gemini" is a deprecated alias for "antigravity". Omit or use "adaptive" to let CGMB choose.',
                 },
                 preformatted: {
                   type: 'boolean',
@@ -538,6 +539,27 @@ export class CGMBServer {
           'Processing time for large files'
         ]
       },
+      claude: {
+        format: 'Text prompts; the layer builds its own prompt from the request',
+        requirements: [
+          'Text-based prompts for reasoning and synthesis',
+          'No file upload capability - text only, like the search layer',
+          'Claude Code must be installed and signed in',
+        ],
+        capabilities: [
+          'Complex reasoning',
+          'Synthesis across earlier workflow steps',
+          'Workflow orchestration',
+        ],
+        example: {
+          prompt: 'Explain the trade-offs between these two designs',
+          targetLayer: 'claude',
+        },
+        limitations: [
+          'Cannot read files; use the aistudio layer for documents and media',
+          'Each call starts a fresh headless session',
+        ],
+      },
       adaptive: {
         format: 'Automatic selection based on task requirements',
         requirements: [
@@ -592,7 +614,28 @@ export class CGMBServer {
           const result = await this.processPreformattedRequest(request);
           return this.formatResponse(result, true);
         }
-        
+
+        // An explicit target is an instruction, not a hint.
+        //
+        // targetLayer was only consulted on the preformatted path above, so an
+        // ordinary request naming a layer went through the analyser instead and
+        // could be answered by a different one entirely -- measured: a request
+        // for Claude was served by the search layer. 'adaptive' (and omitting
+        // the field) still means "you choose".
+        const requested = normalizeLayerName(request.targetLayer ?? 'adaptive');
+        if (requested !== 'adaptive') {
+          logger.info('Routing directly to the requested layer', { layer: requested });
+
+          const direct = await this.layerManager.executeWithLayer(requested as LayerType, {
+            type: 'text_processing',
+            prompt: request.prompt,
+            files: request.files ?? [],
+            options: request.options ?? {},
+          });
+
+          return this.toCallToolResult(direct);
+        }
+
         // Fallback to original processing for backward compatibility
         logger.info('Using standard processing (not preformatted)');
         
@@ -903,6 +946,23 @@ export class CGMBServer {
     };
   }
 
+  /** Present a single layer result in the shape callers of this path expect. */
+  private toWorkflowResult(result: LayerResult, layer: LayerType): WorkflowResult {
+    return {
+      success: result.success,
+      results: [result],
+      metadata: {
+        workflow: 'analysis',
+        execution_mode: 'direct',
+        total_duration: result.metadata?.duration ?? 0,
+        steps_completed: result.success ? 1 : 0,
+        steps_failed: result.success ? 0 : 1,
+        layers_used: [layer],
+        optimization: 'direct-target',
+      },
+    };
+  }
+
   /**
    * Process preformatted request from Claude Code
    */
@@ -938,12 +998,33 @@ export class CGMBServer {
     }
     
     if (targetLayer === 'aistudio' && request.formattedData?.aistudioFormat) {
-      // Direct execution on AI Studio layer
-      logger.info('Executing preformatted request on AI Studio layer');
-      // Implementation for AI Studio direct execution
-      // This would use the preformatted API data
+      // Preformatted AI Studio payloads are not implemented. Saying so beats
+      // dropping through to adaptive routing, which answers from a different
+      // layer and gives the caller no reason to suspect their formatting was
+      // ignored.
+      logger.warn('Preformatted AI Studio payloads are not supported; routing this request normally', {
+        hint: 'Send the request without preformatted/formattedData to use the AI Studio layer.',
+      });
     }
-    
+
+    // Any other explicit target still goes to that layer -- just without the
+    // preformatted shortcut.
+    if (targetLayer !== 'adaptive') {
+      logger.info('No preformatted payload for the requested layer; executing it directly', {
+        layer: targetLayer,
+      });
+
+      return this.toWorkflowResult(
+        await this.layerManager.executeWithLayer(targetLayer as LayerType, {
+          type: 'text_processing',
+          prompt: request.prompt,
+          files: request.files ?? [],
+          options: request.options ?? {},
+        }),
+        targetLayer as LayerType
+      );
+    }
+
     // Fallback to adaptive routing
     return this.layerManager.processMultimodal(
       request.prompt,
@@ -1246,7 +1327,7 @@ Solutions:
    * arrived at the client with no isError and was recorded as a success. The
    * round-15 fix only covered the unified tool's formatResponse path.
    */
-  private toCallToolResult(result: { success?: boolean; error?: string }): CallToolResult {
+  private toCallToolResult(result: { success?: boolean | undefined; error?: string | undefined }): CallToolResult {
     const failed = result?.success === false;
 
     return {

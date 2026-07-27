@@ -244,6 +244,55 @@ describe('credential files are refused through the MCP path too', () => {
   });
 });
 
+describe('an explicit targetLayer is honoured', () => {
+  // targetLayer was only read on the preformatted path, and claude was not even
+  // in TargetLayerSchema -- so a request naming it failed validation, fell
+  // through to the legacy shape with the field dropped, and was routed by the
+  // analyser. Measured before the fix: a request for Claude was answered by the
+  // search layer, with no sign anything had been overridden.
+
+  it('sends the request to the layer that was asked for', async () => {
+    for (const layer of ['claude', 'antigravity', 'aistudio']) {
+      const server = makeServer();
+
+      await server.handleCGMBUnified({ prompt: 'CGMB do the thing', targetLayer: layer });
+
+      const used = server.stubCalls.map(c => c.layer);
+      assert.deepEqual(used, [layer], `targetLayer ${layer} must reach ${layer} and nothing else`);
+    }
+  });
+
+  it('accepts the deprecated gemini spelling as the search layer', async () => {
+    const server = makeServer();
+
+    await server.handleCGMBUnified({ prompt: 'CGMB search', targetLayer: 'gemini' });
+
+    assert.deepEqual(server.stubCalls.map(c => c.layer), ['antigravity']);
+  });
+
+  it('leaves the choice to the router when adaptive or absent', async () => {
+    // Not asserting which layer wins -- only that the analyser is what decides,
+    // rather than being bypassed.
+    for (const args of [
+      { prompt: 'CGMB do the thing', targetLayer: 'adaptive' },
+      { prompt: 'CGMB do the thing' },
+    ]) {
+      const server = makeServer();
+      await server.handleCGMBUnified(args);
+      assert.ok(server.stubCalls.length > 0, `something must run for ${JSON.stringify(args)}`);
+    }
+  });
+
+  it('rejects a layer name that is not a target', () => {
+    for (const bad of ['workflow', 'tool', 'orchestrator', 'nonsense']) {
+      assert.equal(
+        TargetLayerSchema.safeParse(bad).success, false,
+        `${bad} must not be selectable as a target`
+      );
+    }
+  });
+});
+
 describe('picking the answer out of a workflow result', () => {
   // Two byte-for-byte copies of the same four-shape probe lived in
   // formatResponse, one per container shape, and a third in ClaudeProxy. All
@@ -396,15 +445,19 @@ describe('layer requirements', () => {
     const payload = payloadOf(await server.handleGetLayerRequirements());
 
     // The tool exists so a caller can route correctly without reading the
-    // source, so it must cover everything TargetLayerSchema accepts. Claude is
-    // deliberately absent: it is not a routable target, only a fallback.
-    for (const layer of ['gemini', 'aistudio', 'adaptive']) {
+    // source, so it must cover everything TargetLayerSchema accepts.
+    //
+    // claude was previously absent from both, which read as a deliberate
+    // exclusion but was an omission: LayerTypeSchema had it, workflows could
+    // name it, and a request that asked for it was quietly answered by the
+    // search layer. It is a routable target now, so it needs an entry.
+    for (const layer of ['gemini', 'aistudio', 'claude', 'adaptive']) {
       assert.ok(payload[layer], `requirements must cover ${layer}`);
+      assert.equal(
+        TargetLayerSchema.safeParse(layer).success, true,
+        `${layer} is documented, so it must also be selectable`
+      );
     }
-    assert.equal(
-      TargetLayerSchema.safeParse('claude').success, false,
-      'claude is not a routable target, which is why it has no entry'
-    );
 
     // The search layer refuses files outright. Advertising otherwise would
     // send callers straight into that refusal.
