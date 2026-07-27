@@ -342,6 +342,23 @@ export AI_STUDIO_API_KEY="your_api_key_here"
 export CGMB_CHAT_MODEL="gemini-2.5-flash"
 ```
 
+### Running the tests under WSL
+
+The suite is platform-aware and runs the same 97 cases on both sides: the
+Windows-only cases (`.cmd` shim handling) have POSIX counterparts, and the
+POSIX-only ones (signal escalation, `/mnt/c/Users` discovery) are skipped on
+Windows. Run it from a WSL shell, selecting a Node that meets `engines.node`:
+
+```bash
+# WSL often defaults to an older Node than the package requires
+export PATH="$HOME/.nvm/versions/node/v22.17.0/bin:$PATH"
+node --version                      # must be >= 22
+
+cd /mnt/<drive>/path/to/claude-gemini-multimodal-bridge
+npm run build                       # or reuse a build made on the host
+node --test "tests/*.test.mjs"
+```
+
 ---
 
 ## 🔍 Troubleshooting

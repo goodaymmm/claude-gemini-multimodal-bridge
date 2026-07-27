@@ -169,11 +169,23 @@ describe('WSL: path normalisation across the mount', () => {
   });
 });
 
-describe('WSL: agy is typically absent', { skip: !isWsl && 'requires WSL' }, () => {
-  it('offers the Linux install command, not the PowerShell one', () => {
-    // AGY_INSTALL_HINT branches on process.platform, which reports linux under
-    // WSL. Handing a WSL user `irm ... | iex` would be useless advice.
-    assert.match(AGY_INSTALL_HINT, /curl/, 'WSL must get the shell installer');
-    assert.doesNotMatch(AGY_INSTALL_HINT, /irm|iex/);
+describe('install advice matches the platform', () => {
+  // AGY_INSTALL_HINT branches on process.platform, which reports linux under
+  // WSL -- so a WSL user must get the shell installer, not `irm ... | iex`.
+  // Asserted on both sides rather than only under WSL: a hint that is wrong on
+  // Windows is just as useless, and gating this meant only one branch was ever
+  // checked.
+  it('offers the shell installer off Windows and PowerShell on it', () => {
+    if (isWindows) {
+      assert.match(AGY_INSTALL_HINT, /irm|iex/, 'Windows must get the PowerShell installer');
+      assert.doesNotMatch(AGY_INSTALL_HINT, /curl/);
+    } else {
+      assert.match(AGY_INSTALL_HINT, /curl/, 'Linux and WSL must get the shell installer');
+      assert.doesNotMatch(AGY_INSTALL_HINT, /irm|iex/);
+    }
+  });
+
+  it('names a real install command either way', () => {
+    assert.match(AGY_INSTALL_HINT, /antigravity\.google/, 'the hint must point at the installer');
   });
 });

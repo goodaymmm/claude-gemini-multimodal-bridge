@@ -215,7 +215,58 @@ describe('windows .cmd launcher', { skip: !isWindows && 'Windows-only behaviour'
     });
     assert.equal(JSON.parse(output.trim()).loggedIn, true);
   });
+});
 
+describe('posix shim launcher', { skip: isWindows && 'POSIX-only behaviour' }, () => {
+  // The counterpart to the .cmd case above. There is no EINVAL to contrast
+  // with here -- the kernel honours a shebang -- so what this pins is that the
+  // launcher hands a script straight to spawn without inventing a shell around
+  // it, which is what keeps prompt text out of a command line.
+  const dir = join(tmpdir(), `cgmb-test-shim-${process.pid}`);
+  const shim = join(dir, 'faketool');
+
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('invokes a shell-script shim without wrapping it in a shell', () => {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(shim, '#!/bin/sh\necho \'{"loggedIn":true}\'\n', { encoding: 'utf8', mode: 0o755 });
+
+    const target = buildSpawnTarget(shim, ['auth', 'status', '--json']);
+
+    assert.equal(target.file, shim, 'the script itself must be the spawned file');
+    assert.deepEqual(target.args, ['auth', 'status', '--json'], 'arguments stay separate');
+    assert.deepEqual(target.spawnOptions, {}, 'no shell, no verbatim-argument flag');
+
+    const output = execFileSync(target.file, target.args, {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    assert.equal(JSON.parse(output.trim()).loggedIn, true);
+  });
+
+  it('does not interpret shell metacharacters in an argument', () => {
+    // The POSIX counterpart to the cmd.exe injection case: an argument full of
+    // separators must arrive as one string, not as further commands.
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(shim, '#!/bin/sh\nprintf "SAW:%s" "$1"\n', { encoding: 'utf8', mode: 0o755 });
+
+    const payload = 'x; echo INJECTED; $(echo INJECTED) `echo INJECTED` && echo INJECTED';
+    const target = buildSpawnTarget(shim, [payload]);
+    const output = execFileSync(target.file, target.args, { encoding: 'utf8', stdio: 'pipe' });
+
+    assert.match(output, /^SAW:/, 'the shim must be what ran');
+    assert.equal(
+      output, `SAW:${payload}`,
+      'the argument must arrive whole, with nothing executed out of it'
+    );
+  });
+});
+
+describe('spawn target shape', () => {
+  // Platform-neutral, and it used to be trapped inside the Windows-only
+  // launcher block -- so on Linux and WSL nothing checked it at all.
   it('passes a real executable straight through, without a shell', () => {
     const target = buildSpawnTarget(process.execPath, ['--version']);
     assert.equal(target.file, process.execPath);
@@ -363,18 +414,27 @@ describe('binary discovery trust', () => {
     assert.equal(resolveTrustedCommand(outside), outside);
   });
 
-  it('fails closed rather than falling back to a bare command name', { skip: !isWindows && 'Windows-only behaviour' }, () => {
+  it('fails closed rather than falling back to a bare command name', () => {
     // Returning the bare name after rejecting every candidate handed it to
     // spawn, and on a default Windows install the executable search includes
     // the current directory -- so the rejected file would run anyway. There is
     // nothing safe to execute when no trusted candidate exists.
+    //
+    // buildSpawnTarget resolves and checks on every platform, so this half is
+    // not Windows-specific: gating it as such meant Linux and WSL never
+    // exercised the refusal at all.
     const missing = `cgmb-no-such-tool-${process.pid}`;
-    assert.equal(resolveWindowsCommand(missing), undefined, 'an unresolvable name must not be returned');
+
     assert.throws(
       () => buildSpawnTarget(missing, ['--version']),
       /Could not resolve a trusted/,
       'buildSpawnTarget must refuse rather than spawn a bare name'
     );
+  });
+
+  it('refuses an unresolvable name through the Windows helper', { skip: !isWindows && 'Windows-only helper' }, () => {
+    const missing = `cgmb-no-such-tool-${process.pid}`;
+    assert.equal(resolveWindowsCommand(missing), undefined, 'an unresolvable name must not be returned');
   });
 });
 
