@@ -281,6 +281,60 @@ describe('translation sanitiser', () => {
   });
 });
 
+describe('translation failure reaches the caller', () => {
+  // translateToEnglish used to catch everything and return its input. That made
+  // a failed translation indistinguishable from a successful one: AIStudioLayer
+  // took the untranslated prompt as a translation, recorded wasTranslated:true,
+  // and sent Japanese to an image API expecting English. Its own "translation
+  // unavailable, continuing in the input language" branch existed the whole
+  // time and had never been reachable.
+
+  /** A layer whose underlying agy call fails. */
+  function layerWithFailingCli(message) {
+    const layer = new AntigravityCLILayer();
+    layer.isInitialized = true;
+    layer.executeAntigravityCLI = async () => { throw new Error(message); };
+    return layer;
+  }
+
+  it('rejects instead of returning the untranslated text', async () => {
+    const layer = layerWithFailingCli('agy is not installed');
+    const original = '夕暮れの海辺を歩く犬の水彩画';
+
+    await assert.rejects(
+      () => layer.translateToEnglish(original, 'ja'),
+      error => {
+        assert.doesNotMatch(
+          error.message.replace(/Could not translate the .* prompt to English: /, ''),
+          new RegExp(original),
+          'the refusal must not hand back the input as if it were a translation'
+        );
+        return true;
+      }
+    );
+  });
+
+  it('names the language and keeps the underlying reason', async () => {
+    const layer = layerWithFailingCli('agy exited with code 1');
+
+    await assert.rejects(
+      () => layer.translateToEnglish('こんにちは', 'ja'),
+      error =>
+        /Japanese/.test(error.message) &&
+        /agy exited with code 1/.test(error.message)
+    );
+  });
+
+  it('still returns the translation when the CLI answers', async () => {
+    const layer = new AntigravityCLILayer();
+    layer.isInitialized = true;
+    layer.executeAntigravityCLI = async () => 'A watercolour of a dog on the shore at dusk';
+
+    const translated = await layer.translateToEnglish('夕暮れの海辺を歩く犬の水彩画', 'ja');
+    assert.equal(translated, 'A watercolour of a dog on the shore at dusk');
+  });
+});
+
 describe('binary discovery trust', () => {
   it('refuses an agy candidate inside the working directory', () => {
     // Windows `where` lists the current directory before PATH. Verified: with

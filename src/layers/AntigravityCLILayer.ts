@@ -852,14 +852,19 @@ export class AntigravityCLILayer implements LayerInterface {
       return translatedText;
 
     } catch (error) {
-      logger.error('Translation failed, using original text', {
-        error: error instanceof Error ? error.message : String(error),
-        sourceLang,
-        length: text.length,
-      });
+      const reason = error instanceof Error ? error.message : String(error);
 
-      // Fallback to original text if translation fails
-      return text;
+      logger.error('Translation failed', { error: reason, sourceLang, length: text.length });
+
+      // Rethrow rather than returning the input.
+      //
+      // Returning `text` made a failed translation indistinguishable from a
+      // successful one: the caller in AIStudioLayer took the untranslated
+      // prompt as a translation, recorded wasTranslated: true, and sent the
+      // original language to the image API. It already has a catch that says
+      // "translation unavailable, continuing in the input language" and leaves
+      // the prompt alone -- that path had simply never been reachable.
+      throw new Error(`Could not translate the ${languageName} prompt to English: ${reason}`);
     }
   }
 }
