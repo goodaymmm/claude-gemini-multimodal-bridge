@@ -221,16 +221,29 @@ async function probeVersion(candidate: string): Promise<string | undefined> {
   }
 }
 
-function candidateInstallPaths(): string[] {
-  return process.platform === 'win32'
+/**
+ * Where an installer is likely to have put `agy`.
+ *
+ * Platform and environment are parameters with defaults rather than reads from
+ * the module, so the macOS branch can be exercised from a Windows or Linux
+ * test run. There is no darwin branch here -- macOS takes the same path as
+ * Linux -- which makes /opt/homebrew the only Mac-specific thing in the list,
+ * and the only thing a test on another OS can meaningfully check.
+ */
+export function candidateInstallPaths(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  return platform === 'win32'
     ? [
-        join(process.env.LOCALAPPDATA ?? '', 'agy', 'bin', 'agy.exe'),
-        join(process.env.USERPROFILE ?? '', 'AppData', 'Local', 'agy', 'bin', 'agy.exe'),
-        join(process.env.USERPROFILE ?? '', '.local', 'bin', 'agy.exe'),
+        join(env.LOCALAPPDATA ?? '', 'agy', 'bin', 'agy.exe'),
+        join(env.USERPROFILE ?? '', 'AppData', 'Local', 'agy', 'bin', 'agy.exe'),
+        join(env.USERPROFILE ?? '', '.local', 'bin', 'agy.exe'),
       ]
     : [
-        join(process.env.HOME ?? '', '.local', 'bin', 'agy'),
+        join(env.HOME ?? '', '.local', 'bin', 'agy'),
         '/usr/local/bin/agy',
+        // Homebrew's prefix on Apple Silicon. Intel Macs use /usr/local above.
         '/opt/homebrew/bin/agy',
       ];
 }

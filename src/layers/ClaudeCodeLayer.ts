@@ -530,26 +530,41 @@ export class ClaudeCodeLayer implements LayerInterface {
   }
 
   /**
-   * Find Claude Code executable path
+   * Where Claude Code is likely to be installed.
+   *
+   * Platform and environment are parameters with defaults, so the macOS branch
+   * can be exercised from a Windows or Linux test run. There is no darwin
+   * branch: macOS follows the same list as Linux, which makes /opt/homebrew the
+   * only Mac-specific entry and the only one another OS can check.
    */
-  private async findClaudeCodePath(): Promise<string | undefined> {
-    // Platform-specific path candidates
-    const isWindows = process.platform === 'win32';
-    const appDataPath = process.env.APPDATA || '';
+  static claudeCandidatePaths(
+    platform: NodeJS.Platform = process.platform,
+    env: NodeJS.ProcessEnv = process.env
+  ): string[] {
+    const appDataPath = env.APPDATA ?? '';
 
-    const possiblePaths = [
+    return [
       'claude',
       'claude-original',
       // Windows paths (npm global install location)
-      ...(isWindows && appDataPath ? [
+      ...(platform === 'win32' && appDataPath ? [
         join(appDataPath, 'npm', 'claude.cmd'),
         join(appDataPath, 'npm', 'claude'),
       ] : []),
-      // Unix paths
+      // Unix paths. /opt/homebrew is Homebrew's prefix on Apple Silicon;
+      // Intel Macs and Linux use /usr/local.
+      '/usr/local/bin/claude',
       '/usr/local/bin/claude-original',
       '/opt/homebrew/bin/claude',
       '/opt/homebrew/bin/claude-original',
     ];
+  }
+
+  /**
+   * Find Claude Code executable path
+   */
+  private async findClaudeCodePath(): Promise<string | undefined> {
+    const possiblePaths = ClaudeCodeLayer.claudeCandidatePaths();
 
     for (const path of possiblePaths) {
       try {

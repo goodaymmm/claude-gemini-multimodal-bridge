@@ -1271,6 +1271,48 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Global npm locations that could hold this package's MCP server.
+   *
+   * Platform, environment and Node version are parameters with defaults, so the
+   * macOS branch can be exercised from a Windows or Linux test run. There is no
+   * darwin branch: macOS shares the Unix list, which makes /opt/homebrew the
+   * one Mac-specific entry -- and the one thing another OS can check.
+   */
+  static globalInstallPaths(
+    serverFileName: string,
+    platform: NodeJS.Platform = process.platform,
+    env: NodeJS.ProcessEnv = process.env,
+    nodeVersion: string = process.version
+  ): string[] {
+    const pkg = ['node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName];
+
+    if (platform === 'win32') {
+      return [
+        // Only include paths whose environment variable is actually set;
+        // joining onto '' produces a relative path that matches nothing.
+        ...(env.APPDATA ? [join(env.APPDATA, 'npm', ...pkg)] : []),
+        ...(env.LOCALAPPDATA ? [join(env.LOCALAPPDATA, 'npm', ...pkg)] : []),
+        ...(env.USERPROFILE ? [
+          join(env.USERPROFILE, 'AppData', 'Roaming', 'npm', ...pkg),
+          // nvm-windows support
+          join(env.USERPROFILE, '.nvm', 'versions', 'node', nodeVersion, ...pkg),
+        ] : []),
+        // Program Files for system-wide Node.js installations
+        join('C:', 'Program Files', 'nodejs', ...pkg),
+      ];
+    }
+
+    return [
+      ...(env.HOME ? [join(env.HOME, '.nvm', 'versions', 'node', nodeVersion, 'lib', ...pkg)] : []),
+      join('/usr/local/lib', ...pkg),
+      // Homebrew's prefix on Apple Silicon; Intel Macs use /usr/local above.
+      join('/opt/homebrew/lib', ...pkg),
+      // WSL: Windows npm location accessible from WSL
+      ...AIStudioLayer.wslWindowsNpmPaths(serverFileName, { isWsl: Boolean(env.WSL_DISTRO_NAME) }),
+    ];
+  }
+
+  /**
    * Resolve MCP server path with multiple fallback strategies
    * Priority: ESM __dirname → dev path → local npm → global npm paths
    */
@@ -1304,33 +1346,7 @@ export class AIStudioLayer implements LayerInterface {
     }
 
     // Strategy 4: Search in typical global npm locations (cross-platform)
-    // Filter out paths where environment variables are not set to avoid invalid paths
-    const isWindows = process.platform === 'win32';
-    const globalPaths = isWindows ? [
-      // Windows global npm paths - only include if env var exists
-      ...(process.env.APPDATA ? [
-        join(process.env.APPDATA, 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
-      ] : []),
-      ...(process.env.LOCALAPPDATA ? [
-        join(process.env.LOCALAPPDATA, 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
-      ] : []),
-      ...(process.env.USERPROFILE ? [
-        join(process.env.USERPROFILE, 'AppData', 'Roaming', 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
-        // nvm-windows support
-        join(process.env.USERPROFILE, '.nvm', 'versions', 'node', process.version, 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
-      ] : []),
-      // Program Files for system-wide Node.js installations
-      join('C:', 'Program Files', 'nodejs', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
-    ] : [
-      // Unix/macOS global npm paths - only include if env var exists
-      ...(process.env.HOME ? [
-        join(process.env.HOME, '.nvm', 'versions', 'node', process.version, 'lib', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
-      ] : []),
-      join('/usr/local/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
-      join('/opt/homebrew/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
-      // WSL: Windows npm location accessible from WSL
-      ...AIStudioLayer.wslWindowsNpmPaths(serverFileName),
-    ];
+    const globalPaths = AIStudioLayer.globalInstallPaths(serverFileName);
 
     for (const globalPath of globalPaths) {
       checkedPaths.push(globalPath);
