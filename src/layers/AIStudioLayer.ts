@@ -26,6 +26,7 @@ import {
   MultimodalFile,
   MultimodalResult,
 } from '../core/types.js';
+import { AntigravityCLILayer } from './AntigravityCLILayer.js';
 import { taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -92,7 +93,11 @@ export class AIStudioLayer implements LayerInterface {
   private readonly instanceId: string;
   private authVerifier: AuthVerifier;
   private genAI: GoogleGenAI | null = null;
-  private geminiLayer?: any; // Reference to GeminiCLILayer for translation
+  // Typed, not `any`. This reference is how image generation reaches
+  // translateToEnglish; with `any` the compiler could not tell whether the
+  // method existed, which is the class of mistake that let a failed
+  // translation look like a successful one.
+  private antigravityLayer: AntigravityCLILayer | undefined;
   private mcpServerProcess?: any;
   private persistentMCPProcess?: any; // Persistent MCP process for better performance
   private mcpProcessStartTime = 0; // Track when MCP process was started
@@ -115,14 +120,14 @@ export class AIStudioLayer implements LayerInterface {
     code: ['.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.cs', '.rb', '.go', '.rs']
   };
 
-  constructor(geminiLayer?: any) {
+  constructor(antigravityLayer?: AntigravityCLILayer) {
     // Generate unique instance ID for duplicate detection
     this.instanceId = `aistudio-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
     
     logger.info(`🔧 [${this.instanceId}] AIStudioLayer constructor called - with latest translation fixes`, {
       instanceId: this.instanceId,
       timestamp: Date.now(),
-      hasGeminiLayer: !!geminiLayer,
+      hasAntigravityLayer: !!antigravityLayer,
       version: 'v2025-07-03-instance-tracking'
     });
     
@@ -130,7 +135,7 @@ export class AIStudioLayer implements LayerInterface {
     this.setupGhostLogDetection();
     
     this.authVerifier = new AuthVerifier();
-    this.geminiLayer = geminiLayer;
+    this.antigravityLayer = antigravityLayer;
     
     // Initialize Google AI Studio API client
     const apiKey = process.env.AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
@@ -605,29 +610,29 @@ export class AIStudioLayer implements LayerInterface {
         detectedLanguage: detectedLang
       });
 
-      if (this.geminiLayer) {
+      if (this.antigravityLayer) {
         logger.info('GeminiCLI layer available, checking translateToEnglish method', {
-          hasTranslateMethod: typeof this.geminiLayer.translateToEnglish === 'function',
-          layerType: this.geminiLayer.constructor.name,
-          availableMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.geminiLayer)).slice(0, 10),
-          hasExecute: typeof this.geminiLayer.execute === 'function'
+          hasTranslateMethod: typeof this.antigravityLayer.translateToEnglish === 'function',
+          layerType: this.antigravityLayer.constructor.name,
+          availableMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.antigravityLayer)).slice(0, 10),
+          hasExecute: typeof this.antigravityLayer.execute === 'function'
         });
         
-        if (typeof this.geminiLayer.translateToEnglish === 'function') {
+        if (typeof this.antigravityLayer.translateToEnglish === 'function') {
           try {
             // Ensure GeminiCLI layer is initialized before translation
-            if (!await this.geminiLayer.isAvailable()) {
+            if (!await this.antigravityLayer.isAvailable()) {
               logger.warn('GeminiCLI layer not available, initializing...');
-              await this.geminiLayer.initialize();
+              await this.antigravityLayer.initialize();
             }
             
             logger.info('🔧 About to call translateToEnglish method', {
-              hasMethod: typeof this.geminiLayer.translateToEnglish === 'function',
-              geminiLayerType: this.geminiLayer.constructor.name,
+              hasMethod: typeof this.antigravityLayer.translateToEnglish === 'function',
+              antigravityLayerType: this.antigravityLayer.constructor.name,
               corePrompt: corePrompt.substring(0, 50)
             });
             
-            const translatedCore = await this.geminiLayer.translateToEnglish(corePrompt, detectedLang);
+            const translatedCore = await this.antigravityLayer.translateToEnglish(corePrompt, detectedLang);
             // Reconstruct prompt with original prefix + translated core
             const originalPrefix = prompt.substring(0, prompt.length - corePrompt.length);
             processedPrompt = originalPrefix + translatedCore;

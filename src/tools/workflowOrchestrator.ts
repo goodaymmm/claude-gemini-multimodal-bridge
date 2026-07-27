@@ -9,7 +9,7 @@ import {
 } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
-import { GeminiCLILayer } from '../layers/GeminiCLILayer.js';
+import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -22,7 +22,7 @@ import { AuthVerifier } from '../auth/AuthVerifier.js';
 export class WorkflowOrchestrator {
   private layerManager: LayerManager;
   private claudeLayer: ClaudeCodeLayer;
-  private geminiLayer: GeminiCLILayer;
+  private antigravityLayer: AntigravityCLILayer;
   private aiStudioLayer: AIStudioLayer;
   private authVerifier: AuthVerifier;
   
@@ -42,7 +42,7 @@ export class WorkflowOrchestrator {
     
     this.layerManager = new LayerManager(config || defaultConfig);
     this.claudeLayer = new ClaudeCodeLayer();
-    this.geminiLayer = new GeminiCLILayer();
+    this.antigravityLayer = new AntigravityCLILayer();
     this.aiStudioLayer = new AIStudioLayer();
     this.authVerifier = new AuthVerifier();
   }
@@ -495,7 +495,7 @@ export class WorkflowOrchestrator {
           break;
         case 'antigravity':
         case 'gemini': // deprecated alias
-          initPromises.push(this.geminiLayer.initialize());
+          initPromises.push(this.antigravityLayer.initialize());
           break;
         case 'aistudio':
           initPromises.push(this.aiStudioLayer.initialize());
@@ -635,7 +635,7 @@ export class WorkflowOrchestrator {
             
           case 'antigravity':
           case 'gemini': // deprecated alias
-            result = await this.geminiLayer.execute({
+            result = await this.antigravityLayer.execute({
               action: step.action,
               ...stepInput,
             });

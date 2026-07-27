@@ -5,7 +5,7 @@ import {
 } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
-import { GeminiCLILayer } from '../layers/GeminiCLILayer.js';
+import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -21,7 +21,7 @@ import fs from 'fs/promises';
 export class DocumentAnalysis {
   private layerManager: LayerManager;
   private claudeLayer: ClaudeCodeLayer;
-  private geminiLayer: GeminiCLILayer;
+  private antigravityLayer: AntigravityCLILayer;
   private aiStudioLayer: AIStudioLayer;
   private authVerifier: AuthVerifier;
   
@@ -43,7 +43,7 @@ export class DocumentAnalysis {
     };
     this.layerManager = new LayerManager(defaultConfig);
     this.claudeLayer = new ClaudeCodeLayer();
-    this.geminiLayer = new GeminiCLILayer();
+    this.antigravityLayer = new AntigravityCLILayer();
     this.aiStudioLayer = new AIStudioLayer();
     this.authVerifier = new AuthVerifier();
   }
@@ -495,7 +495,7 @@ Please extract the complete text content while maintaining readability and struc
     }
     
     if (requiredLayers.includes('gemini')) {
-      initPromises.push(this.geminiLayer.initialize());
+      initPromises.push(this.antigravityLayer.initialize());
     }
     
     if (requiredLayers.includes('aistudio')) {
@@ -847,7 +847,7 @@ Please extract the complete text content while maintaining readability and struc
     }
     
     // Use Gemini for contextual grounding
-    const contextualResult = await this.geminiLayer.execute({
+    const contextualResult = await this.antigravityLayer.execute({
       action: 'contextual_analysis',
       prompt: `Analyze these documents in current context and provide relevant background information: ${JSON.stringify(documentData)}`,
       useSearch: true,
