@@ -1,8 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "node",
+    // NodeNext, not ESNext + node10. node10 resolution is deprecated and stops
+    // working in TypeScript 7.0, and the two options must move together --
+    // moduleResolution: NodeNext alone fails with TS5110.
+    //
+    // NodeNext over bundler: nothing bundles this package. It is "type":
+    // "module" and Node executes the emitted files directly, so relative
+    // imports need their .js extension. bundler resolution permits omitting it,
+    // which would turn a compile-time error into one the user hits at runtime.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": "./src",
