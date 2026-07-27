@@ -471,6 +471,43 @@ function showCompletionSummary(results) {
   console.log('\n🚀 Ready to use CGMB!');
 }
 
+/**
+ * The major version package.json actually requires.
+ *
+ * Read rather than hardcoded, so the check and the declaration cannot drift --
+ * which is exactly what had happened: engines said >=22, this script said v18.
+ */
+function requiredNodeMajor() {
+  try {
+    const declared = require('../package.json').engines?.node ?? '';
+    const match = /(\d+)/.exec(declared);
+    if (match) {
+      return Number.parseInt(match[1], 10);
+    }
+  } catch {
+    // Fall through to the conservative default below.
+  }
+  return 22;
+}
+
+/**
+ * Numeric comparison of the running Node against the required major.
+ *
+ * Exported for tests. Takes the version as a parameter rather than reading
+ * process.versions so the unsupported cases can be exercised without an
+ * unsupported Node to run them on.
+ */
+function checkNodeVersion(version, requiredMajor) {
+  const major = Number.parseInt(String(version).replace(/^v/i, '').split('.')[0], 10);
+  return {
+    ok: Number.isFinite(major) && major >= requiredMajor,
+    major,
+    required: requiredMajor,
+  };
+}
+
+module.exports = { checkNodeVersion, requiredNodeMajor };
+
 // Main setup function
 async function main() {
   console.log('\n' + '='.repeat(60));
@@ -482,16 +519,24 @@ async function main() {
   // Check system requirements
   log('📋 Checking system requirements...');
   
-  // Check Node.js version
-  const nodeVersion = process.version;
-  const requiredNodeVersion = 'v18.0.0';
-  if (nodeVersion >= requiredNodeVersion) {
-    log(`✅ Node.js ${nodeVersion} (meets requirement: ${requiredNodeVersion}+)`, 'success');
+  // Check Node.js version before anything writes configuration.
+  //
+  // This used to compare version strings with `>=`, against a hardcoded v18
+  // while package.json requires 22. Both halves were wrong. The threshold let
+  // an unsupported Node through, and the setup below then pinned *that* Node's
+  // process.execPath into the user's Claude Code config -- so the install
+  // reported success and the server failed later, at first use, for reasons
+  // that pointed nowhere near the install. The string comparison was broken
+  // independently: 'v9.0.0' >= 'v18.0.0' is true, because '9' > '1'.
+  const nodeCheck = checkNodeVersion(process.versions.node, requiredNodeMajor());
+  if (nodeCheck.ok) {
+    log(`✅ Node.js v${process.versions.node} (meets requirement: v${nodeCheck.required}+)`, 'success');
   } else {
-    log(`❌ Node.js ${nodeVersion} is too old. Required: ${requiredNodeVersion}+`, 'error');
+    log(`❌ Node.js v${process.versions.node} is too old. Required: v${nodeCheck.required}+`, 'error');
+    log('   No configuration was written. Install a supported Node.js and reinstall CGMB.', 'error');
     process.exit(1);
   }
-  
+
   // Setup components
   try {
     results['Claude Code CLI'] = checkClaudeCode();
@@ -549,14 +594,20 @@ if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
   process.exit(0);
 }
 
-// Skip postinstall during npm publish
-if (process.env.npm_lifecycle_event === 'prepublish' || process.env.npm_lifecycle_event === 'prepare') {
-  log('📦 Publish process detected, skipping setup', 'info');
-  process.exit(0);
-}
+// Only run the installer when executed as a script.
+//
+// Without this guard, `require()`ing the file to test its version check ran the
+// whole setup -- npm installs and all.
+if (require.main === module) {
+  // Skip postinstall during npm publish
+  if (process.env.npm_lifecycle_event === 'prepublish' || process.env.npm_lifecycle_event === 'prepare') {
+    log('📦 Publish process detected, skipping setup', 'info');
+    process.exit(0);
+  }
 
-// Run main setup
-main().catch((error) => {
-  log(`❌ Unexpected error: ${error.message}`, 'error');
-  process.exit(1);
-});
+  // Run main setup
+  main().catch((error) => {
+    log(`❌ Unexpected error: ${error.message}`, 'error');
+    process.exit(1);
+  });
+}
