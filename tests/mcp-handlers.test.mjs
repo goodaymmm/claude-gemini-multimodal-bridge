@@ -18,6 +18,7 @@ import { CGMBServer } from '../dist/core/CGMBServer.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName, taskFileRefs } from '../dist/core/types.js';
+import { extractResultText, pickFinalResultText } from '../dist/utils/workflowUtils.js';
 
 /**
  * A server whose layers are stubs.
@@ -240,6 +241,67 @@ describe('credential files are refused through the MCP path too', () => {
     );
 
     assert.deepEqual(calls, [], 'no layer may be invoked for a private key');
+  });
+});
+
+describe('picking the answer out of a workflow result', () => {
+  // Two byte-for-byte copies of the same four-shape probe lived in
+  // formatResponse, one per container shape, and a third in ClaudeProxy. All
+  // three took the first element without looking at whether that step
+  // succeeded or what it was for -- so in a named workflow the preprocess
+  // step, or a failed step, came back as the final answer.
+
+  it('reads all four historical result shapes', () => {
+    assert.equal(extractResultText({ data: 'plain string' }), 'plain string');
+    assert.equal(
+      extractResultText({ data: { content: [{ type: 'text', text: 'nested' }] } }),
+      'nested'
+    );
+    assert.equal(extractResultText({ content: [{ type: 'text', text: 'direct' }] }), 'direct');
+    assert.equal(extractResultText({ content: 'bare' }), 'bare');
+
+    assert.equal(extractResultText({}), null);
+    assert.equal(extractResultText(null), null);
+    assert.equal(extractResultText({ data: '   ' }), null, 'whitespace is not an answer');
+  });
+
+  it('refuses a content entry whose text is not a string', () => {
+    // The old probes tested `content[0]?.text` for truthiness and assigned it
+    // straight through, so a number or an object became the response body.
+    assert.equal(extractResultText({ content: [{ text: 42 }] }), null);
+    assert.equal(extractResultText({ content: [{ text: { nested: true } }] }), null);
+    assert.equal(extractResultText({ data: { content: [{ text: 42 }] } }), null);
+  });
+
+  it('takes the last step, not the first', () => {
+    const results = [
+      { success: true, data: 'preprocess notes' },
+      { success: true, data: 'the actual answer' },
+    ];
+
+    assert.equal(pickFinalResultText(results), 'the actual answer');
+  });
+
+  it('skips a failed final step and falls back to the last success', () => {
+    const results = [
+      { success: true, data: 'earlier answer' },
+      { success: false, error: 'synthesis failed' },
+    ];
+
+    assert.equal(pickFinalResultText(results), 'earlier answer');
+  });
+
+  it('returns null when nothing succeeded, so the caller can say so', () => {
+    assert.equal(
+      pickFinalResultText([{ success: false, error: 'a' }, { success: false, error: 'b' }]),
+      null
+    );
+    assert.equal(pickFinalResultText([]), null);
+  });
+
+  it('does not treat a result without a success field as failed', () => {
+    // Layers that predate the flag return data with no success at all.
+    assert.equal(pickFinalResultText([{ data: 'no flag here' }]), 'no flag here');
   });
 });
 

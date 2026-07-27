@@ -33,6 +33,7 @@ import { normalizeLayerName } from './types.js';
 import { Config, ConfigSchema } from './types.js';
 import { isOneOf } from './types.js';
 import { LegacyCGMBRequestSchema, ProcessingOptions } from './types.js';
+import { pickFinalResultText } from '../utils/workflowUtils.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -1268,58 +1269,19 @@ Solutions:
     if (typeof result.data === 'string' && result.data.trim()) {
       responseData = result.data;
     }
-    // 2. Results array format (from workflow)
+    // 2 & 3. Workflow results, either as an array or as named steps.
+    //
+    // This used to hold two byte-for-byte copies of the same four-shape probe,
+    // one per container, and both took element [0] without looking at whether
+    // that step succeeded or what it was for. In a named workflow element [0]
+    // is the preprocess step, so an intermediate result -- or a failed one --
+    // was returned as the final answer. pickFinalResultText walks from the end
+    // and skips failures.
     else if (Array.isArray(result.results) && result.results.length > 0) {
-      const firstResult = result.results[0];
-      if (typeof firstResult?.data === 'string' && firstResult.data.trim()) {
-        responseData = firstResult.data;
-      }
-      // Handle nested data.content format: {data: {content: [{type: 'text', text: '...'}]}}
-      else if (firstResult?.data?.content && Array.isArray(firstResult.data.content) && firstResult.data.content[0]?.text) {
-        responseData = firstResult.data.content[0].text;
-      }
-      else if (firstResult?.content) {
-        // Handle MCP content array format: [{type: 'text', text: '...'}]
-        if (Array.isArray(firstResult.content) && firstResult.content[0]?.text) {
-          responseData = firstResult.content[0].text;
-        } else if (typeof firstResult.content === 'string') {
-          responseData = firstResult.content;
-        } else {
-          responseData = JSON.stringify(firstResult.content);
-        }
-      }
+      responseData = pickFinalResultText(result.results);
     }
-    // 3. Results object format (from workflow with named steps)
-    else if (result.results && typeof result.results === 'object' && !Array.isArray(result.results)) {
-      // Kept as any[] deliberately. The block below probes four different
-      // historical response shapes -- a string in `data`, an MCP content array
-      // under `data.content`, the same array directly on `content`, and a bare
-      // string `content` -- to stay compatible with older layers and MCP
-      // servers. Typing it would mean writing a union that describes every
-      // shape we no longer control, and narrowing at each of the probes; the
-      // checks are already the narrowing.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const resultValues = Object.values(result.results) as any[];
-      if (resultValues.length > 0) {
-        const firstResult = resultValues[0];
-        if (typeof firstResult?.data === 'string' && firstResult.data.trim()) {
-          responseData = firstResult.data;
-        }
-        // Handle nested data.content format: {data: {content: [{type: 'text', text: '...'}]}}
-        else if (firstResult?.data?.content && Array.isArray(firstResult.data.content) && firstResult.data.content[0]?.text) {
-          responseData = firstResult.data.content[0].text;
-        }
-        else if (firstResult?.content) {
-          // Handle MCP content array format: [{type: 'text', text: '...'}]
-          if (Array.isArray(firstResult.content) && firstResult.content[0]?.text) {
-            responseData = firstResult.content[0].text;
-          } else if (typeof firstResult.content === 'string') {
-            responseData = firstResult.content;
-          } else {
-            responseData = JSON.stringify(firstResult.content);
-          }
-        }
-      }
+    else if (result.results && typeof result.results === 'object') {
+      responseData = pickFinalResultText(Object.values(result.results));
     }
     // 4. Summary or content fallback
     else if (result.summary && typeof result.summary === 'string') {

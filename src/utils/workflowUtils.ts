@@ -190,3 +190,88 @@ export function validateConversionFormat(
 
   return { valid: true };
 }
+
+// ===================================
+// Reading an answer out of a workflow result
+// ===================================
+
+/**
+ * The displayable text carried by one layer or workflow-step result.
+ *
+ * Layers and MCP servers have returned four different shapes over time -- a
+ * string in `data`, an MCP content array under `data.content`, the same array
+ * directly on `content`, and a bare string `content` -- and every consumer grew
+ * its own copy of the probe. CGMBServer had two copies in a single method.
+ * Returns null when nothing usable is present.
+ */
+export function extractResultText(value: unknown): string | null {
+  const result = value as {
+    data?: unknown;
+    content?: unknown;
+  } | null | undefined;
+
+  if (!result || typeof result !== 'object') {
+    return null;
+  }
+
+  // 1. A string straight off `data`.
+  if (typeof result.data === 'string' && result.data.trim()) {
+    return result.data;
+  }
+
+  // 2. An MCP content array nested under `data`.
+  const nested = (result.data as { content?: unknown } | null | undefined)?.content;
+  const fromNested = textFromContent(nested);
+  if (fromNested !== null) {
+    return fromNested;
+  }
+
+  // 3 & 4. `content` directly, as an array, a string, or something else.
+  return textFromContent(result.content);
+}
+
+/** The text inside an MCP-style content value, or null. */
+function textFromContent(content: unknown): string | null {
+  if (content === undefined || content === null) {
+    return null;
+  }
+
+  if (Array.isArray(content)) {
+    const text = (content[0] as { text?: unknown } | undefined)?.text;
+    // Checked, not assumed. The previous probes assigned this straight through,
+    // so a numeric or object `text` became the response body.
+    return typeof text === 'string' && text.trim() ? text : null;
+  }
+
+  if (typeof content === 'string') {
+    return content.trim() ? content : null;
+  }
+
+  return JSON.stringify(content);
+}
+
+/**
+ * The answer to show for a set of layer or step results.
+ *
+ * Walks from the end and skips failed results. Taking `[0]` -- which is what
+ * every copy of this did -- returns whatever ran first: in a named workflow
+ * that is the preprocess step, or a failed step, presented as the final answer.
+ * The last result that succeeded and carries text is the one the caller asked
+ * for.
+ */
+export function pickFinalResultText(results: readonly unknown[]): string | null {
+  for (let index = results.length - 1; index >= 0; index--) {
+    const result = results[index] as { success?: unknown } | null | undefined;
+
+    if (result?.success === false) {
+      continue;
+    }
+
+    const text = extractResultText(result);
+    if (text !== null) {
+      return text;
+    }
+  }
+
+  return null;
+}

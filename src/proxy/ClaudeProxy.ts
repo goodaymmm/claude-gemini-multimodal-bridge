@@ -3,6 +3,7 @@ import { ClaudeRequest, EnhancementPlan, RequestAnalysis } from '../core/types.j
 import { resolveTrustedCommand } from '../utils/processUtils.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
+import { pickFinalResultText } from '../utils/workflowUtils.js';
 import { RequestAnalyzer } from './RequestAnalyzer.js';
 import { CapabilityDetector } from '../intelligence/CapabilityDetector.js';
 import { LayerManager } from '../core/LayerManager.js';
@@ -363,22 +364,14 @@ export class ClaudeProxy {
    * Output enhanced result to user
    */
   private outputEnhancedResult(result: any, plan: EnhancementPlan): void {
-    // Find the primary result (usually from the last successful layer)
-    // Same reasoning as CGMBServer's result probing: the block below reads
-    // several historical shapes off `data` to stay compatible with older
-    // layers, and the checks are the narrowing.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const layerResults = Object.values(result.results) as any[];
-    const primaryResult = layerResults.find(r => r.success && r.data);
-    
-    if (primaryResult?.data) {
-      if (typeof primaryResult.data === 'string') {
-        console.log(primaryResult.data);
-      } else if (primaryResult.data.content) {
-        console.log(primaryResult.data.content);
-      } else {
-        console.log(JSON.stringify(primaryResult.data, null, 2));
-      }
+    // The comment above says "usually from the last successful layer", but the
+    // code took the *first* one, and printed an MCP content array through
+    // console.log -- which renders it as [object Object]. Shares the extraction
+    // with CGMBServer so the two cannot disagree about what the answer is.
+    const answer = pickFinalResultText(Object.values(result.results ?? {}));
+
+    if (answer !== null) {
+      console.log(answer);
     } else {
       // Fallback: show summary
       console.log('Enhanced analysis completed successfully.');
