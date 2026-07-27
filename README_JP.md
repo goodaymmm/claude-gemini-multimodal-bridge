@@ -342,6 +342,19 @@ export AI_STUDIO_API_KEY="your_api_key_here"
 export CGMB_CHAT_MODEL="gemini-2.5-flash"
 ```
 
+### WSLでのテスト実行
+
+テストはプラットフォームを判別し、両環境で同数のケースを実行します。Windows専用の
+ケース（`.cmd` シムの扱い）にはPOSIX版が対になっており、POSIX専用のケース
+（シグナルによる終了、`/mnt/c/Users` の探索）はWindowsではスキップされます。
+
+```bash
+cd /mnt/<drive>/path/to/claude-gemini-multimodal-bridge
+node --version        # engines.node (>= 22) を満たすこと
+npm run build         # ホスト側でビルド済みならそれを流用してもよい
+node --test "tests/*.test.mjs"
+```
+
 ---
 
 ## 🔍 トラブルシューティング
