@@ -19,11 +19,23 @@ class Logger {
   private constructor(config: LoggerConfig) {
     const transports: winston.transport[] = [];
 
-    // Console transport with stdout for CLI commands to avoid Error: display in Bash tool
+    // Every level goes to stderr, never stdout.
+    //
+    // CGMB's main mode of operation is an MCP server speaking JSON-RPC over
+    // stdio, where stdout is the protocol channel: a single log line written
+    // there is a parse error for the host. This transport used to force all
+    // levels to stdout (`stderrLevels: []`) for CLI readability, and the only
+    // thing standing between that and a broken server was the MCP registration
+    // happening to carry NODE_ENV=production, which disabled the transport
+    // entirely. Measured without it: 86 of 87 stdout lines were log output.
+    //
+    // stderr costs the CLI nothing -- its human-facing output goes through
+    // console.log, not through this logger -- and it is where MCP hosts look
+    // for diagnostics.
     if (config.console) {
       transports.push(
         new winston.transports.Console({
-          stderrLevels: [], // Force all levels to stdout instead of stderr
+          stderrLevels: ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'],
           format: config.json
             ? winston.format.json()
             : winston.format.combine(
@@ -80,7 +92,15 @@ class Logger {
       const defaultConfig: LoggerConfig = {
         level: logLevel,
         ...(process.env.LOG_FILE && { file: process.env.LOG_FILE }),
-        console: !productionMode || debugMode, // Always show console in debug mode
+        // Always on, now that it writes to stderr.
+        //
+        // This was `!productionMode || debugMode`, which silenced the console
+        // transport entirely under the NODE_ENV=production that MCP
+        // registrations carry -- so a server that was misbehaving produced no
+        // diagnostics at all, and `cgmb serve --debug` printed nothing. The
+        // reason to suppress it was stdout pollution, which no longer applies.
+        // Volume is controlled by `level`.
+        console: true,
         json: productionMode && !debugMode,
       };
       Logger.instance = new Logger(config ?? defaultConfig);

@@ -132,13 +132,16 @@ program
       process.env.CGMB_SERVE_MODE = 'true';
       process.env.CGMB_NO_CLAUDE_EXEC = 'true';
       
-      // Set log level first if specified
-      if (options.verbose) {
+      // Set log level first if specified.
+      //
+      // CGMB_DEBUG as well as LOG_LEVEL: the logger reads the level from
+      // LOG_LEVEL but decided whether to have a console transport at all from
+      // CGMB_DEBUG. Setting only the level meant `cgmb serve --debug` under the
+      // NODE_ENV=production that MCP registrations carry produced no output
+      // whatsoever -- the flag looked ignored because, for the console, it was.
+      if (options.verbose || options.debug) {
         process.env.LOG_LEVEL = 'debug';
-      }
-      
-      if (options.debug) {
-        process.env.LOG_LEVEL = 'debug';
+        process.env.CGMB_DEBUG = 'true';
       }
 
       // Load environment variables with smart discovery
