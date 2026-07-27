@@ -103,7 +103,9 @@ export const MultimodalProcessArgsSchema = z.object({
 export type MultimodalProcessArgs = z.infer<typeof MultimodalProcessArgsSchema>;
 
 export const DocumentAnalysisArgsSchema = z.object({
-  documents: z.array(z.string().min(1)),
+  // At least one document. An empty array used to satisfy this schema, run the
+  // whole analysis workflow over nothing, and come back "analysis complete".
+  documents: z.array(z.string().min(1)).min(1),
   workingDirectory: z.string().optional(),
   analysis_type: z.enum(['summary', 'comparison', 'extraction', 'translation']),
   output_requirements: z.string().optional(),

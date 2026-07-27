@@ -17,9 +17,44 @@ import { describe, it } from 'node:test';
 import { CGMBServer } from '../dist/core/CGMBServer.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
 
-/** A server instance with no credentials. Construction must not require any. */
+/**
+ * A server whose layers are stubs.
+ *
+ * Stubbing is the default here, not an opt-in, because it is easy to write a
+ * case that looks like it will be rejected up front and is not: `documents: []`
+ * satisfies the schema, so it routes, and running this file under WSL showed it
+ * launching the real Claude CLI. That makes the suite slow, dependent on a
+ * working install, and weaker than it reads -- "did not succeed" can then be
+ * satisfied by an unrelated failure.
+ *
+ * The recorded calls hang off the returned server so a test can assert that
+ * nothing was invoked at all.
+ */
 function makeServer() {
-  return new CGMBServer();
+  const server = new CGMBServer();
+  const calls = [];
+  const manager = server.layerManager;
+
+  for (const [name, field] of [
+    ['aistudio', 'aiStudioLayer'],
+    ['claude', 'claudeLayer'],
+    ['antigravity', 'antigravityLayer'],
+  ]) {
+    const stub = {
+      initialize: async () => {},
+      isAvailable: async () => true,
+      execute: async task => {
+        calls.push({ layer: name, task });
+        return { success: true, data: `stub:${name}`, metadata: { layer: name, duration: 0 } };
+      },
+    };
+    manager[field] = stub;
+    manager[`${field}Promise`] = Promise.resolve(stub);
+    manager.layerInitialized[name] = true;
+  }
+
+  server.stubCalls = calls;
+  return server;
 }
 
 /** Pull the JSON payload back out of a CallToolResult. */
@@ -172,41 +207,11 @@ describe('credential files are refused through the MCP path too', () => {
   // Reaching it from a handler proves the guard is not bypassed by the MCP
   // entry point, which is where untrusted arguments actually arrive.
   //
-  // The layers are stubbed. Without that, a well-formed request routes for real
-  // and this suite launched the Claude CLI -- which made the run slow, made it
-  // depend on a working install, and meant "did not succeed" could be satisfied
-  // by a layer failing for some unrelated reason. Recording the calls lets us
-  // assert the stronger thing: no layer was invoked at all.
-
-  /** Replace the server's layers with stubs that record and never do work. */
-  function stubLayers(server) {
-    const calls = [];
-    const manager = server.layerManager;
-
-    for (const [name, field] of [
-      ['aistudio', 'aiStudioLayer'],
-      ['claude', 'claudeLayer'],
-      ['antigravity', 'antigravityLayer'],
-    ]) {
-      const stub = {
-        initialize: async () => {},
-        isAvailable: async () => true,
-        execute: async task => {
-          calls.push({ layer: name, task });
-          return { success: true, data: 'stub should not have been reached' };
-        },
-      };
-      manager[field] = stub;
-      manager[`${field}Promise`] = Promise.resolve(stub);
-      manager.layerInitialized[name] = true;
-    }
-
-    return calls;
-  }
+  // makeServer() stubs the layers, so "no layer was invoked" is assertable.
 
   it('refuses a credential-named document before any layer runs', async () => {
     const server = makeServer();
-    const calls = stubLayers(server);
+    const calls = server.stubCalls;
 
     await assertNotSuccessful(
       () => server.handleDocumentAnalysis({
@@ -221,7 +226,7 @@ describe('credential files are refused through the MCP path too', () => {
 
   it('refuses a credential-named file in a multimodal request', async () => {
     const server = makeServer();
-    const calls = stubLayers(server);
+    const calls = server.stubCalls;
 
     await assertNotSuccessful(
       () => server.handleMultimodalProcess({
