@@ -73,7 +73,11 @@ describe('where CGMB looks for Claude Code', () => {
     );
 
     assert.equal(found[0], 'D:\\claude.cmd');
-    assert.ok(found.some(p => p.endsWith('npm\\claude.cmd')), 'defaults must survive');
+    // Separator-agnostic: join() follows the host, not the platform argument,
+    // so this same win32 branch yields npm\claude.cmd on Windows and
+    // npm/claude.cmd when the check runs from Linux or WSL. The point here is
+    // that the default survives an override, not which slash it is spelled with.
+    assert.ok(found.some(p => /npm[\\/]claude\.cmd$/.test(p)), 'defaults must survive');
   });
 });
 
