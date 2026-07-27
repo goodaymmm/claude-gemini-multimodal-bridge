@@ -501,6 +501,135 @@ describe('AI Studio failure does not become a fabricated success', () => {
   });
 });
 
+describe('workflow execution modes', () => {
+  // executeWorkflow's four modes had no coverage: the live checks exercised
+  // sequential and parallel, adaptive and hybrid nothing at all. Driven with
+  // stub layers so no CLI or API is involved.
+
+  /** A manager whose layers record their calls with timings. */
+  function managerWithTimedStubs({ failStep } = {}) {
+    const manager = new LayerManager();
+    const calls = [];
+
+    for (const [name, field] of [
+      ['aistudio', 'aiStudioLayer'],
+      ['claude', 'claudeLayer'],
+      ['antigravity', 'antigravityLayer'],
+    ]) {
+      const stub = {
+        initialize: async () => {},
+        isAvailable: async () => true,
+        execute: async task => {
+          const entry = { layer: name, action: task.action, startedAt: Date.now() };
+          calls.push(entry);
+          await new Promise(resolve => setTimeout(resolve, 40));
+          entry.endedAt = Date.now();
+
+          if (failStep && task.action === failStep) {
+            throw new Error(`stub failure in ${failStep}`);
+          }
+          return { success: true, data: `did:${task.action}`, metadata: { layer: name, duration: 40 } };
+        },
+      };
+      manager[field] = stub;
+      manager[`${field}Promise`] = Promise.resolve(stub);
+      manager.layerInitialized[name] = true;
+    }
+
+    manager.stubCalls = calls;
+    return manager;
+  }
+
+  const chain = {
+    steps: [
+      { id: 'first', layer: 'antigravity', action: 'search', input: { prompt: 'a' } },
+      { id: 'second', layer: 'claude', action: 'synthesize_response', input: { prompt: 'b' }, dependsOn: ['first'] },
+    ],
+  };
+
+  const independent = {
+    steps: [
+      { id: 'a', layer: 'antigravity', action: 'search', input: { prompt: 'a' } },
+      { id: 'b', layer: 'antigravity', action: 'grounded_search', input: { prompt: 'b' } },
+    ],
+  };
+
+  it('runs a dependent chain in order under adaptive', async () => {
+    const manager = managerWithTimedStubs();
+
+    const result = await manager.executeWorkflow(chain, {}, { executionMode: 'adaptive' });
+
+    assert.equal(result.success, true, JSON.stringify(result.results));
+    assert.deepEqual(Object.keys(result.results).sort(), ['first', 'second']);
+
+    const [first, second] = manager.stubCalls;
+    assert.ok(
+      first.endedAt <= second.startedAt,
+      'a step that depends on another must not start before it finishes'
+    );
+  });
+
+  it('overlaps independent steps under parallel', async () => {
+    const manager = managerWithTimedStubs();
+
+    await manager.executeWorkflow(independent, {}, { executionMode: 'parallel' });
+
+    const [a, b] = manager.stubCalls;
+    assert.ok(
+      b.startedAt < a.endedAt,
+      'independent steps must actually overlap, not merely be labelled parallel'
+    );
+  });
+
+  it('reports a failed step rather than folding it into success', async () => {
+    // A past defect derived success from a count and reported a run with a
+    // failed step as fully successful.
+    const manager = managerWithTimedStubs({ failStep: 'synthesize_response' });
+
+    const result = await manager.executeWorkflow(chain, {}, { executionMode: 'adaptive' });
+
+    assert.equal(result.success, false, 'a failed step must fail the run');
+    assert.equal(result.results.first.success, true);
+    assert.equal(result.results.second.success, false);
+    assert.match(String(result.summary), /fail/i);
+  });
+
+  it('does not double-wrap a step result', async () => {
+    // executeStep once returned a LayerResult wrapped in another LayerResult,
+    // so result.data was an object with its own success/data rather than the
+    // answer.
+    const manager = managerWithTimedStubs();
+
+    const result = await manager.executeWorkflow(chain, {}, { executionMode: 'sequential' });
+
+    assert.equal(typeof result.results.first.data, 'string', 'data must be the answer itself');
+    assert.equal(result.results.first.data, 'did:search');
+  });
+
+  it('completes a mixed workflow under hybrid', async () => {
+    const manager = managerWithTimedStubs();
+
+    const mixed = {
+      steps: [
+        { id: 'search', layer: 'antigravity', action: 'search', input: { prompt: 'a' } },
+        { id: 'reason', layer: 'claude', action: 'complex_reasoning', input: { prompt: 'b' } },
+        { id: 'wrap', layer: 'claude', action: 'synthesize_response', input: { prompt: 'c' }, dependsOn: ['search', 'reason'] },
+      ],
+    };
+
+    const result = await manager.executeWorkflow(mixed, {}, { executionMode: 'adaptive' });
+
+    assert.equal(result.success, true, JSON.stringify(result.results));
+    assert.deepEqual(Object.keys(result.results).sort(), ['reason', 'search', 'wrap']);
+
+    const wrap = manager.stubCalls.find(c => c.action === 'synthesize_response');
+    const others = manager.stubCalls.filter(c => c.action !== 'synthesize_response');
+    for (const earlier of others) {
+      assert.ok(earlier.endedAt <= wrap.startedAt, 'the dependent step must run last');
+    }
+  });
+});
+
 describe('credential files never reach the AI Studio egress', () => {
   // Being able to read a file locally is not the same authorisation as sending
   // it to Google. AI Studio's MCP server readFileSync()s whatever path it is
