@@ -1203,6 +1203,65 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Candidate paths to a Windows-side npm install, seen from inside WSL.
+   *
+   * The previous version built exactly one path from `process.env.USER`:
+   *
+   *     join('/mnt/c/Users', process.env.USER, 'AppData', 'Roaming', 'npm', ...)
+   *
+   * `USER` is the *Linux* account name; the path is a *Windows* user profile.
+   * A profile of the same name may well exist -- on the machine this was
+   * measured on, /mnt/c/Users holds hikar, luisg and scarred, and the Linux
+   * user is scarred -- but that says nothing about which profile owns the npm
+   * install. There it lives under hikar, so the guessed candidate missed and
+   * the fallback could not fire. Listing the directory finds every profile, and
+   * finding none simply adds no candidates rather than a fabricated one.
+   *
+   * Exported-shaped (module scope, injectable options) so the behaviour can be
+   * tested from Windows, where /mnt/c does not exist.
+   */
+  static wslWindowsNpmPaths(
+    serverFileName: string,
+    options: {
+      isWsl?: boolean;
+      usersDir?: string;
+      listUsers?: (dir: string) => string[];
+    } = {}
+  ): string[] {
+    const isWsl = options.isWsl ?? Boolean(process.env.WSL_DISTRO_NAME);
+    if (!isWsl) {
+      return [];
+    }
+
+    const usersDir = options.usersDir ?? '/mnt/c/Users';
+    const listUsers = options.listUsers ?? ((dir: string): string[] => fs.readdirSync(dir));
+
+    // The directory is frequently unreadable -- no interop, a distro with no
+    // /mnt/c, or permissions -- and that is not an error worth propagating out
+    // of a path-guessing helper. Catching here rather than inside the default
+    // lister keeps the behaviour the same whoever supplies the listing.
+    let profiles: string[];
+    try {
+      profiles = listUsers(usersDir);
+    } catch {
+      return [];
+    }
+
+    // Profiles Windows creates for itself; none of them carry an npm install.
+    const systemProfiles = new Set([
+      'All Users', 'Default', 'Default User', 'Public', 'desktop.ini',
+    ]);
+
+    return profiles
+      .filter(name => !systemProfiles.has(name))
+      .map(name => join(
+        usersDir, name, 'AppData', 'Roaming', 'npm',
+        'node_modules', 'claude-gemini-multimodal-bridge',
+        'dist', 'mcp-servers', serverFileName
+      ));
+  }
+
+  /**
    * Resolve MCP server path with multiple fallback strategies
    * Priority: ESM __dirname → dev path → local npm → global npm paths
    */
@@ -1261,9 +1320,7 @@ export class AIStudioLayer implements LayerInterface {
       join('/usr/local/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
       join('/opt/homebrew/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
       // WSL: Windows npm location accessible from WSL
-      ...(process.env.USER ? [
-        join('/mnt/c/Users', process.env.USER, 'AppData', 'Roaming', 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
-      ] : []),
+      ...AIStudioLayer.wslWindowsNpmPaths(serverFileName),
     ];
 
     for (const globalPath of globalPaths) {

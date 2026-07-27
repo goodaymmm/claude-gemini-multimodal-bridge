@@ -44,14 +44,23 @@ const CREDENTIAL_FILE_PATTERNS = [
   /\.(pem|key|pfx|p12|keystore|jks)$/i,
 ];
 
-/** Refuse a task whose files include anything credential-shaped. */
+/**
+ * Refuse a task that names anything credential-shaped.
+ *
+ * Both keys are inspected because the codebase uses both: multimodal work
+ * carries `files` as FileReference objects, while document analysis passes
+ * `documents` as bare path strings. Checking only `files` left the whole
+ * analysis path unguarded -- `cgmb_document_analysis` with a .env reached the
+ * layers untouched.
+ */
 export function assertNoCredentialFiles(task: unknown): void {
-  const files = (task as { files?: unknown })?.files;
-  if (!Array.isArray(files)) {
-    return;
-  }
+  const source = task as { files?: unknown; documents?: unknown } | null | undefined;
+  const named: unknown[] = [
+    ...(Array.isArray(source?.files) ? source.files : []),
+    ...(Array.isArray(source?.documents) ? source.documents : []),
+  ];
 
-  for (const file of files) {
+  for (const file of named) {
     const filePath = typeof file === 'string' ? file : (file as { path?: unknown })?.path;
     if (typeof filePath !== 'string' || filePath === '') {
       continue;
@@ -61,8 +70,8 @@ export function assertNoCredentialFiles(task: unknown): void {
     const name = basename(filePath);
     if (CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(name))) {
       throw new CGMBError(
-        `Refusing to send ${name} to the AI Studio layer: it matches a credential file pattern, ` +
-        `and file contents are transmitted to Google.`,
+        `Refusing to process ${name}: it matches a credential file pattern, and the AI Studio ` +
+        `layer transmits file contents to Google.`,
         'CREDENTIAL_FILE_REFUSED'
       );
     }
@@ -442,6 +451,18 @@ export class LayerManager {
     layerType: LayerType,
     task: any
   ): Promise<LayerResult> {
+    // Checked before routing, for every layer.
+    //
+    // AI Studio is where the disclosure would happen -- its MCP server
+    // readFileSync()s whatever path it is handed and sends the bytes to Google,
+    // and unlike a local read the user never sees that leave. But guarding only
+    // that branch made the refusal depend on routing: the analysis workflow
+    // runs claude -> aistudio -> claude, so a request naming a credential file
+    // was handed to the Claude layer twice before anything objected. Claude
+    // never reads task.files, so nothing was disclosed, but the refusal should
+    // not be contingent on which step happens to run first.
+    assertNoCredentialFiles(task);
+
     switch (layerType) {
       case 'claude':
         const claudeLayer = await this.getClaudeLayerAsync();
@@ -453,16 +474,6 @@ export class LayerManager {
         return await antigravityLayer.execute(task);
 
       case 'aistudio':
-        // This is the egress point, so the check belongs here.
-        //
-        // Being able to read a file locally is not the same authorisation as
-        // sending its contents to Google. AI Studio's MCP server readFileSync()s
-        // whatever path it is handed, so a mistaken glob or a prompt-injected
-        // caller turns "analyse this" into credential disclosure that looks
-        // like ordinary operation -- and unlike a local read, the user never
-        // sees the content leave.
-        assertNoCredentialFiles(task);
-
         const aiStudioLayer = await this.getAIStudioLayerAsync();
         return await aiStudioLayer.execute(task);
 

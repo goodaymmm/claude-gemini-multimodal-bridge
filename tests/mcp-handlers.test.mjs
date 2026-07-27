@@ -171,9 +171,42 @@ describe('credential files are refused through the MCP path too', () => {
   // assertNoCredentialFiles guards the AI Studio egress inside LayerManager.
   // Reaching it from a handler proves the guard is not bypassed by the MCP
   // entry point, which is where untrusted arguments actually arrive.
+  //
+  // The layers are stubbed. Without that, a well-formed request routes for real
+  // and this suite launched the Claude CLI -- which made the run slow, made it
+  // depend on a working install, and meant "did not succeed" could be satisfied
+  // by a layer failing for some unrelated reason. Recording the calls lets us
+  // assert the stronger thing: no layer was invoked at all.
 
-  it('refuses a credential-named document', async () => {
+  /** Replace the server's layers with stubs that record and never do work. */
+  function stubLayers(server) {
+    const calls = [];
+    const manager = server.layerManager;
+
+    for (const [name, field] of [
+      ['aistudio', 'aiStudioLayer'],
+      ['claude', 'claudeLayer'],
+      ['antigravity', 'antigravityLayer'],
+    ]) {
+      const stub = {
+        initialize: async () => {},
+        isAvailable: async () => true,
+        execute: async task => {
+          calls.push({ layer: name, task });
+          return { success: true, data: 'stub should not have been reached' };
+        },
+      };
+      manager[field] = stub;
+      manager[`${field}Promise`] = Promise.resolve(stub);
+      manager.layerInitialized[name] = true;
+    }
+
+    return calls;
+  }
+
+  it('refuses a credential-named document before any layer runs', async () => {
     const server = makeServer();
+    const calls = stubLayers(server);
 
     await assertNotSuccessful(
       () => server.handleDocumentAnalysis({
@@ -182,10 +215,13 @@ describe('credential files are refused through the MCP path too', () => {
       }),
       'a .env must never be analysed'
     );
+
+    assert.deepEqual(calls, [], 'no layer may be invoked for a credential file');
   });
 
   it('refuses a credential-named file in a multimodal request', async () => {
     const server = makeServer();
+    const calls = stubLayers(server);
 
     await assertNotSuccessful(
       () => server.handleMultimodalProcess({
@@ -195,6 +231,8 @@ describe('credential files are refused through the MCP path too', () => {
       }),
       'a private key must never be sent'
     );
+
+    assert.deepEqual(calls, [], 'no layer may be invoked for a private key');
   });
 });
 
