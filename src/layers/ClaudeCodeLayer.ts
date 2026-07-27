@@ -27,6 +27,8 @@ import { buildSpawnTarget, resolveTrustedCommand } from '../utils/processUtils.j
 export class ClaudeCodeLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private claudePath?: string;
+  /** Where the caller says Claude Code is, if anywhere. Tried before the defaults. */
+  private readonly configuredPath: string | undefined;
   private isInitialized = false;
   private isLightweightInitialized = false; // Fast initialization for simple tasks
   private lastAuthCheck = 0; // Timestamp of last auth verification
@@ -34,8 +36,14 @@ export class ClaudeCodeLayer implements LayerInterface {
   private readonly DEFAULT_TIMEOUT = 300000; // 5 minutes
   private readonly MAX_RETRIES = 3;
 
-  constructor() {
+  /**
+   * @param codePath config.claude.code_path, when the caller has a config to
+   *   hand. Takes precedence over CLAUDE_CODE_PATH; both are still subject to
+   *   the trust check, so neither is a way past it.
+   */
+  constructor(codePath?: string) {
     this.authVerifier = new AuthVerifier();
+    this.configuredPath = codePath?.trim() || undefined;
   }
 
   /**
@@ -536,14 +544,28 @@ export class ClaudeCodeLayer implements LayerInterface {
    * can be exercised from a Windows or Linux test run. There is no darwin
    * branch: macOS follows the same list as Linux, which makes /opt/homebrew the
    * only Mac-specific entry and the only one another OS can check.
+   *
+   * An explicitly configured path goes first, then CLAUDE_CODE_PATH. Both were
+   * previously ignored: .env.example advertises CLAUDE_CODE_PATH and
+   * ConfigSchema carries claude.code_path, but this list was a fixed literal,
+   * so an install outside these locations was simply unreachable however it
+   * was declared. Order is the whole mechanism -- each candidate still has to
+   * survive resolveTrustedCommand, so naming one cannot reach a binary the
+   * defaults would have refused.
    */
   static claudeCandidatePaths(
     platform: NodeJS.Platform = process.platform,
-    env: NodeJS.ProcessEnv = process.env
+    env: NodeJS.ProcessEnv = process.env,
+    configured?: string
   ): string[] {
     const appDataPath = env.APPDATA ?? '';
+    // Blank or whitespace-only means "unset", not "look for a file named ''".
+    const preferred = [configured, env.CLAUDE_CODE_PATH]
+      .map(value => value?.trim())
+      .filter((value): value is string => value !== undefined && value !== '');
 
-    return [
+    return [...new Set([
+      ...preferred,
       'claude',
       'claude-original',
       // Windows paths (npm global install location)
@@ -557,14 +579,18 @@ export class ClaudeCodeLayer implements LayerInterface {
       '/usr/local/bin/claude-original',
       '/opt/homebrew/bin/claude',
       '/opt/homebrew/bin/claude-original',
-    ];
+    ])];
   }
 
   /**
    * Find Claude Code executable path
    */
   private async findClaudeCodePath(): Promise<string | undefined> {
-    const possiblePaths = ClaudeCodeLayer.claudeCandidatePaths();
+    const possiblePaths = ClaudeCodeLayer.claudeCandidatePaths(
+      process.platform,
+      process.env,
+      this.configuredPath
+    );
 
     for (const path of possiblePaths) {
       try {
