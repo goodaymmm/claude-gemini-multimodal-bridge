@@ -68,6 +68,53 @@ export const FileReferenceSchema = z.object({
 });
 export type FileReference = z.infer<typeof FileReferenceSchema>;
 
+/**
+ * Every file a task refers to, whichever key it used.
+ *
+ * The codebase names the same thing two ways: multimodal work carries `files`
+ * as FileReference objects, document analysis passes `documents` as bare path
+ * strings. Nearly every guard and router read only `files`, so a
+ * `documents`-carrying task was treated as text -- routed to layers that cannot
+ * read files, passed through the search layer's file guard, and missed by the
+ * routing capability filter. Reading both here is what makes those checks agree.
+ *
+ * Bare strings are normalised to type 'document', which is what the document
+ * path means by construction.
+ */
+export function taskFileRefs(task: unknown): FileReference[] {
+  const source = task as { files?: unknown; documents?: unknown } | null | undefined;
+
+  const candidates: unknown[] = [
+    ...(Array.isArray(source?.files) ? source.files : []),
+    ...(Array.isArray(source?.documents) ? source.documents : []),
+  ];
+
+  const refs: FileReference[] = [];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string') {
+      if (candidate !== '') {
+        refs.push({ path: candidate, type: 'document' });
+      }
+      continue;
+    }
+
+    const path = (candidate as { path?: unknown } | null | undefined)?.path;
+    if (typeof path !== 'string' || path === '') {
+      continue;
+    }
+
+    const type = (candidate as { type?: unknown }).type;
+    refs.push({
+      ...(candidate as FileReference),
+      path,
+      type: isOneOf(FileTypeSchema.options, type) ? type : 'document',
+    });
+  }
+
+  return refs;
+}
+
 // Processing Options
 export const ProcessingOptionsSchema = z.object({
   layer_priority: z.enum(['claude', 'antigravity', 'gemini', 'aistudio', 'adaptive']).optional(),

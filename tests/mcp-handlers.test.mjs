@@ -15,7 +15,9 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { CGMBServer } from '../dist/core/CGMBServer.js';
-import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
+import { LayerManager } from '../dist/core/LayerManager.js';
+import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
+import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName, taskFileRefs } from '../dist/core/types.js';
 
 /**
  * A server whose layers are stubs.
@@ -238,6 +240,91 @@ describe('credential files are refused through the MCP path too', () => {
     );
 
     assert.deepEqual(calls, [], 'no layer may be invoked for a private key');
+  });
+});
+
+describe('files and documents name the same thing', () => {
+  // The codebase carries file references under two keys: `files` for multimodal
+  // work, `documents` for document analysis. Every guard and router read only
+  // `files`, so a document-analysis task looked like plain text: it routed to
+  // layers that cannot read files, walked through the search layer's file
+  // guard, and the routing capability filter never fired. taskFileRefs is the
+  // single place both keys are read; these tests hold the callers to it.
+
+  const DOC = '/tmp/report.pdf';
+
+  it('collects both keys and normalises bare paths', () => {
+    assert.deepEqual(
+      taskFileRefs({ documents: [DOC] }),
+      [{ path: DOC, type: 'document' }],
+      'a bare path string becomes a document reference'
+    );
+
+    assert.deepEqual(
+      taskFileRefs({ files: [{ path: DOC, type: 'pdf' }] }),
+      [{ path: DOC, type: 'pdf' }],
+      'an existing type is preserved'
+    );
+
+    assert.equal(taskFileRefs({ files: [{ path: DOC }], documents: [DOC] }).length, 2);
+    assert.deepEqual(taskFileRefs({ prompt: 'hi' }), []);
+    assert.deepEqual(taskFileRefs(undefined), []);
+    assert.deepEqual(taskFileRefs({ documents: [''] }), [], 'empty paths are dropped');
+  });
+
+  it('makes routing see a documents-only task as carrying files', () => {
+    const manager = new LayerManager();
+
+    assert.equal(
+      manager.analyzeTask({ documents: [DOC], prompt: 'Summarise' }).hasFiles, true,
+      'documents must count as files for routing'
+    );
+
+    // Which in turn makes the capability filter fire: nothing but AI Studio can
+    // read them, so a failed AI Studio leaves no usable fallback.
+    assert.deepEqual(
+      manager.getFallbackOrder('aistudio', { documents: [DOC], prompt: 'Summarise' }),
+      [],
+      'a documents-carrying task must not fall back to a layer that cannot read files'
+    );
+  });
+
+  it('makes the search layer refuse a documents-only task', async () => {
+    const layer = new AntigravityCLILayer();
+
+    await assert.rejects(
+      () => layer.execute({ type: 'multimodal', prompt: 'Summarise', documents: [DOC] }),
+      /cannot process files/i,
+      'reading only task.files let this straight past the guard'
+    );
+  });
+
+  it('routes document analysis to AI Studio with the paths and instructions intact', async () => {
+    const server = makeServer();
+
+    await server.handleDocumentAnalysis({
+      documents: [DOC],
+      analysis_type: 'summary',
+      output_requirements: 'One sentence.',
+    });
+
+    const aistudio = server.stubCalls.find(c => c.layer === 'aistudio');
+    assert.ok(aistudio, 'the AI Studio layer must be reached');
+    assert.equal(aistudio.task.action, 'process_documents');
+    assert.deepEqual(aistudio.task.documents, [DOC], 'the paths must survive routing');
+
+    // Without this the request reached the model with nothing to ask, and the
+    // answer came back "the document was not provided" -- as a success.
+    assert.ok(
+      typeof aistudio.task.instructions === 'string' && aistudio.task.instructions.trim() !== '',
+      'instructions must not be empty'
+    );
+
+    // And no step may be handed to a layer that cannot read the documents.
+    assert.deepEqual(
+      server.stubCalls.filter(c => c.layer === 'antigravity'), [],
+      'the search layer must not receive the document step'
+    );
   });
 });
 

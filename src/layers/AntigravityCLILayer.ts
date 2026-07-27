@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
-import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN } from '../core/types.js';
+import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN, taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
@@ -194,7 +194,12 @@ export class AntigravityCLILayer implements LayerInterface {
     // success. Passing paths cannot work either: agy runs in an empty scratch
     // directory with no access to the caller's files, by design. Failing here
     // is the honest outcome; file work belongs to the AI Studio layer.
-    if (task.files && task.files.length > 0) {
+    //
+    // taskFileRefs, not task.files: the document-analysis fallback arrives here
+    // with `documents` instead, and reading only `files` let it straight past
+    // this guard to be answered from the prompt alone.
+    const referencedFiles = taskFileRefs(task);
+    if (referencedFiles.length > 0) {
       throw new Error(
         'The Antigravity CLI layer cannot process files; it accepts a text prompt only. ' +
         'Use the AI Studio layer for documents and media (for example `cgmb analyze <file>`).'

@@ -26,6 +26,7 @@ import {
   MultimodalFile,
   MultimodalResult,
 } from '../core/types.js';
+import { taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
@@ -323,12 +324,20 @@ export class AIStudioLayer implements LayerInterface {
             break;
           case 'document_analysis':
           case 'document':
+          // The action LayerManager.analyzeDocuments actually emits. Without it
+          // the step fell through to processGeneral(), which reads task.files --
+          // empty here, because this path carries `documents` -- so the whole
+          // MCP document-analysis tool could not analyse anything.
+          case 'process_documents':
             logger.info('🔧 Processing document analysis in execute method', {
               hasFiles: !!(task.files || task.documents),
               fileCount: (task.files || task.documents || []).length,
               hasInstructions: !!task.instructions
             });
-            result = await this.analyzeDocuments(task.files || task.documents, task.instructions);
+            // taskFileRefs normalises both shapes. `documents` arrives as bare
+            // path strings, and analyzeDocuments below reads `.path` off each
+            // entry -- so passing them through raw produced undefined paths.
+            result = await this.analyzeDocuments(taskFileRefs(task), task.instructions);
             break;
           case 'image':
             result = await this.analyzeImage(task.imagePath || task.files?.[0]?.path, task.analysisType || 'detailed');

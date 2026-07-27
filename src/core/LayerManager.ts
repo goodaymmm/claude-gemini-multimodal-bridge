@@ -17,6 +17,7 @@ import {
   WorkflowType,
   WorkloadAnalysis,
 } from './types.js';
+import { taskFileRefs } from './types.js';
 import { normalizeLayerName } from './types.js';
 
 /**
@@ -47,27 +48,13 @@ const CREDENTIAL_FILE_PATTERNS = [
 /**
  * Refuse a task that names anything credential-shaped.
  *
- * Both keys are inspected because the codebase uses both: multimodal work
- * carries `files` as FileReference objects, while document analysis passes
- * `documents` as bare path strings. Checking only `files` left the whole
- * analysis path unguarded -- `cgmb_document_analysis` with a .env reached the
- * layers untouched.
+ * Goes through taskFileRefs so it sees both the `files` and `documents` keys --
+ * see that function for why the codebase has two.
  */
 export function assertNoCredentialFiles(task: unknown): void {
-  const source = task as { files?: unknown; documents?: unknown } | null | undefined;
-  const named: unknown[] = [
-    ...(Array.isArray(source?.files) ? source.files : []),
-    ...(Array.isArray(source?.documents) ? source.documents : []),
-  ];
-
-  for (const file of named) {
-    const filePath = typeof file === 'string' ? file : (file as { path?: unknown })?.path;
-    if (typeof filePath !== 'string' || filePath === '') {
-      continue;
-    }
-
+  for (const file of taskFileRefs(task)) {
     // basename() handles both separators, so no path parsing is needed here.
-    const name = basename(filePath);
+    const name = basename(file.path);
     if (CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(name))) {
       throw new CGMBError(
         `Refusing to process ${name}: it matches a credential file pattern, and the AI Studio ` +
@@ -310,8 +297,13 @@ export class LayerManager {
    */
   public analyzeTask(task: any, userPreferredLayer?: LayerType): TaskAnalysis {
     const prompt = task.prompt || task.request || task.input || '';
-    const files = task.files || [];
-    
+
+    // Both keys, not just `files`. A document-analysis task carries `documents`,
+    // so hasFiles was false for it: routing treated it as text, and the
+    // capability filter in getFallbackOrder never fired -- which is how a
+    // file-carrying request reached layers that cannot read files.
+    const files = taskFileRefs(task);
+
     // Analyze file types and complexity
     const fileTypes = files.map((f: FileReference) => f.type || this.detectFileType(f.path));
     const hasFiles = files.length > 0;
@@ -931,6 +923,11 @@ export class LayerManager {
           input: {
             documents,
             analysisType,
+            // The AI Studio layer reads `instructions` for this action. Without
+            // it the request reached the model with nothing to ask.
+            instructions: outputRequirements?.trim()
+              ? outputRequirements
+              : `Perform a ${analysisType} analysis of the attached documents.`,
           },
           dependsOn: ['preprocess'],
         },
@@ -1390,8 +1387,11 @@ export class LayerManager {
     // Failing loudly here surfaces the real problem (AI Studio was unavailable)
     // instead of substituting a fluent, unfounded answer.
     const fallbackLayer = normalizeLayerName(String(strategy.with.layer));
-    const stepFiles = (failedStep.input as { files?: unknown } | undefined)?.files;
-    if (fallbackLayer === 'antigravity' && Array.isArray(stepFiles) && stepFiles.length > 0) {
+    // taskFileRefs so a step carrying `documents` counts too -- the
+    // document-analysis workflow uses that key, and reading only `files` let its
+    // fallback route to the search layer.
+    const stepFiles = taskFileRefs(failedStep.input);
+    if (fallbackLayer === 'antigravity' && stepFiles.length > 0) {
       throw new CGMBError(
         `Step ${failedStep.id} carries files and cannot fall back to the Antigravity CLI layer, ` +
         `which accepts a text prompt only. The AI Studio layer is required for file processing. ` +
