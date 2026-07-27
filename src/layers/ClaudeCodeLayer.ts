@@ -407,7 +407,13 @@ export class ClaudeCodeLayer implements LayerInterface {
       // there is nothing left to escape and the class of bug cannot recur.
       // `--print` makes the headless single-answer mode explicit rather than
       // depending on a CLI default.
-      const target = buildSpawnTarget(this.claudePath!, ['--print']);
+      // Checked rather than asserted: claudePath is optional and set during
+      // initialize(), so an execution path that skipped it would otherwise
+      // reach buildSpawnTarget with undefined and fail obscurely.
+      if (!this.claudePath) {
+        throw new Error('Claude Code path has not been resolved; call initialize() first.');
+      }
+      const target = buildSpawnTarget(this.claudePath, ['--print']);
 
       const child = spawn(target.file, target.args, {
         // stdin is a pipe we write and immediately close. It must not be left
@@ -594,7 +600,10 @@ export class ClaudeCodeLayer implements LayerInterface {
     // the name a second time -- so a candidate the trust check had rejected
     // could be selected here instead, during initialization.
     const probe = (args: string[], timeout: number): string => {
-      const target = buildSpawnTarget(this.claudePath!, args);
+      if (!this.claudePath) {
+        throw new Error('Claude Code path has not been resolved; call initialize() first.');
+      }
+      const target = buildSpawnTarget(this.claudePath, args);
       return execFileSync(target.file, target.args, {
         timeout,
         encoding: 'utf8',

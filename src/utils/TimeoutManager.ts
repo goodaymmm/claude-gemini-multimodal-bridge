@@ -49,11 +49,14 @@ export class TimeoutManager {
 
     try {
       // Set up warning timeout (at 70% of total timeout)
-      if (options.onWarning) {
+      const onWarning = options.onWarning;
+      if (onWarning) {
+        // Captured before the timer: narrowing an object property does not
+        // survive into a callback, which is why this needed an assertion.
         const warningTime = Math.round(finalTimeout * 0.7);
         warningTimeoutId = setTimeout(() => {
           const elapsed = Date.now() - startTime;
-          options.onWarning!(elapsed);
+          onWarning(elapsed);
         }, warningTime);
       }
 

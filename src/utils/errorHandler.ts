@@ -35,7 +35,7 @@ export class ErrorHandler {
       // Handle maxAttempts alias
       maxRetries: options.maxAttempts || options.maxRetries || this.defaultRetryOptions.maxRetries
     };
-    let lastError: Error;
+    let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
       try {
@@ -72,7 +72,13 @@ export class ErrorHandler {
       }
     }
 
-    throw lastError!;
+    // Reached only when the loop body never ran, i.e. maxRetries below zero.
+    // `throw lastError!` threw `undefined` there, which surfaces as an
+    // unhelpful "undefined is not an error" far from the actual mistake.
+    throw lastError ?? new CGMBError(
+      `retry() was given maxRetries=${opts.maxRetries}, so the operation was never attempted`,
+      'INVALID_RETRY_OPTIONS'
+    );
   }
 
   /**
@@ -226,9 +232,12 @@ export class ErrorHandler {
       strategiesCount: recoveryStrategies.length,
     });
 
-    for (let i = 0; i < recoveryStrategies.length; i++) {
+    // entries() yields the function itself, so there is nothing to assert
+    // away: indexing under noUncheckedIndexedAccess produced a possibly-undefined
+    // value that the code then insisted was defined.
+    for (const [i, strategy] of recoveryStrategies.entries()) {
       try {
-        const result = await recoveryStrategies[i]!();
+        const result = await strategy();
         logger.info(`Recovery successful using strategy ${i + 1}`);
         return result;
       } catch (recoveryError) {

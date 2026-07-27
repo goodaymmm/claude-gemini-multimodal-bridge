@@ -1269,7 +1269,10 @@ To retrieve this file, use:
         await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
         waitTime += 2000;
         
-        file = await this.genAI.files.get({ name: file.name! });
+        if (!file.name) {
+          throw new Error('The uploaded file has no name; cannot poll its processing state.');
+        }
+        file = await this.genAI.files.get({ name: file.name });
         console.error(`PDF processing state: ${file.state}`);
       }
       
@@ -1321,7 +1324,10 @@ To retrieve this file, use:
         await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
         waitTime += 2000;
         
-        file = await this.genAI.files.get({ name: file.name! });
+        if (!file.name) {
+          throw new Error('The uploaded file has no name; cannot poll its processing state.');
+        }
+        file = await this.genAI.files.get({ name: file.name });
         console.error(`PDF URL processing state: ${file.state}`);
       }
       

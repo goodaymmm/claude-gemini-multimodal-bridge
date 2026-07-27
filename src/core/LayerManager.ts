@@ -241,9 +241,11 @@ export class LayerManager {
       this.aiStudioLayerPromise = (async () => {
         if (!this.aiStudioLayer) {
           logger.info('Async initializing AI Studio layer');
-          // Ensure Antigravity layer is initialized first (needed for translation)
-          await this.getAntigravityLayerAsync();
-          this.aiStudioLayer = new AIStudioLayer(this.antigravityLayer!);
+          // Ensure Antigravity layer is initialized first (needed for translation).
+          // Use what the getter returns rather than re-reading the field and
+          // asserting it: the getter is what guarantees the layer exists.
+          const antigravity = await this.getAntigravityLayerAsync();
+          this.aiStudioLayer = new AIStudioLayer(antigravity);
         }
         if (!this.layerInitialized.aistudio) {
           await this.aiStudioLayer.initialize();
@@ -1316,9 +1318,10 @@ export class LayerManager {
 
     // Execute high-priority steps first
     for (const [_priority, steps] of Object.entries(stepGroups)) {
-      if (steps.length === 1) {
+      const [first] = steps;
+      if (steps.length === 1 && first) {
         // Single step - execute directly
-        const step = steps[0]!;
+        const step = first;
         const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
         const result = await this.executeStep(step, stepInput, options);
         results[step.id] = result;
@@ -1722,7 +1725,11 @@ export class LayerManager {
     steps: WorkflowStep[],
     analysis: WorkloadAnalysis
   ): Record<string, WorkflowStep[]> {
-    const groups: Record<string, WorkflowStep[]> = {
+    // Typed by its exact keys rather than Record<string, ...>. With an index
+    // signature, noUncheckedIndexedAccess makes every lookup possibly-undefined,
+    // which is why each push needed an assertion -- even though the three keys
+    // are initialised right here.
+    const groups: { high: WorkflowStep[]; medium: WorkflowStep[]; low: WorkflowStep[] } = {
       high: [],
       medium: [],
       low: [],
@@ -1730,11 +1737,11 @@ export class LayerManager {
 
     steps.forEach(step => {
       if (step.layer === analysis.recommendedLayer) {
-        groups.high!.push(step);
+        groups.high.push(step);
       } else if (step.layer === 'claude') {
-        groups.medium!.push(step);
+        groups.medium.push(step);
       } else {
-        groups.low!.push(step);
+        groups.low.push(step);
       }
     });
 
@@ -1752,7 +1759,12 @@ export class LayerManager {
       if (typeof value === 'string' && value.startsWith('@')) {
         // Reference to another step's output
         const [stepId, ...pathParts] = value.slice(1).split('.');
-        const stepOutput = stepOutputs[stepId!];
+        // split() always yields at least one element, but the type does not say
+        // so; check rather than assert, and skip a reference with no step name.
+        if (stepId === undefined || stepId === '') {
+          continue;
+        }
+        const stepOutput = stepOutputs[stepId];
 
         if (stepOutput) {
           // Check if the step result is a failed LayerResult (has success: false)
