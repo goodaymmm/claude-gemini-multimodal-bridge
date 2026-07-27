@@ -7,6 +7,7 @@ import {
   WorkflowResult,
   WorkflowStep,
 } from '../core/types.js';
+import { defaultLayerConfig } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
 import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
@@ -32,13 +33,7 @@ export class WorkflowOrchestrator {
 
   constructor(config?: any) {
     // Create default config if not provided
-    const defaultConfig = {
-      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-      claude: { code_path: 'claude', timeout: 300000 },
-      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
-      cache: { enabled: true, ttl: 3600 },
-      logging: { level: 'info' as const },
-    };
+    const defaultConfig = defaultLayerConfig();
     
     this.layerManager = new LayerManager(config || defaultConfig);
     this.claudeLayer = new ClaudeCodeLayer();

@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
-import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, isOneOf } from './core/types.js';
+import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
@@ -1770,13 +1770,7 @@ program
           console.log('');
           
           // Use LayerManager with AI Studio layer for PDF URL processing
-          const layerManager = new LayerManager({
-            gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-            claude: { code_path: 'claude', timeout: 300000 },
-            aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
-            cache: { enabled: true, ttl: 3600 },
-            logging: { level: 'info' as const }
-          });
+          const layerManager = new LayerManager(defaultLayerConfig());
           
           try {
             await layerManager.initializeLayers();

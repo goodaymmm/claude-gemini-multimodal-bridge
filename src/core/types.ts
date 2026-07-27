@@ -278,6 +278,15 @@ export interface ToolResult {
 
 // Configuration
 export const ConfigSchema = z.object({
+  /**
+   * Search-layer settings, kept under the pre-rename key.
+   *
+   * Nothing reads `model` or `api_key`: the Antigravity CLI authenticates over
+   * OAuth and picks its model from ANTIGRAVITY_MODEL, so neither field reaches
+   * a request. They stay because Config is a public type -- callers construct
+   * `new LayerManager(config)` -- and dropping required fields would break
+   * them. Treat the values as inert.
+   */
   gemini: z.object({
     api_key: z.string(),
     model: z.string().default('gemini-2.5-pro'),
@@ -304,6 +313,27 @@ export const ConfigSchema = z.object({
   }),
 });
 export type Config = z.infer<typeof ConfigSchema>;
+
+/**
+ * The config a tool uses when it constructs its own LayerManager.
+ *
+ * Five call sites -- cli, ClaudeProxy, documentAnalysis, multimodalProcess and
+ * workflowOrchestrator -- each carried a byte-identical copy of this literal,
+ * including a hardcoded model string. Nothing reads that string, so the copies
+ * could drift from reality without anyone noticing, while looking authoritative
+ * enough to send someone editing them when a model needed changing.
+ */
+export function defaultLayerConfig(): Config {
+  return ConfigSchema.parse({
+    // Inert; see the ConfigSchema comment. Named through AI_MODELS anyway so a
+    // reader is not left wondering whether this string is live.
+    gemini: { api_key: '', model: AI_MODELS.GEMINI_FLASH },
+    claude: { code_path: 'claude' },
+    aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
+    cache: { enabled: true, ttl: 3600 },
+    logging: { level: 'info' as const },
+  });
+}
 
 // Error Types
 export class CGMBError extends Error {

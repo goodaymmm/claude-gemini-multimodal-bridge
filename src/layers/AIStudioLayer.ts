@@ -387,7 +387,9 @@ export class AIStudioLayer implements LayerInterface {
             duration,
             tokens_used: this.estimateTokensUsed(task, result),
             cost: this.calculateCost(task, result),
-            model: 'gemini-2.5-pro',
+            // The layer default, not necessarily what this action used:
+            // generation and TTS dispatch to their own models above.
+            model: AI_MODELS.MULTIMODAL_DEFAULT,
           },
         };
       },

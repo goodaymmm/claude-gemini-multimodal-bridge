@@ -9,7 +9,7 @@ import {
   WorkflowResult,
   WorkflowType,
 } from '../core/types.js';
-import { isOneOf } from '../core/types.js';
+import { defaultLayerConfig, isOneOf } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -37,13 +37,7 @@ export class MultimodalProcess {
 
   constructor(config?: any) {
     // Create default config if not provided
-    const defaultConfig = {
-      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-      claude: { code_path: 'claude', timeout: 300000 },
-      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
-      cache: { enabled: true, ttl: 3600 },
-      logging: { level: 'info' as const },
-    };
+    const defaultConfig = defaultLayerConfig();
     
     this.layerManager = new LayerManager(config || defaultConfig);
     this.authVerifier = new AuthVerifier();

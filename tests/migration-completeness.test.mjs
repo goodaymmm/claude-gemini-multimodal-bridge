@@ -19,7 +19,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { LayerManager } from '../dist/core/LayerManager.js';
-import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
+import { AI_MODELS, ConfigSchema, LayerTypeSchema, TargetLayerSchema, defaultLayerConfig, normalizeLayerName } from '../dist/core/types.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = join(HERE, '..', 'src');
@@ -71,6 +71,40 @@ describe('the internal rename is complete', () => {
 
     const importers = sourceFiles().filter(f => /from '.*workflows\//.test(readFileSync(f, 'utf8')));
     assert.deepEqual(importers.map(rel), []);
+  });
+});
+
+describe('the default layer config lives in one place', () => {
+  // Five call sites each carried a byte-identical copy of this literal,
+  // including a hardcoded model string that nothing reads. Copies that look
+  // authoritative but are inert send people editing the wrong thing.
+
+  it('produces a config the schema accepts', () => {
+    const config = defaultLayerConfig();
+
+    assert.doesNotThrow(() => ConfigSchema.parse(config));
+    assert.equal(typeof config.claude.code_path, 'string');
+    assert.equal(config.aistudio.enabled, true);
+  });
+
+  it('names the search model through AI_MODELS rather than a literal', () => {
+    assert.equal(defaultLayerConfig().gemini.model, AI_MODELS.GEMINI_FLASH);
+  });
+
+  it('has no copy of the old literal left in src', () => {
+    const offenders = [];
+
+    for (const file of sourceFiles()) {
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.includes("'gemini-2.5-pro'")) { continue; }
+        // The schema's own default and comments explaining the history are
+        // fine; a duplicated config literal is not.
+        if (/^\s*(\/\/|\*|\/\*)/.test(line) || /z\.string\(\)\.default/.test(line)) { continue; }
+        offenders.push(`${rel(file)}: ${line.trim().slice(0, 80)}`);
+      }
+    }
+
+    assert.deepEqual(offenders, [], `duplicated model literal:\n${offenders.join('\n')}`);
   });
 });
 
