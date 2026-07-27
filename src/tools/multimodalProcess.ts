@@ -9,6 +9,7 @@ import {
   WorkflowResult,
   WorkflowType,
 } from '../core/types.js';
+import { isOneOf } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -568,8 +569,8 @@ export class MultimodalProcess {
     const layers = new Set<typeof validLayers[number]>();
     
     Object.values(result.results).forEach(layerResult => {
-      if (layerResult.metadata?.layer && validLayers.includes(layerResult.metadata.layer as any)) {
-        layers.add(layerResult.metadata.layer as any);
+      if (isOneOf(validLayers, layerResult.metadata?.layer)) {
+        layers.add(layerResult.metadata.layer);
       }
     });
     
@@ -592,8 +593,8 @@ export class MultimodalProcess {
     const validLayers = ['claude', 'antigravity', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
     const layers = new Set<typeof validLayers[number]>();
     
-    if (result.metadata?.layer && validLayers.includes(result.metadata.layer as any)) {
-      layers.add(result.metadata.layer as any);
+    if (isOneOf(validLayers, result.metadata?.layer)) {
+      layers.add(result.metadata.layer);
     }
     
     // Check for nested results indicating multiple layers

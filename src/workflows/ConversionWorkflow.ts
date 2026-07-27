@@ -5,6 +5,7 @@ import {
   WorkflowDefinition,
   WorkflowResult,
 } from '../core/types.js';
+import { isOneOf } from '../core/types.js';
 import { MultimodalProcess } from '../tools/multimodalProcess.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
@@ -323,13 +324,13 @@ export class ConversionWorkflow extends BaseWorkflow {
       normalizedTarget = '.' + normalizedTarget;
     }
 
-    if (!supported.to.includes(normalizedTarget as any)) {
+    if (!isOneOf(supported.to, normalizedTarget)) {
       throw new Error(`Unsupported target format for ${conversionType}: ${targetFormat}`);
     }
 
     for (const file of files) {
       const ext = path.extname(file.path).toLowerCase();
-      if (!supported.from.includes(ext as any)) {
+      if (!isOneOf(supported.from, ext)) {
         throw new Error(`Unsupported source format for ${conversionType}: ${file.path}`);
       }
     }

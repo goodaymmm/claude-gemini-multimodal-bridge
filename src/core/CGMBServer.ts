@@ -31,6 +31,8 @@ import {
 } from './types.js';
 import { normalizeLayerName } from './types.js';
 import { Config, ConfigSchema } from './types.js';
+import { isOneOf } from './types.js';
+import { LegacyCGMBRequestSchema, ProcessingOptions } from './types.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -867,21 +869,36 @@ export class CGMBServer {
    * Parse enhanced CGMB request
    */
   private parseEnhancedRequest(args: unknown): EnhancedCGMBRequest {
-    try {
-      return EnhancedCGMBRequestSchema.parse(args);
-    } catch (error) {
-      // Fallback for backward compatibility
-      logger.debug('Failed to parse as enhanced request, using basic format');
-      const basicArgs = args as any;
-      return {
-        prompt: basicArgs.prompt || '',
-        targetLayer: undefined,
-        preformatted: false,
-        formattedData: undefined,
-        files: basicArgs.files || [],
-        options: basicArgs.options || {}
-      };
+    const enhanced = EnhancedCGMBRequestSchema.safeParse(args);
+    if (enhanced.success) {
+      return enhanced.data;
     }
+
+    // Fall back to the older request shape -- but still validate it.
+    //
+    // This used to cast to `any` and read the fields off directly, so anything
+    // that failed the schema above was passed on completely unchecked: `files`
+    // could be a bare string or objects without a path, and the problem only
+    // surfaced deep in a layer as an unrelated error. The legacy schema keeps
+    // the compatibility while rejecting shapes nothing downstream can use.
+    logger.debug('Failed to parse as enhanced request, trying the legacy shape');
+
+    const legacy = LegacyCGMBRequestSchema.safeParse(args);
+    if (!legacy.success) {
+      throw new CGMBError(
+        `Invalid CGMB request: ${legacy.error.message}`,
+        'INVALID_REQUEST'
+      );
+    }
+
+    return {
+      prompt: legacy.data.prompt ?? '',
+      targetLayer: undefined,
+      preformatted: false,
+      formattedData: undefined,
+      files: legacy.data.files ?? [],
+      options: legacy.data.options ?? {}
+    };
   }
 
   /**
@@ -951,8 +968,17 @@ export class CGMBServer {
       throw new Error('Invalid arguments: prompt is required');
     }
     
-    const { prompt, files = [], options = {}, workingDirectory } = args as any;
-    
+    // Read off `unknown` rather than casting the whole object to `any`. The
+    // runtime checks below were already doing the real work; the cast only
+    // stopped the compiler from noticing that `prompt` might not be a string.
+    const source = args as Record<string, unknown>;
+    const prompt = source.prompt;
+    const files = source.files ?? [];
+    const options = (source.options ?? {}) as ProcessingOptions;
+    const workingDirectory = typeof source.workingDirectory === 'string'
+      ? source.workingDirectory
+      : undefined;
+
     if (typeof prompt !== 'string' || !prompt.trim()) {
       throw new Error('Invalid prompt: must be a non-empty string');
     }
@@ -1568,7 +1594,7 @@ Failed steps: ${result.metadata.steps_failed}`
     const lowerLevel = level.toLowerCase();
     if (lowerLevel === 'verbose') {return 'debug';}
 
-    return validLevels.includes(lowerLevel as any) ? lowerLevel as any : 'info';
+    return isOneOf(validLevels, lowerLevel) ? lowerLevel : 'info';
   }
 
   /**

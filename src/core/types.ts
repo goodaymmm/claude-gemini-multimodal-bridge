@@ -21,6 +21,20 @@ export const TargetLayerSchema = z.enum(['antigravity', 'gemini', 'aistudio', 'a
 export type TargetLayer = z.infer<typeof TargetLayerSchema>;
 
 /**
+ * Narrow an unknown value to one of a literal union, by membership.
+ *
+ * `union.includes(value)` does not typecheck when `value` is wider than the
+ * union, and the usual escape was `includes(value as any)` followed by a second
+ * `as any` to store the result. Both casts silence the checker rather than
+ * satisfying it: nothing then stops an unrelated string from being written into
+ * a field typed as the union. This does the check the casts were standing in
+ * for, and narrows on the way out.
+ */
+export function isOneOf<T extends string>(union: readonly T[], value: unknown): value is T {
+  return typeof value === 'string' && (union as readonly string[]).includes(value);
+}
+
+/**
  * Map the deprecated 'gemini' layer name onto its canonical replacement.
  *
  * Accepts an arbitrary string so it can sit directly on untrusted MCP input;
@@ -394,6 +408,25 @@ export const EnhancedCGMBRequestSchema = z.object({
   options: ProcessingOptionsSchema.optional()
 });
 export type EnhancedCGMBRequest = z.infer<typeof EnhancedCGMBRequestSchema>;
+
+/**
+ * Older clients that predate the enhanced request shape.
+ *
+ * Everything is optional -- that is the whole point of the fallback -- but the
+ * fields that are present still have to be the right shape. The previous
+ * fallback cast the arguments to `any` and read `files` straight off them, so a
+ * request that failed the schema above was handed on entirely unvalidated:
+ * `files` could be a string, a number, or objects with no path at all, and the
+ * failure surfaced somewhere further down as a confusing type error.
+ *
+ * passthrough() keeps unknown keys rather than stripping them, so a newer
+ * client talking to this path does not silently lose fields.
+ */
+export const LegacyCGMBRequestSchema = z.object({
+  prompt: z.string().optional(),
+  files: z.array(FileReferenceSchema).optional(),
+  options: ProcessingOptionsSchema.optional(),
+}).passthrough();
 
 // ===================================
 // Media Generation Types and Schemas
