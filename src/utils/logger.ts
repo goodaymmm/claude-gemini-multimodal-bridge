@@ -108,23 +108,23 @@ class Logger {
     process.env.LOG_LEVEL = 'warn';
   }
 
-  public info(message: string, meta?: Record<string, any>): void {
+  public info(message: string, meta?: Record<string, unknown>): void {
     this.logger.info(message, meta);
   }
 
-  public error(message: string, error?: Error | Record<string, any>): void {
+  public error(message: string, error?: Error | Record<string, unknown>): void {
     this.logger.error(message, error);
   }
 
-  public warn(message: string, meta?: Record<string, any>): void {
+  public warn(message: string, meta?: Record<string, unknown>): void {
     this.logger.warn(message, meta);
   }
 
-  public debug(message: string, meta?: Record<string, any>): void {
+  public debug(message: string, meta?: Record<string, unknown>): void {
     this.logger.debug(message, meta);
   }
 
-  public verbose(message: string, meta?: Record<string, any>): void {
+  public verbose(message: string, meta?: Record<string, unknown>): void {
     this.logger.verbose(message, meta);
   }
 
@@ -134,7 +134,7 @@ class Logger {
     operation: string,
     duration: number,
     success: boolean,
-    meta?: Record<string, any>
+    meta?: Record<string, unknown>
   ): void {
     this.info(`Layer operation completed`, {
       layer,
@@ -148,7 +148,7 @@ class Logger {
   public workflowStep(
     stepId: string,
     status: 'started' | 'completed' | 'failed',
-    meta?: Record<string, any>
+    meta?: Record<string, unknown>
   ): void {
     this.info(`Workflow step ${status}`, {
       stepId,
@@ -162,7 +162,7 @@ class Logger {
     endpoint: string,
     duration: number,
     statusCode?: number,
-    meta?: Record<string, any>
+    meta?: Record<string, unknown>
   ): void {
     this.debug(`API call to ${service}`, {
       service,
@@ -176,7 +176,7 @@ class Logger {
   public performance(
     operation: string,
     duration: number,
-    meta?: Record<string, any>
+    meta?: Record<string, unknown>
   ): void {
     this.info(`Performance metric`, {
       operation,
@@ -188,7 +188,7 @@ class Logger {
   public security(
     event: string,
     level: 'low' | 'medium' | 'high',
-    meta?: Record<string, any>
+    meta?: Record<string, unknown>
   ): void {
     const logLevel = level === 'high' ? 'error' : level === 'medium' ? 'warn' : 'info';
     this.logger.log(logLevel, `Security event: ${event}`, {
@@ -212,7 +212,7 @@ class Logger {
     }
   }
 
-  public static getDebugStatus(): Record<string, any> {
+  public static getDebugStatus(): Record<string, unknown> {
     return {
       debugMode: process.env.CGMB_DEBUG === 'true',
       cliMode: process.env.CGMB_CLI_MODE === 'true',

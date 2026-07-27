@@ -543,7 +543,8 @@ Please extract the complete text content while maintaining readability and struc
   private convertPathsToFileRefs(documentPaths: string[]): FileReference[] {
     return documentPaths.map(path => ({
       path,
-      type: 'document' as any,
+      // 'document' is a member of FileType, so the cast was never needed.
+      type: 'document' as const,
       encoding: 'utf-8',
     }));
   }
@@ -567,7 +568,7 @@ Please extract the complete text content while maintaining readability and struc
           const processedDoc: FileReference = {
             ...doc,
             size: stats.size,
-            type: 'document' as any,
+            type: 'document' as const,
             encoding: doc.encoding || 'utf-8',
             // Add extracted content for PDFs
             content: preprocessed.content,

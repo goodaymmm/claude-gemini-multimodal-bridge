@@ -125,7 +125,7 @@ export class ClaudeProxy {
             id: `proxy-workflow-${Date.now()}`,
             steps: plan.layers.map((layer, index) => ({
               id: `step-${index}`,
-              layer: layer as any,
+              layer,
               action: this.getActionForLayer(layer, analysis),
               input: {
                 request: request.originalCommand,
@@ -364,6 +364,10 @@ export class ClaudeProxy {
    */
   private outputEnhancedResult(result: any, plan: EnhancementPlan): void {
     // Find the primary result (usually from the last successful layer)
+    // Same reasoning as CGMBServer's result probing: the block below reads
+    // several historical shapes off `data` to stay compatible with older
+    // layers, and the checks are the narrowing.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const layerResults = Object.values(result.results) as any[];
     const primaryResult = layerResults.find(r => r.success && r.data);
     

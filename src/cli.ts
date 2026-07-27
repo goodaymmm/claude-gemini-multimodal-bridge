@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
-import { DEFAULT_ANTIGRAVITY_MODEL } from './core/types.js';
+import { DEFAULT_ANTIGRAVITY_MODEL, isOneOf } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
@@ -290,8 +290,17 @@ program
       if (options.interactive) {
         authSucceeded = (await interactiveSetup.runAuthSetupWizard()).success;
       } else if (options.service) {
-        logger.info(`Setting up authentication for ${options.service}...`);
-        authSucceeded = (await interactiveSetup.setupServiceAuth(options.service as any)).success;
+        // The flag is free text, so check it against what setupServiceAuth
+        // accepts. `as any` let `--service nonsense` through to a switch that
+        // matched nothing and reported success.
+        const services = ['antigravity', 'gemini', 'aistudio', 'claude'] as const;
+        if (!isOneOf(services, options.service)) {
+          logger.error(`Unknown service "${options.service}". Expected one of: ${services.join(', ')}`);
+          process.exit(1);
+        }
+        const service = options.service;
+        logger.info(`Setting up authentication for ${service}...`);
+        authSucceeded = (await interactiveSetup.setupServiceAuth(service)).success;
       } else {
         logger.info('Running full authentication setup...');
         authSucceeded = (await interactiveSetup.runAuthSetupWizard()).success;
@@ -926,8 +935,20 @@ program
           process.exit(1);
         } finally {
           // Always release a partially initialized server.
-          if (server && typeof (server as any).cleanup === 'function') {
-            await (server as any).cleanup();
+          //
+          // This used to duck-type a `cleanup` method through `as any`.
+          // CGMBServer has no such method -- the teardown is stop() -- so the
+          // check was always false and nothing was ever released. Calling the
+          // real method, and not letting a teardown failure mask the original
+          // error that brought us into this block.
+          if (server) {
+            try {
+              await server.stop();
+            } catch (stopError) {
+              logger.debug('Server teardown after failed initialization also failed', {
+                error: (stopError as Error).message,
+              });
+            }
           }
         }
         
@@ -1304,7 +1325,9 @@ async function executeGeminiCommand(options: any) {
     
     if (result.metadata) {
       console.log('\n📊 Metadata:');
-      const metadata = result.metadata as any;
+      // Layers and tools report different metadata shapes, so name the fields
+      // this block prints rather than casting the whole object away.
+      const metadata = result.metadata as { duration?: number; processing_time?: number; model?: string; tokens_used?: number };
       console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
       console.log(`Model: ${metadata.model || 'N/A'}`);
       console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
@@ -1440,7 +1463,9 @@ program
       
       if (result.metadata) {
         console.log('\n📊 Metadata:');
-        const metadata = result.metadata as any;
+        // Layers and tools report different metadata shapes, so name the fields
+        // this block prints rather than casting the whole object away.
+        const metadata = result.metadata as { duration?: number; processing_time?: number; model?: string; tokens_used?: number };
         console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
         console.log(`Model: ${metadata.model || 'N/A'}`);
         console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);

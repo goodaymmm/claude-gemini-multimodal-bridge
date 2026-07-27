@@ -382,7 +382,10 @@ export class CapabilityDetector {
    * Clear capabilities cache
    */
   clearCache(): void {
-    this.capabilitiesCache = undefined as any;
+    // delete, not `= undefined`: exactOptionalPropertyTypes forbids assigning
+    // undefined to an optional property, which is what `undefined as any` was
+    // asserting past.
+    delete this.capabilitiesCache;
     logger.debug('Capabilities cache cleared');
   }
 

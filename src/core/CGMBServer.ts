@@ -1082,7 +1082,12 @@ Solutions:
           if (error instanceof Error && error.message.includes('not found')) {
             throw error; // Re-throw file not found errors with context
           }
-          logger.warn(`File path resolution error: ${filePath}`, error as Error);
+          // logger.warn takes a metadata bag, not an Error. Passing the Error
+          // straight in logged an object with no enumerable keys -- the message
+          // and stack were dropped.
+          logger.warn(`File path resolution error: ${filePath}`, {
+            error: (error as Error).message,
+          });
           throw new Error(`Invalid file path: ${filePath}`);
         }
       }
@@ -1286,6 +1291,14 @@ Solutions:
     }
     // 3. Results object format (from workflow with named steps)
     else if (result.results && typeof result.results === 'object' && !Array.isArray(result.results)) {
+      // Kept as any[] deliberately. The block below probes four different
+      // historical response shapes -- a string in `data`, an MCP content array
+      // under `data.content`, the same array directly on `content`, and a bare
+      // string `content` -- to stay compatible with older layers and MCP
+      // servers. Typing it would mean writing a union that describes every
+      // shape we no longer control, and narrowing at each of the probes; the
+      // checks are already the narrowing.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const resultValues = Object.values(result.results) as any[];
       if (resultValues.length > 0) {
         const firstResult = resultValues[0];
@@ -1525,7 +1538,7 @@ Failed steps: ${result.metadata.steps_failed}`
       );
 
     if (failures.length > 0) {
-      logger.warn('Some dependencies are not available:', failures);
+      logger.warn('Some dependencies are not available:', { failures });
       // Note: We continue with partial functionality rather than failing completely
     }
 
