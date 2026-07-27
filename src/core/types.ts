@@ -842,14 +842,30 @@ export type ResourceEstimate = z.infer<typeof ResourceEstimateSchema>;
 // AI Model Constants
 // ===================================
 
-// Model constants for consistency across the application
+/**
+ * Model IDs for the AI Studio (Gemini API) layer.
+ *
+ * The live catalogue is the only authority: `GET /v1beta/models` is what the
+ * API will actually accept, and a plausible-looking ID is not the same as an
+ * existing one. `gemini-2.0-flash-exp` sat in this codebase as a default for
+ * image and multimodal analysis long after Google shut the 2.0 Flash line
+ * down; it is absent from the catalogue, so every call that used the default
+ * would have been rejected.
+ *
+ * Choices below are the cheaper option wherever the newer generation is only
+ * an upgrade rather than a fix -- 2.5 Flash is current, has a free tier, and
+ * costs a fifth of 3.6 Flash on input.
+ */
 export const AI_MODELS = {
-  // Image generation - Gemini 2.5 Flash Image (default)
+  // Image generation. 2.5 Flash Image bills $0.039/image against $0.067 for
+  // 3.1 Flash Image, and both are current.
   IMAGE_GENERATION: 'gemini-2.5-flash-image',
-  IMAGE_GENERATION_PRO: 'gemini-3-pro-image-preview',
+  // The GA build of the same model the preview ID pointed at, at the same price.
+  IMAGE_GENERATION_PRO: 'gemini-3-pro-image',
 
-  // Audio generation - Gemini 2.5 Flash TTS
-  AUDIO_GENERATION: 'gemini-2.5-flash-preview-tts',
+  // Audio generation. The only TTS models Google publishes are previews; this
+  // is the generation its docs point at for speech.
+  AUDIO_GENERATION: 'gemini-3.1-flash-tts-preview',
 
   // General purpose models
   GEMINI_FLASH: 'gemini-2.5-flash',
@@ -858,6 +874,17 @@ export const AI_MODELS = {
 
   // Document processing model with 1M token context
   DOCUMENT_PROCESSING: 'gemini-2.5-flash',
+
+  /**
+   * Image and multimodal understanding.
+   *
+   * Replaces the `gemini-2.0-flash-exp` that was hardcoded at six call sites.
+   * Google's image-understanding guide demonstrates gemini-3.5-flash, but every
+   * Gemini model takes image input and 2.5 Flash costs $0.30/$2.50 against
+   * $1.50/$9.00 -- so the fix here is removing a model that no longer exists,
+   * not moving generation.
+   */
+  MULTIMODAL_ANALYSIS: 'gemini-2.5-flash',
 
   // Default multimodal model
   MULTIMODAL_DEFAULT: 'gemini-2.5-flash'

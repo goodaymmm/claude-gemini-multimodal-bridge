@@ -133,7 +133,7 @@ const GenerateImageSchema = z.object({
 const AnalyzeImageSchema = z.object({
   imagePath: z.string(),
   prompt: z.string().optional().default('Analyze this image and describe what you see'),
-  model: z.string().optional().default('gemini-2.0-flash-exp')
+  model: z.string().optional().default(AI_MODELS.MULTIMODAL_ANALYSIS)
 });
 
 const MultimodalProcessSchema = z.object({
@@ -142,7 +142,7 @@ const MultimodalProcessSchema = z.object({
     type: z.string()
   })),
   instructions: z.string(),
-  model: z.string().optional().default('gemini-2.0-flash-exp')
+  model: z.string().optional().default(AI_MODELS.MULTIMODAL_ANALYSIS)
 });
 
 const GetGeneratedFileSchema = z.object({
@@ -283,7 +283,7 @@ class AIStudioMCPServer {
                 model: {
                   type: 'string',
                   description: 'Gemini model to use for analysis',
-                  default: 'gemini-2.0-flash-exp'
+                  default: AI_MODELS.MULTIMODAL_ANALYSIS
                 }
               },
               required: ['imagePath']
@@ -314,7 +314,7 @@ class AIStudioMCPServer {
                 model: {
                   type: 'string',
                   description: 'Gemini model to use',
-                  default: 'gemini-2.0-flash-exp'
+                  default: AI_MODELS.MULTIMODAL_ANALYSIS
                 }
               },
               required: ['files', 'instructions']

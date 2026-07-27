@@ -34,6 +34,7 @@ import { Config, ConfigSchema } from './types.js';
 import { isOneOf } from './types.js';
 import { LegacyCGMBRequestSchema, ProcessingOptions } from './types.js';
 import { pickFinalResultText } from '../utils/workflowUtils.js';
+import { AI_MODELS } from './types.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -523,7 +524,7 @@ export class CGMBServer {
         example: {
           apiData: {
             prompt: 'Analyze this document and extract key points',
-            model: 'gemini-2.0-flash-exp',
+            model: AI_MODELS.MULTIMODAL_ANALYSIS,
             generationConfig: {
               temperature: 0.7,
               maxOutputTokens: 16384

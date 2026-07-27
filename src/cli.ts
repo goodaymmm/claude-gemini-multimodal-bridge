@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
-import { DEFAULT_ANTIGRAVITY_MODEL, isOneOf } from './core/types.js';
+import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, isOneOf } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
@@ -1352,7 +1352,7 @@ program
   .description('⚠️  ADVANCED: Direct AI Studio access (use cgmb analyze instead for documents)')
   .option('-p, --prompt <text>', 'Prompt for AI Studio')
   .option('-f, --files <paths...>', 'Files to process (images, documents, etc.)')
-  .option('-m, --model <model>', 'AI Studio model to use', 'gemini-2.0-flash-exp')
+  .option('-m, --model <model>', 'AI Studio model to use', AI_MODELS.MULTIMODAL_ANALYSIS)
   .action(async (options) => {
     try {
       if (!options.prompt) {
