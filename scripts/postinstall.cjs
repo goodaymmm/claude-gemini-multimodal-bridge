@@ -5,7 +5,7 @@
  * Automatically installs required dependencies and sets up integrations
  */
 
-const { execFileSync, execSync, spawn } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -48,85 +48,35 @@ function commandExists(command) {
 }
 
 // Install package with error handling
-async function installPackage(packageName, description) {
-  log(`Installing ${description}...`);
-  
-  return new Promise((resolve) => {
-    const child = spawn('npm', ['install', '-g', packageName], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    
-    let output = '';
-    let errorOutput = '';
-    
-    child.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-    
-    child.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-    
-    child.on('close', (code) => {
-      if (code === 0) {
-        log(`✅ ${description} installed successfully`, 'success');
-        resolve(true);
-      } else {
-        // Check if it's just a warning (package already exists)
-        if (errorOutput.includes('EEXIST') || errorOutput.includes('already exists')) {
-          log(`✅ ${description} already installed`, 'success');
-          resolve(true);
-        } else {
-          log(`⚠️ Failed to install ${description}: ${errorOutput.trim()}`, 'warning');
-          log(`📋 You can install it manually: npm install -g ${packageName}`, 'info');
-          resolve(false);
-        }
-      }
-    });
-    
-    // Handle installation timeout (60 seconds)
-    setTimeout(() => {
-      child.kill('SIGTERM');
-      log(`⏰ Installation of ${description} timed out`, 'warning');
-      log(`📋 You can install it manually: npm install -g ${packageName}`, 'info');
-      resolve(false);
-    }, 60000);
-  });
-}
+// installPackage() lived here and did `spawn('npm', ['install','-g',...])` with
+// no 'error' listener. On Windows npm is npm.cmd, which spawn cannot launch
+// without a shell, so it raised ENOENT -- and an unhandled 'error' event took
+// the whole postinstall down with it. That is what made `npm link` fail.
+//
+// Its only caller installed `aistudio-mcp-server` globally, which CGMB does not
+// use: AIStudioLayer.resolveMCPServerPath() spawns the server bundled in this
+// package at dist/mcp-servers/ai-studio-mcp-server.js. The remaining mentions of
+// the external package are troubleshooting text. Both the function and the
+// install went together.
 
 // Check and install AI Studio MCP Server
-async function setupAIStudioMCP() {
-  log('🔧 Setting up AI Studio MCP Server...');
-  
-  // Check if aistudio-mcp-server is available
-  if (commandExists('aistudio-mcp-server')) {
-    log('✅ AI Studio MCP Server already available', 'success');
+function setupAIStudioMCP() {
+  log('🔧 Checking the bundled AI Studio MCP Server...');
+
+  // The server CGMB actually runs ships with this package. Nothing needs
+  // installing; what matters is that the build produced it, because
+  // AIStudioLayer spawns exactly this file.
+  const bundled = path.join(__dirname, '..', 'dist', 'mcp-servers', 'ai-studio-mcp-server.js');
+
+  if (fs.existsSync(bundled)) {
+    log('✅ AI Studio MCP Server present', 'success');
     return true;
   }
-  
-  // Try to find it in node_modules
-  const possiblePaths = [
-    path.join(process.cwd(), 'node_modules', '.bin', 'aistudio-mcp-server'),
-    path.join(__dirname, '..', 'node_modules', '.bin', 'aistudio-mcp-server')
-  ];
-  
-  for (const testPath of possiblePaths) {
-    if (fs.existsSync(testPath)) {
-      log('✅ AI Studio MCP Server found in project dependencies', 'success');
-      return true;
-    }
-  }
-  
-  // Install globally
-  log('📦 AI Studio MCP Server not found, attempting installation...');
-  const success = await installPackage('aistudio-mcp-server', 'AI Studio MCP Server');
-  
-  if (!success) {
-    log('💡 AI Studio MCP Server installation failed. This is optional for basic functionality.', 'warning');
-    log('   You can install it later with: npm install -g aistudio-mcp-server', 'info');
-  }
-  
-  return success;
+
+  log('⚠️ AI Studio MCP Server is missing from this install', 'warning');
+  log(`   Expected at: ${bundled}`, 'info');
+  log('   Run `npm run build` in the package directory to produce it.', 'info');
+  return false;
 }
 
 const MIN_AGY_VERSION = '1.1.7';
@@ -541,7 +491,7 @@ async function main() {
   try {
     results['Claude Code CLI'] = checkClaudeCode();
     results['Antigravity CLI'] = setupAntigravityCLI();
-    results['AI Studio MCP'] = await setupAIStudioMCP();
+    results['AI Studio MCP'] = setupAIStudioMCP();
     results['Environment Config'] = setupEnvironment();
     results['MCP Integration'] = await setupMCPIntegration();
     
