@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.1.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -58,18 +58,18 @@ Anthropic Model Context Protocol準拠。95%の自己修復率でエンタープ
 
 ---
 
-## ✨ v1.1.0 の新機能
+## ✨ v1.2.0 の新機能
 
 | 機能 | 説明 |
 |------|------|
-| 🪟 **Windows完全対応** | CLI/MCP両方でネイティブサポート |
-| 📝 **OCR処理強化** | スキャンPDFの自動テキスト抽出 |
-| 🚀 **モデル** | AI Studio: `gemini-2.5-flash` / 検索: `gemini-3.6-flash-low` (agy) |
-| 🔐 **OAuth認証** | Claude Code互換のファイルベース認証 |
-| 🌐 **自動翻訳** | 画像生成時の日本語→英語翻訳 |
+| 🔄 **Antigravity CLI** | 検索レイヤーが提供終了した Gemini CLI から `agy` へ移行 |
+| 🖥️ **3OS 対応** | Linux / Windows / macOS を push ごとに CI で検証 |
+| 🚀 **モデル更新** | `gemini-3-pro-image` / `gemini-3.1-flash-tts-preview`。提供終了した `gemini-2.0-flash-exp` は除去 |
+| 🎯 **`targetLayer` が機能** | 指定したレイヤーへ届きます（`claude` も指定可能に） |
+| 🔧 **`CLAUDE_CODE_PATH`** | ドキュメントどおり実行ファイル探索に反映されるようになりました |
+| 🪟 **Windows完全対応** | CLI/MCP両方でネイティブサポート（v1.1.0 以降） |
+| 🔐 **OAuth認証** | `agy` は OS キーリング、Claude Code はファイルベース認証 |
 | 📊 **スマートルーティング** | PDF URLはAI Studioへ、WebページはAntigravity CLIへ |
-| ⚡ **パフォーマンス最適化** | タイムアウト短縮、遅延読み込み、キャッシング |
-| 🛡️ **エラー回復** | 指数バックオフによる95%の自己修復 |
 
 ---
 
@@ -86,9 +86,9 @@ flowchart TD
 
 | レイヤー | 得意分野 | タイムアウト |
 |:--------:|:---------|:-----------:|
-| 🔍 Antigravity CLI (`agy`) | Web検索、リアルタイム情報 | 30秒 |
+| 🔍 Antigravity CLI (`agy`) | Web検索、リアルタイム情報 | 90秒 |
 | 🧠 Claude Code | 複雑な推論、コード分析 | 300秒 |
-| 🎨 AI Studio | 画像生成、音声合成、OCR | 120秒 |
+| 🎨 AI Studio | 画像生成、音声合成、OCR | 300秒 |
 
 ---
 
@@ -194,10 +194,14 @@ CGMBはClaude Codeとシームレスに統合。**「CGMB」キーワード**を
 |:----:|:---------|:-------:|
 | 🔍 Web検索 | `gemini-3.6-flash-low` | Antigravity CLI |
 | 🎨 画像生成 | `gemini-2.5-flash-image` | AI Studio |
-| 🎵 音声生成 | `gemini-2.5-flash-preview-tts` | AI Studio |
+| 🖼️ 画像生成（高品質） | `gemini-3-pro-image` | AI Studio |
+| 🎵 音声生成 | `gemini-3.1-flash-tts-preview` | AI Studio |
 | 📄 ドキュメント処理 | `gemini-2.5-flash` | AI Studio |
 | 📝 OCR/テキスト抽出 | `gemini-2.5-flash` | AI Studio |
-| 🔮 汎用マルチモーダル | `gemini-2.0-flash-exp` | AI Studio |
+| 🔮 汎用マルチモーダル | `gemini-2.5-flash` | AI Studio |
+
+Antigravity のモデル ID は `agy models` の出力に存在するものだけが有効です。
+AI Studio 側の ID は `src/core/types.ts` の `AI_MODELS` にあります。
 
 ---
 
@@ -297,7 +301,7 @@ CGMBは自動的にClaude Code MCP統合を設定:
 
 ## 🪟 Windows環境
 
-CGMBはv1.1.0でWindows環境を**完全サポート**:
+CGMB は v1.1.0 以降 Windows 環境を**完全サポート**しています:
 
 | 機能 | 状態 |
 |------|:----:|
@@ -437,6 +441,22 @@ src/
 ---
 
 ## 📜 バージョン履歴
+
+### v1.2.0 (2026-07-28)
+- 🔄 **Antigravity CLI へ移行**: Google が 2026-06-18 に Gemini CLI の個人向け提供を
+  終了したため、Web検索レイヤーは `agy` (Antigravity CLI 1.1.7 以降) を呼びます。
+  認証は API キーではなく OS キーリング経由です。レイヤー名は `antigravity` が正準で、
+  `gemini` も別名として引き続き使えます
+- 🚀 **AI Studio モデル更新**: 高品質な画像生成に `gemini-3-pro-image`、音声生成に
+  `gemini-3.1-flash-tts-preview` を採用。提供終了した `gemini-2.0-flash-exp` は
+  直書きされていた6箇所すべてから除去しました
+- 🖥️ **3OS 対応**: Linux / Windows / macOS を push ごとに CI で検証しています
+- 🎯 **`targetLayer` が機能するように**: レイヤーを指定すればそこへ届きます。`claude`
+  も指定可能になり、指定したのに別レイヤーが応答する挙動を修正しました
+- 🔧 **`CLAUDE_CODE_PATH` が有効に**: 環境変数と `claude.code_path` が実行ファイルの
+  探索に届くようになり、既定の場所以外のインストールも使えます
+- 🧹 **デッドコード削除**: どこからも import されていなかったワークフロークラス
+  3,619行を削除。公開 API の表面に変更はありません
 
 ### v1.1.0 (2026-01-10)
 - 🪟 **Windows完全対応**: CLI/MCP両方でWindowsをネイティブサポート

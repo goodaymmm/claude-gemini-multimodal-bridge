@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.1.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -58,18 +58,18 @@ Follows the Anthropic Model Context Protocol. Enterprise-grade reliability with 
 
 ---
 
-## ✨ What's New in v1.1.0
+## ✨ What's New in v1.2.0
 
 | Feature | Description |
 |---------|-------------|
-| 🪟 **Full Windows Support** | Native support for both CLI and MCP |
-| 📝 **Enhanced OCR Processing** | Automatic text extraction from scanned PDFs |
-| 🚀 **Latest Gemini Models** | Support for `gemini-2.5-flash`, `gemini-3-flash` |
-| 🔐 **OAuth Authentication** | File-based authentication compatible with Claude Code |
-| 🌐 **Auto Translation** | Japanese to English translation for image generation |
+| 🔄 **Antigravity CLI** | The search layer moved off the discontinued Gemini CLI to `agy` |
+| 🖥️ **Three-OS Support** | Linux, Windows and macOS verified in CI on every push |
+| 🚀 **Updated Models** | `gemini-3-pro-image`, `gemini-3.1-flash-tts-preview`; the retired `gemini-2.0-flash-exp` is gone |
+| 🎯 **`targetLayer` Honoured** | Naming a layer routes there — including `claude` |
+| 🔧 **`CLAUDE_CODE_PATH`** | Now reaches the executable search, as documented |
+| 🪟 **Full Windows Support** | Native support for both CLI and MCP (since v1.1.0) |
+| 🔐 **OAuth Authentication** | OS keyring for `agy`; file-based auth for Claude Code |
 | 📊 **Smart Routing** | PDF URLs to AI Studio, web pages to Antigravity CLI |
-| ⚡ **Performance Optimization** | Reduced timeouts, lazy loading, caching |
-| 🛡️ **Error Recovery** | 95% self-healing with exponential backoff |
 
 ---
 
@@ -86,9 +86,9 @@ flowchart TD
 
 | Layer | Specialization | Timeout |
 |:-----:|:---------------|:-------:|
-| 🔍 Antigravity CLI (`agy`) | Web search, real-time information | 30s |
+| 🔍 Antigravity CLI (`agy`) | Web search, real-time information | 90s |
 | 🧠 Claude Code | Complex reasoning, code analysis | 300s |
-| 🎨 AI Studio | Image generation, audio synthesis, OCR | 120s |
+| 🎨 AI Studio | Image generation, audio synthesis, OCR | 300s |
 
 ---
 
@@ -194,10 +194,14 @@ CGMB integrates seamlessly with Claude Code. Just use the **"CGMB" keyword**:
 |:-------:|:---------|:-----:|
 | 🔍 Web Search | `gemini-3.6-flash-low` | Antigravity CLI |
 | 🎨 Image Generation | `gemini-2.5-flash-image` | AI Studio |
-| 🎵 Audio Generation | `gemini-2.5-flash-preview-tts` | AI Studio |
+| 🖼️ Image Generation (high quality) | `gemini-3-pro-image` | AI Studio |
+| 🎵 Audio Generation | `gemini-3.1-flash-tts-preview` | AI Studio |
 | 📄 Document Processing | `gemini-2.5-flash` | AI Studio |
 | 📝 OCR/Text Extraction | `gemini-2.5-flash` | AI Studio |
-| 🔮 General Multimodal | `gemini-2.0-flash-exp` | AI Studio |
+| 🔮 General Multimodal | `gemini-2.5-flash` | AI Studio |
+
+Antigravity model IDs must appear in `agy models`; AI Studio IDs live in
+`AI_MODELS` in `src/core/types.ts`.
 
 ---
 
@@ -297,7 +301,7 @@ CGMB automatically configures Claude Code MCP integration:
 
 ## 🪟 Windows Environment
 
-CGMB **fully supports** Windows in v1.1.0:
+CGMB has **fully supported** Windows since v1.1.0:
 
 | Feature | Status |
 |---------|:------:|
@@ -438,6 +442,22 @@ src/
 ---
 
 ## 📜 Version History
+
+### v1.2.0 (2026-07-28)
+- 🔄 **Antigravity CLI Migration**: Google discontinued Gemini CLI for individual
+  accounts on 2026-06-18. The web-search layer now calls `agy` (Antigravity CLI,
+  1.1.7+), authenticated through the OS keyring rather than an API key. Layer
+  names accept `antigravity`; `gemini` still works as an alias
+- 🚀 **Updated AI Studio Models**: `gemini-3-pro-image` for high-quality image
+  generation, `gemini-3.1-flash-tts-preview` for speech. The retired
+  `gemini-2.0-flash-exp` is gone from all six call sites it was hardcoded at
+- 🖥️ **Three-OS Support**: Linux, Windows and macOS verified in CI on every push
+- 🎯 **`targetLayer` Is Honoured**: naming a layer now routes there. `claude` is
+  selectable, and requests that named a layer are no longer silently re-routed
+- 🔧 **`CLAUDE_CODE_PATH` Works**: the variable and `claude.code_path` now reach
+  the executable search, so installs outside the default locations are usable
+- 🧹 **Dead Code Removed**: 3,619 lines of unreachable workflow classes deleted;
+  no change to the published API surface
 
 ### v1.1.0 (2026-01-10)
 - 🪟 **Full Windows Support**: Native Windows support for both CLI and MCP

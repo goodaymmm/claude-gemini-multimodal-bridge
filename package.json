@@ -1,6 +1,6 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Enterprise-grade AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing and advanced multimodal processing capabilities",
   "type": "module",
   "main": "dist/index.js",
@@ -9,8 +9,8 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "CGMB MCP Server v1.1.0 - Enterprise-grade 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
-    "version": "1.1.0",
+    "description": "CGMB MCP Server v1.2.0 - Enterprise-grade 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
+    "version": "1.2.0",
     "command": "cgmb",
     "args": [
       "serve"
@@ -44,7 +44,7 @@
     "test:integration": "npm run verify && cgmb test",
     "benchmark": "node scripts/benchmark.js",
     "clean": "rimraf dist",
-    "prepublish": "npm run clean && npm run build",
+    "prepack": "npm run clean && npm run build",
     "postinstall": "node scripts/postinstall.cjs",
     "mcp:aistudio": "node dist/mcp-servers/ai-studio-mcp-server.js",
     "mcp:test": "AI_STUDIO_API_KEY=test node dist/mcp-servers/ai-studio-mcp-server.js"
