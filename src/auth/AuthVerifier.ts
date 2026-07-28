@@ -385,7 +385,16 @@ export class AuthVerifier {
    * Verify Claude Code authentication with intelligent caching
    * Uses 12-hour cache for session-based authentication
    */
-  async verifyClaudeCodeAuth(): Promise<AuthResult> {
+  /**
+   * @param codePath The executable the caller resolved, when it has one.
+   *
+   * Without it every probe here ran the literal name `claude`, so an install
+   * that is not on PATH -- the reason CLAUDE_CODE_PATH exists -- was reported
+   * missing. The cache is keyed by service rather than by path, so a process
+   * that somehow used two different Claude binaries would share one verdict
+   * between them; a single installation is the norm and that is accepted.
+   */
+  async verifyClaudeCodeAuth(codePath?: string): Promise<AuthResult> {
     // Check cache first (12-hour TTL for session auth)
     const cachedResult = this.authCache.get('claude');
     if (cachedResult) {
@@ -398,7 +407,7 @@ export class AuthVerifier {
 
         try {
           // Check if Claude Code is installed
-          const isInstalled = await this.checkClaudeCodeInstalled();
+          const isInstalled = await this.checkClaudeCodeInstalled(codePath);
           
           if (!isInstalled) {
             const result: AuthResult = {
@@ -419,7 +428,7 @@ export class AuthVerifier {
           }
 
           // Test Claude Code functionality
-          const isWorking = await this.testClaudeCodeFunctionality();
+          const isWorking = await this.testClaudeCodeFunctionality(codePath);
           
           if (!isWorking) {
             const result: AuthResult = {
@@ -590,17 +599,21 @@ export class AuthVerifier {
   /**
    * Check if Claude Code is installed
    */
-  private async checkClaudeCodeInstalled(): Promise<boolean> {
+  private async checkClaudeCodeInstalled(codePath?: string): Promise<boolean> {
+    // The path the layer resolved, so an install outside PATH is not reported
+    // as missing. Falls back to the bare name for callers without one.
+    const command = codePath?.trim() || 'claude';
+
     // Cross-platform check using platformUtils
-    if (commandExists('claude')) {
+    if (commandExists(command)) {
       return true;
     }
     // Fallback: try running claude --version
     try {
       // Trusted resolution: a shell string here re-resolved `claude` against
       // PATH and the working directory, outside every check.
-      if (!commandAvailable('claude')) {
-        throw new Error('claude is not available');
+      if (!commandAvailable(command)) {
+        throw new Error(`${command} is not available`);
       }
       return true;
     } catch {
@@ -611,7 +624,7 @@ export class AuthVerifier {
   /**
    * Test Claude Code functionality
    */
-  private async testClaudeCodeFunctionality(): Promise<boolean> {
+  private async testClaudeCodeFunctionality(codePath?: string): Promise<boolean> {
     // `claude auth status --json` reports the session directly. The previous
     // check ran `claude --help` and scanned the help TEXT for "auth" plus
     // "required"/"login" -- but the help lists an `auth` subcommand and
@@ -623,7 +636,7 @@ export class AuthVerifier {
       // `claude.cmd` shim on Windows, and execFileSync on a .cmd fails with
       // EINVAL. Probing it directly reported an installed, signed-in Claude as
       // unauthenticated and cached that, disabling the whole layer.
-      const target = buildSpawnTarget('claude', ['auth', 'status', '--json']);
+      const target = buildSpawnTarget(codePath?.trim() || 'claude', ['auth', 'status', '--json']);
       const output = execFileSync(target.file, target.args, {
         encoding: 'utf8',
         timeout: 10000,

@@ -283,6 +283,49 @@ describe('an explicit targetLayer is honoured', () => {
     }
   });
 
+  it('refuses a Claude-targeted request that carries files', async () => {
+    // Codex review, P1. ClaudeCodeLayer reaches `claude --print` with the
+    // prompt on stdin and no file access -- executeGeneral reads task.prompt
+    // and nothing else. Routing files there returned success: true on a
+    // document that was never opened, which is worse than an error: the caller
+    // has an answer and no reason to doubt it.
+    const server = makeServer();
+
+    await assert.rejects(
+      () => server.handleCGMBUnified({
+        prompt: 'CGMB summarise this',
+        // A file that exists, so the refusal is about the layer and not the
+        // path: normalisation runs first and rejects missing files there.
+        files: [{ path: join(process.cwd(), 'package.json'), type: 'document' }],
+        targetLayer: 'claude',
+      }),
+      /cannot read files/
+    );
+
+    assert.deepEqual(server.stubCalls, [], 'it must refuse before running anything');
+  });
+
+  it('normalises input before routing, not after', async () => {
+    // Codex review, P1. The direct-routing branch returned before
+    // validateAndNormalize, so a relative path stayed relative and the target
+    // layer resolved it against the server's own cwd -- finding nothing, and
+    // able to report success on a file it never opened.
+    const server = makeServer();
+
+    await server.handleCGMBUnified({
+      prompt: 'CGMB read it',
+      files: [{ path: 'package.json', type: 'document' }],
+      workingDirectory: process.cwd(),
+      targetLayer: 'aistudio',
+    });
+
+    assert.equal(server.stubCalls.length, 1);
+    const [sent] = server.stubCalls[0].task.files;
+    const path = typeof sent === 'string' ? sent : sent?.path ?? '';
+    assert.notEqual(path, 'package.json', 'the raw relative path must not reach the layer');
+    assert.equal(path, join(process.cwd(), 'package.json'), 'it must arrive absolute');
+  });
+
   it('rejects a layer name that is not a target', () => {
     for (const bad of ['workflow', 'tool', 'orchestrator', 'nonsense']) {
       assert.equal(

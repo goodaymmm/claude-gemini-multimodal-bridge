@@ -622,15 +622,40 @@ export class CGMBServer {
         // could be answered by a different one entirely -- measured: a request
         // for Claude was served by the search layer. 'adaptive' (and omitting
         // the field) still means "you choose".
+        // 1. Input validation and normalization
+        //
+        // Runs before the routing decision, not after. Naming a layer chooses
+        // WHERE the work goes; it is not a reason to skip checking the input.
+        // Returning early with the raw args left relative paths unresolved, so
+        // AI Studio looked for them against the server's own cwd, found
+        // nothing, and could report success on files it never opened.
+        const normalizedRequest = this.validateAndNormalize(args);
+
         const requested = normalizeLayerName(request.targetLayer ?? 'adaptive');
         if (requested !== 'adaptive') {
-          logger.info('Routing directly to the requested layer', { layer: requested });
+          logger.info('Routing directly to the requested layer', {
+            layer: requested,
+            filesCount: normalizedRequest.files.length,
+          });
+
+          // Claude Code is reached through `claude --print` with the prompt on
+          // stdin and no file access -- executeGeneral reads task.prompt and
+          // nothing else. Answering from the prompt alone returned success on a
+          // document nobody opened, which is worse than an error: the caller
+          // has an answer and no reason to doubt it. The search layer refuses
+          // file work the same way, for the same reason.
+          if (requested === 'claude' && normalizedRequest.files.length > 0) {
+            throw new Error(
+              `The Claude layer cannot read files (${normalizedRequest.files.length} attached). ` +
+              'Send file work to the aistudio layer, or omit targetLayer to let CGMB route it.'
+            );
+          }
 
           const direct = await this.layerManager.executeWithLayer(requested as LayerType, {
             type: 'text_processing',
-            prompt: request.prompt,
-            files: request.files ?? [],
-            options: request.options ?? {},
+            prompt: normalizedRequest.prompt,
+            files: normalizedRequest.files,
+            options: normalizedRequest.options ?? {},
           });
 
           return this.toCallToolResult(direct);
@@ -638,9 +663,7 @@ export class CGMBServer {
 
         // Fallback to original processing for backward compatibility
         logger.info('Using standard processing (not preformatted)');
-        
-        // 1. Input validation and normalization
-        const normalizedRequest = this.validateAndNormalize(args);
+
         logger.info('Request normalized', {
           hasCGMB: normalizedRequest.hasCGMB,
           promptLength: normalizedRequest.prompt.length,

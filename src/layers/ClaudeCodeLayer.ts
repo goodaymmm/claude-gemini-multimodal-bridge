@@ -43,7 +43,22 @@ export class ClaudeCodeLayer implements LayerInterface {
    */
   constructor(codePath?: string) {
     this.authVerifier = new AuthVerifier();
-    this.configuredPath = codePath?.trim() || undefined;
+
+    // ConfigSchema defaults claude.code_path to the bare name 'claude', and
+    // LayerManager forwards that field whether or not anyone set it. So the
+    // default arrived here looking deliberate and, being the most specific
+    // candidate, outranked CLAUDE_CODE_PATH -- measured: with the variable
+    // pointing at a different install, the PATH copy was used instead. That is
+    // the main routing path, so the setting was defeated exactly where it
+    // matters. A value equal to the schema default carries no information, so
+    // it is treated as unset; 'claude' heads the default list anyway, leaving
+    // the search unchanged.
+    //
+    // zod's .default() erases whether the caller omitted the field or wrote
+    // the default value on purpose, so someone who means "use the PATH copy,
+    // ignore the variable" cannot say so here. The variable wins in that case.
+    const trimmed = codePath?.trim();
+    this.configuredPath = trimmed && trimmed !== 'claude' ? trimmed : undefined;
   }
 
   /**
@@ -90,16 +105,28 @@ export class ClaudeCodeLayer implements LayerInterface {
 
         logger.info('Initializing Claude Code layer...');
 
-        // Verify Claude Code installation and authentication
-        const authResult = await this.authVerifier.verifyClaudeCodeAuth();
-        if (!authResult.success) {
-          throw new Error(`Claude Code authentication failed: ${authResult.error}`);
-        }
-
-        // Find Claude Code executable path
+        // Locate the executable BEFORE asking whether it is installed.
+        //
+        // The auth check probes the literal name `claude`, so on a machine
+        // where the only install is the one CLAUDE_CODE_PATH points at -- the
+        // case that setting exists for -- it reported "not installed" and threw
+        // here, before the configured path was ever tried. Finding it first
+        // both answers the installation question and gives the auth probe a
+        // path that exists. The install hint the auth failure used to carry has
+        // to be reproduced here, since this is now the check that fails first.
         this.claudePath = await this.findClaudeCodePath() || '';
         if (!this.claudePath) {
-          throw new Error('Claude Code executable not found');
+          throw new Error(
+            'Claude Code executable not found. Install Claude Code: ' +
+            'npm install -g @anthropic-ai/claude-code, or set CLAUDE_CODE_PATH ' +
+            'to an existing installation.'
+          );
+        }
+
+        // Verify authentication using the executable we just resolved
+        const authResult = await this.authVerifier.verifyClaudeCodeAuth(this.claudePath);
+        if (!authResult.success) {
+          throw new Error(`Claude Code authentication failed: ${authResult.error}`);
         }
 
         // Test basic functionality

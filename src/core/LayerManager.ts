@@ -121,7 +121,7 @@ export class LayerManager {
   public getClaudeLayer(): ClaudeCodeLayer {
     if (!this.claudeLayer) {
       logger.info('Lazy initializing Claude Code layer');
-      this.claudeLayer = new ClaudeCodeLayer(this.config.claude?.code_path);
+      this.claudeLayer = new ClaudeCodeLayer(this.config?.claude?.code_path);
       if (!this.layerInitialized.claude) {
         // Initialize only when first accessed
         this.claudeLayer.initialize().then(() => {
@@ -195,7 +195,7 @@ export class LayerManager {
       this.claudeLayerPromise = (async () => {
         if (!this.claudeLayer) {
           logger.info('Async initializing Claude Code layer');
-          this.claudeLayer = new ClaudeCodeLayer(this.config.claude?.code_path);
+          this.claudeLayer = new ClaudeCodeLayer(this.config?.claude?.code_path);
         }
         if (!this.layerInitialized.claude) {
           await this.claudeLayer.initialize();

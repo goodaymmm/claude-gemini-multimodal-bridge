@@ -81,6 +81,35 @@ describe('where CGMB looks for Claude Code', () => {
   });
 });
 
+describe('the schema default does not masquerade as a choice', () => {
+  // Codex review, P2. ConfigSchema defaults claude.code_path to 'claude' and
+  // LayerManager forwards the field whether or not anyone set it, so the
+  // default arrived at the constructor looking deliberate and, being the most
+  // specific candidate, outranked CLAUDE_CODE_PATH. Measured: with the
+  // variable pointing at a different install, the PATH copy was used -- and
+  // that is the main routing path, so the setting was defeated where it counts.
+
+  it('lets CLAUDE_CODE_PATH win over a bare default config value', () => {
+    const layer = new ClaudeCodeLayer('claude');
+
+    assert.equal(layer.configuredPath, undefined, "'claude' carries no information");
+    assert.equal(
+      paths({ CLAUDE_CODE_PATH: '/opt/custom/claude' }, layer.configuredPath)[0],
+      '/opt/custom/claude'
+    );
+  });
+
+  it('still honours a real path from config', () => {
+    assert.equal(new ClaudeCodeLayer('/opt/custom/claude').configuredPath, '/opt/custom/claude');
+  });
+
+  it('treats blank config the same as unset', () => {
+    for (const blank of [undefined, '', '   ']) {
+      assert.equal(new ClaudeCodeLayer(blank).configuredPath, undefined);
+    }
+  });
+});
+
 describe('a configured path is a preference, not an exemption', () => {
   // The trust check exists because `where claude` lists the working directory
   // before PATH on Windows, so a claude.cmd dropped in a repo would be picked
