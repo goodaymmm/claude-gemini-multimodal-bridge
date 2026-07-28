@@ -21,6 +21,19 @@ import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { buildSpawnTarget, resolveTrustedCommand } from '../utils/processUtils.js';
 
 /**
+ * Said by whichever initialisation path fails first.
+ *
+ * Both paths locate the executable themselves, so both can be the one that
+ * reports it missing -- and the guidance has to name CLAUDE_CODE_PATH, since a
+ * user whose install is simply somewhere unusual needs to be told the setting
+ * exists rather than to reinstall.
+ */
+const CLAUDE_NOT_FOUND_MESSAGE =
+  'Claude Code executable not found. Install Claude Code: ' +
+  'npm install -g @anthropic-ai/claude-code, or set CLAUDE_CODE_PATH ' +
+  'to an existing installation.';
+
+/**
  * ClaudeCodeLayer handles direct Claude Code execution with enhanced authentication support
  * Provides complex reasoning tasks and workflow orchestration capabilities
  */
@@ -75,14 +88,19 @@ export class ClaudeCodeLayer implements LayerInterface {
     if (!this.claudePath) {
       this.claudePath = await this.findClaudeCodePath() || '';
       if (!this.claudePath) {
-        throw new Error('Claude Code executable not found');
+        throw new Error(CLAUDE_NOT_FOUND_MESSAGE);
       }
     }
 
     // Skip auth verification if recent check exists
     const now = Date.now();
     if (now - this.lastAuthCheck > this.AUTH_CACHE_TTL) {
-      const authResult = await this.authVerifier.verifyClaudeCodeAuth();
+      // The resolved path, not the bare name. This is the path execute() takes
+      // for ordinary prompts -- anything without a workflow, a depth or
+      // complex_reasoning -- so leaving it probing `claude` meant the whole
+      // CLAUDE_CODE_PATH fix missed the common case, and the "not installed"
+      // verdict it produced was then cached for 12 hours.
+      const authResult = await this.authVerifier.verifyClaudeCodeAuth(this.claudePath);
       if (!authResult.success) {
         throw new Error(`Claude Code authentication failed: ${authResult.error}`);
       }
@@ -116,11 +134,7 @@ export class ClaudeCodeLayer implements LayerInterface {
         // to be reproduced here, since this is now the check that fails first.
         this.claudePath = await this.findClaudeCodePath() || '';
         if (!this.claudePath) {
-          throw new Error(
-            'Claude Code executable not found. Install Claude Code: ' +
-            'npm install -g @anthropic-ai/claude-code, or set CLAUDE_CODE_PATH ' +
-            'to an existing installation.'
-          );
+          throw new Error(CLAUDE_NOT_FOUND_MESSAGE);
         }
 
         // Verify authentication using the executable we just resolved

@@ -326,6 +326,49 @@ describe('an explicit targetLayer is honoured', () => {
     assert.equal(path, join(process.cwd(), 'package.json'), 'it must arrive absolute');
   });
 
+  it('does not let an unrecognised option reach the layer', async () => {
+    // Codex review, P2. validateAndNormalize cast options instead of parsing
+    // them, so a key the schema does not know survived into the object handed
+    // to the layer. AIStudioLayer reads options.multiplePDFs -- absent from
+    // ProcessingOptionsSchema -- and switches itself to processMultiplePDFs()
+    // on it. That flag is one internal callers set deliberately; MCP input
+    // reaching it means a caller can pick a processing path nobody vetted.
+    const server = makeServer();
+
+    await server.handleCGMBUnified({
+      prompt: 'CGMB analyse',
+      targetLayer: 'aistudio',
+      options: { multiplePDFs: true, use_cache: false },
+    });
+
+    assert.equal(server.stubCalls.length, 1);
+    const { options } = server.stubCalls[0].task;
+    assert.equal(options.multiplePDFs, undefined, 'an unknown key must be stripped');
+    // The other half of the check: stripping must not take the schema's own
+    // keys with it, or every legitimate option silently stops working.
+    assert.equal(options.use_cache, false, 'a known key must survive');
+  });
+
+  it('strips the same key on the adaptive path', async () => {
+    // The direct route was where the review found it, but the adaptive route
+    // hands the same object to convertForLayers and predates this branch.
+    // Fixing it inside validateAndNormalize covers both; this pins the half
+    // that a direct-route-only fix would have left open.
+    const server = makeServer();
+
+    await server.handleCGMBUnified({
+      prompt: 'CGMB analyse this text',
+      options: { multiplePDFs: true },
+    });
+
+    for (const call of server.stubCalls) {
+      assert.equal(
+        call.task.options?.multiplePDFs, undefined,
+        `an unknown key reached the ${call.layer} layer`
+      );
+    }
+  });
+
   it('rejects a layer name that is not a target', () => {
     for (const bad of ['workflow', 'tool', 'orchestrator', 'nonsense']) {
       assert.equal(

@@ -192,3 +192,49 @@ describe('claude layer: running the CLI', () => {
     );
   });
 });
+
+describe('the configured path reaches the auth probe on both init paths', () => {
+  // Codex review, P2. initialize() was fixed to hand the resolved executable to
+  // verifyClaudeCodeAuth, but initializeLightweight was not -- and that is the
+  // path execute() takes for an ordinary prompt (no workflow, no depth, not
+  // complex_reasoning). So on a machine whose only install is the one
+  // CLAUDE_CODE_PATH names, the common case still probed the bare name, decided
+  // Claude was not installed, and cached that verdict for twelve hours.
+  //
+  // Hermetic: claudePath is set first so findClaudeCodePath never spawns, and
+  // authVerifier is replaced by a recorder. lastAuthCheck starts at 0, so the
+  // auth branch always runs.
+
+  function layerWithSpy() {
+    const layer = new ClaudeCodeLayer();
+    const seen = [];
+    layer.claudePath = '/opt/custom/claude';
+    layer.authVerifier = {
+      verifyClaudeCodeAuth: async codePath => {
+        seen.push(codePath);
+        return { success: true, status: { isAuthenticated: true }, requiresAction: false };
+      },
+    };
+    return { layer, seen };
+  }
+
+  it('passes the resolved path from lightweight initialization', async () => {
+    const { layer, seen } = layerWithSpy();
+
+    await layer.initializeLightweight();
+
+    assert.deepEqual(seen, ['/opt/custom/claude'], 'the probe must not be given the bare name');
+  });
+
+  it('does not re-probe once the check is recent', async () => {
+    // Guards the ordering: the path must be passed on the call that actually
+    // happens, not on a later one that the TTL skips.
+    const { layer, seen } = layerWithSpy();
+
+    await layer.initializeLightweight();
+    layer.isLightweightInitialized = false;
+    await layer.initializeLightweight();
+
+    assert.equal(seen.length, 1, 'the 24h auth cache must still hold');
+  });
+});

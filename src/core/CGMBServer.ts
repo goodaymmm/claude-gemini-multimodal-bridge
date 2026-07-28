@@ -32,7 +32,7 @@ import {
 import { normalizeLayerName } from './types.js';
 import { Config, ConfigSchema } from './types.js';
 import { isOneOf } from './types.js';
-import { LegacyCGMBRequestSchema, ProcessingOptions } from './types.js';
+import { LegacyCGMBRequestSchema, ProcessingOptionsSchema } from './types.js';
 import { pickFinalResultText } from '../utils/workflowUtils.js';
 import { LayerResult, LayerType } from './types.js';
 import { AI_MODELS } from './types.js';
@@ -1080,7 +1080,19 @@ export class CGMBServer {
     const source = args as Record<string, unknown>;
     const prompt = source.prompt;
     const files = source.files ?? [];
-    const options = (source.options ?? {}) as ProcessingOptions;
+    // Parsed, not cast. The cast let any key through: this object is handed
+    // straight to a layer, and AI Studio reads options.multiplePDFs -- which is
+    // not in the schema -- to switch itself to processMultiplePDFs(). That flag
+    // is one internal callers set deliberately, not something MCP input should
+    // be able to reach.
+    //
+    // This cannot reject anything new. The only caller runs after
+    // parseEnhancedRequest, and both the enhanced and the legacy schema already
+    // validate `options` with this same ProcessingOptionsSchema -- an
+    // out-of-range known value has therefore thrown before reaching here. All
+    // this adds is the stripping of unrecognised keys, which the earlier parse
+    // performs on its own copy but which survives in the raw args.
+    const options = ProcessingOptionsSchema.parse(source.options ?? {});
     const workingDirectory = typeof source.workingDirectory === 'string'
       ? source.workingDirectory
       : undefined;
