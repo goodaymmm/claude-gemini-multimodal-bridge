@@ -1,15 +1,16 @@
 {
   "name": "claude-gemini-multimodal-bridge",
   "version": "1.2.0",
-  "description": "Enterprise-grade AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing and advanced multimodal processing capabilities",
+  "description": "MCP bridge connecting Claude Code, Antigravity CLI and Google AI Studio, routing each request to the layer that can answer it: web search, complex reasoning, or image/audio/document processing",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "cgmb": "dist/cli.js"
   },
   "mcp": {
     "name": "cgmb",
-    "description": "CGMB MCP Server v1.2.0 - Enterprise-grade 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
+    "description": "CGMB MCP Server v1.2.0 - 3-layer AI integration (Claude Code / Antigravity CLI / AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
     "version": "1.2.0",
     "command": "cgmb",
     "args": [
@@ -66,7 +67,6 @@
     "multimodal-ai",
     "model-context-protocol",
     "ai-orchestration",
-    "production-ready",
     "parallel-processing",
     "authentication-caching",
     "mcp-integration",
@@ -75,7 +75,6 @@
     "natural-interface",
     "user-friendly",
     "oauth-authentication",
-    "enterprise-grade",
     "intelligent-routing",
     "mcp-antigravity-cli",
     "authentication-cache",

@@ -41,16 +41,16 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 </td>
 <td width="33%" align="center">
 
-### ⚡ Zero Configuration
+### ⚡ One Install, Two Setup Steps
 
-Complete with a single `npm install`. Tedious setup is automated
+`npm install -g` wires up the MCP integration. You then install `agy` and add an AI Studio API key
 
 </td>
 <td width="33%" align="center">
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. Enterprise-grade reliability with 95% self-healing rate
+Follows the Anthropic Model Context Protocol. 148 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -207,28 +207,17 @@ Antigravity model IDs must appear in `agy models`; AI Studio IDs live in
 
 ## 📈 Performance
 
-<table>
-<tr>
-<td align="center">
+What the implementation actually does, rather than a benchmark:
 
-### 80%
-Authentication Overhead Reduction
+| Mechanism | Where it applies | Tunable with |
+|-----------|------------------|--------------|
+| Search result cache | Repeated web-search prompts | `ENABLE_CACHING`, `CACHE_TTL`, `MAX_CACHE_ENTRIES` |
+| Authentication cache | `agy` and Claude Code probes, cached for hours rather than per call | — |
+| Lazy layer initialisation | A layer is started on first use, not at startup | — |
+| Retry with exponential backoff | Transient API and CLI failures | `MAX_RETRIES`, `RETRY_DELAY` |
 
-</td>
-<td align="center">
-
-### 60-80%
-Search Cache Hit Rate
-
-</td>
-<td align="center">
-
-### 95%
-Automatic Error Recovery Rate
-
-</td>
-</tr>
-</table>
+Throughput depends on which layer answers and on the upstream API, so no fixed
+numbers are quoted here.
 
 ---
 
@@ -268,10 +257,12 @@ output/
 └── documents/  # 📄 Processed documents
 ```
 
-Access via Claude Code:
-- `get_generated_file`: Retrieve specific files
-- `list_generated_files`: List all generated files
-- `get_file_info`: Get file metadata
+Files are written to these directories under the working directory you ran CGMB
+from, and the path of each generated file is returned in the response.
+
+The MCP tools CGMB exposes to Claude Code are `cgmb`,
+`cgmb_get_layer_requirements`, `cgmb_document_analysis`,
+`cgmb_multimodal_process` and `cgmb_workflow_orchestration`.
 
 ---
 
@@ -283,12 +274,36 @@ Access via Claude Code:
 # Required
 AI_STUDIO_API_KEY=your_api_key_here
 
-# Optional
-GEMINI_API_KEY=your_api_key_here
+# Search layer (Antigravity CLI)
+ANTIGRAVITY_MODEL=gemini-3.6-flash-low   # must appear in `agy models`
+ANTIGRAVITY_TIMEOUT=90000                # per-call budget, ms
+ANTIGRAVITY_CLI_PATH=                    # unset = auto-detect
+
+# Claude layer
+CLAUDE_CODE_PATH=/usr/local/bin/claude   # for installs outside the defaults
+
+# Caching and logging
 ENABLE_CACHING=true
 CACHE_TTL=3600
 LOG_LEVEL=info
+
+# Deprecated fallback for AI_STUDIO_API_KEY -- prefer the latter
+GEMINI_API_KEY=your_api_key_here
 ```
+
+### 🔐 Which files may be sent to Google
+
+The AI Studio layer uploads file contents to Google, so it only reads from the
+directory CGMB was started in. To analyse files kept elsewhere, list those
+directories explicitly:
+
+```bash
+# ";" separated on Windows, ":" elsewhere
+CGMB_ALLOWED_ROOTS=C:\Users\me\Documents;D:\shared
+```
+
+`.env.example` carries the full list, including the keys that are parsed but
+that nothing reads back — worth checking before assuming a setting has an effect.
 
 ### MCP Integration
 
@@ -343,7 +358,7 @@ cgmb analyze /mnt/c/Users/name/Documents/report.pdf
 
 # Set environment variables
 export AI_STUDIO_API_KEY="your_api_key_here"
-export CGMB_CHAT_MODEL="gemini-2.5-flash"
+export ANTIGRAVITY_MODEL="gemini-3.6-flash-low"
 ```
 
 ### Running the tests under WSL
@@ -357,7 +372,7 @@ Windows.
 cd /mnt/<drive>/path/to/claude-gemini-multimodal-bridge
 node --version        # must satisfy engines.node (>= 22)
 npm run build         # or reuse a build made on the host
-node --test "tests/*.test.mjs"
+node --test "tests/**/*.test.mjs"
 ```
 
 ---
@@ -381,7 +396,8 @@ cgmb serve --debug
 
 **If large documents timeout:**
 - Split large PDFs before processing (limit: 50MB, 1,000 pages)
-- Extend timeout: `export AI_STUDIO_TIMEOUT=180000`
+- The AI Studio layer's 300s budget is fixed; there is no environment variable
+  that extends it, so splitting the document is the remedy
 
 ---
 
@@ -400,7 +416,6 @@ src/
 ├── layers/         # 🔌 AI layer implementations
 ├── auth/           # 🔐 Authentication system
 ├── tools/          # 🛠️ Processing tools
-├── workflows/      # 📋 Workflow implementations
 ├── utils/          # 🔧 Utilities and helpers
 └── mcp-servers/    # 🌐 Custom MCP servers
 ```
@@ -462,7 +477,7 @@ src/
 ### v1.1.0 (2026-01-10)
 - 🪟 **Full Windows Support**: Native Windows support for both CLI and MCP
 - 📝 **Enhanced OCR**: Automatic OCR processing for image-based PDFs
-- 🚀 **Latest Gemini Models**: Support for gemini-2.5-flash, gemini-3-flash
+- 🚀 **Latest Gemini Models**: Support for gemini-2.5-flash
 - ⚡ **Improved MCP Integration**: Optimized async layer initialization
 - 📈 **Performance Improvements**: Reduced timeouts, lazy loading, enhanced caching
 - 🛡️ **Error Recovery**: 95% self-healing rate with exponential backoff

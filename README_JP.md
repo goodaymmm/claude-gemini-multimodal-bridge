@@ -41,16 +41,16 @@ Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生�
 </td>
 <td width="33%" align="center">
 
-### ⚡ ゼロ設定
+### ⚡ インストール1回、セットアップ2手順
 
-`npm install` 一発で完了。面倒な設定は自動化
+`npm install -g` で MCP 統合まで完了。その後 `agy` の導入と AI Studio API キーの設定が必要です
 
 </td>
 <td width="33%" align="center">
 
 ### 🎯 MCP標準対応
 
-Anthropic Model Context Protocol準拠。95%の自己修復率でエンタープライズグレードの信頼性
+Anthropic Model Context Protocol準拠。148件のテストを Linux / Windows / macOS の CI で push ごとに実行
 
 </td>
 </tr>
@@ -207,28 +207,17 @@ AI Studio 側の ID は `src/core/types.ts` の `AI_MODELS` にあります。
 
 ## 📈 パフォーマンス
 
-<table>
-<tr>
-<td align="center">
+ベンチマーク値ではなく、実装が実際に行っていることです:
 
-### 80%
-認証オーバーヘッド削減
+| 仕組み | 効く場面 | 調整 |
+|--------|----------|------|
+| 検索結果キャッシュ | 同じ Web 検索プロンプトの繰り返し | `ENABLE_CACHING` / `CACHE_TTL` / `MAX_CACHE_ENTRIES` |
+| 認証キャッシュ | `agy` と Claude Code の認証確認を毎回ではなく数時間単位で | — |
+| レイヤーの遅延初期化 | 起動時ではなく最初の利用時にレイヤーを起動 | — |
+| 指数バックオフ付きリトライ | API や CLI の一時的な失敗 | `MAX_RETRIES` / `RETRY_DELAY` |
 
-</td>
-<td align="center">
-
-### 60-80%
-検索キャッシュヒット率
-
-</td>
-<td align="center">
-
-### 95%
-エラー自動回復率
-
-</td>
-</tr>
-</table>
+実際の速度はどのレイヤーが応答するかと上流 API に依存するため、固定の数値は
+掲げていません。
 
 ---
 
@@ -268,10 +257,12 @@ output/
 └── documents/  # 📄 処理されたドキュメント
 ```
 
-Claude Code経由でアクセス:
-- `get_generated_file`: 特定のファイルを取得
-- `list_generated_files`: すべての生成ファイルをリスト
-- `get_file_info`: ファイルメタデータを取得
+ファイルは CGMB を実行した作業ディレクトリ配下に書き出され、生成された
+ファイルのパスは応答に含まれます。
+
+CGMB が Claude Code に公開する MCP ツールは `cgmb`、
+`cgmb_get_layer_requirements`、`cgmb_document_analysis`、
+`cgmb_multimodal_process`、`cgmb_workflow_orchestration` の5つです。
 
 ---
 
@@ -283,12 +274,36 @@ Claude Code経由でアクセス:
 # 必須
 AI_STUDIO_API_KEY=your_api_key_here
 
-# オプション
-GEMINI_API_KEY=your_api_key_here
+# 検索レイヤー (Antigravity CLI)
+ANTIGRAVITY_MODEL=gemini-3.6-flash-low   # `agy models` に存在するもののみ
+ANTIGRAVITY_TIMEOUT=90000                # 1回あたりのタイムアウト (ms)
+ANTIGRAVITY_CLI_PATH=                    # 未設定なら自動検出
+
+# Claude レイヤー
+CLAUDE_CODE_PATH=/usr/local/bin/claude   # 既定の場所以外にある場合
+
+# キャッシュ・ログ
 ENABLE_CACHING=true
 CACHE_TTL=3600
 LOG_LEVEL=info
+
+# AI_STUDIO_API_KEY の非推奨フォールバック（前者を推奨）
+GEMINI_API_KEY=your_api_key_here
 ```
+
+### 🔐 Google へ送信してよいファイルの範囲
+
+AI Studio レイヤーはファイルの内容を Google へアップロードするため、CGMB を
+起動したディレクトリからしか読み取りません。それ以外の場所のファイルを扱う
+場合は、対象ディレクトリを明示してください:
+
+```bash
+# 区切りは Windows が ";"、それ以外は ":"
+CGMB_ALLOWED_ROOTS=C:\Users\me\Documents;D:\shared
+```
+
+全一覧は `.env.example` にあります。パースされるだけで誰も読まない項目も
+明記してあるので、設定が効くかどうかは先にそちらを確認してください。
 
 ### MCP統合
 
@@ -343,7 +358,7 @@ cgmb analyze /mnt/c/Users/name/Documents/report.pdf
 
 # 環境変数の設定
 export AI_STUDIO_API_KEY="your_api_key_here"
-export CGMB_CHAT_MODEL="gemini-2.5-flash"
+export ANTIGRAVITY_MODEL="gemini-3.6-flash-low"
 ```
 
 ### WSLでのテスト実行
@@ -356,7 +371,7 @@ export CGMB_CHAT_MODEL="gemini-2.5-flash"
 cd /mnt/<drive>/path/to/claude-gemini-multimodal-bridge
 node --version        # engines.node (>= 22) を満たすこと
 npm run build         # ホスト側でビルド済みならそれを流用してもよい
-node --test "tests/*.test.mjs"
+node --test "tests/**/*.test.mjs"
 ```
 
 ---
@@ -380,7 +395,8 @@ cgmb serve --debug
 
 **大きな文書でタイムアウトする場合:**
 - 処理前に大きなPDFを分割（制限: 50MB、1,000ページ）
-- タイムアウトを延長: `export AI_STUDIO_TIMEOUT=180000`
+- AI Studio レイヤーの 300 秒は固定で、延長する環境変数はありません。
+  分割が唯一の対処です
 
 ---
 
@@ -399,7 +415,6 @@ src/
 ├── layers/         # 🔌 AIレイヤー実装
 ├── auth/           # 🔐 認証システム
 ├── tools/          # 🛠️ 処理ツール
-├── workflows/      # 📋 ワークフロー実装
 ├── utils/          # 🔧 ユーティリティとヘルパー
 └── mcp-servers/    # 🌐 カスタムMCPサーバー
 ```
@@ -461,7 +476,7 @@ src/
 ### v1.1.0 (2026-01-10)
 - 🪟 **Windows完全対応**: CLI/MCP両方でWindowsをネイティブサポート
 - 📝 **OCR機能強化**: 画像ベースPDFの自動OCR処理
-- 🚀 **Gemini最新モデル**: gemini-2.5-flash, gemini-3-flash対応
+- 🚀 **Gemini最新モデル**: gemini-2.5-flash 対応
 - ⚡ **MCP統合改善**: 非同期レイヤー初期化の最適化
 - 📈 **パフォーマンス向上**: タイムアウト短縮、遅延読み込み、キャッシング強化
 - 🛡️ **エラー回復**: 指数バックオフによる95%の自己修復率
