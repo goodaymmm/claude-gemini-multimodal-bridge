@@ -17,12 +17,27 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, afterEach, describe, it } from 'node:test';
 
 import { SmartEnvLoader } from '../dist/utils/envLoader.js';
+
+const loaderUrl = new URL('../dist/utils/envLoader.js', import.meta.url).href;
+
+/** Why the bind-mount case cannot run here, or false when it can. */
+function bindMountSkipReason() {
+  if (process.platform !== 'linux') {
+    return 'bind mounts need Linux; nothing here is verified on this platform';
+  }
+  const probe = spawnSync('unshare', ['--map-root-user', '--mount', '--', 'true'], {
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+  return probe.status === 0 ? false : 'unprivileged user namespaces are unavailable';
+}
 
 const CREDENTIALS = [
   'AI_STUDIO_API_KEY',
@@ -292,5 +307,117 @@ describe('the home directory is a ceiling on that walk', () => {
       !SmartEnvLoader.getInstance().ancestorsUpToProjectRoot(deep).includes(real),
       'called with no home argument, it must still refuse the real one'
     );
+  });
+});
+
+describe('the ceiling holds against aliases and a broken home', () => {
+  // Two review findings on the same boundary.
+  //
+  // Comparing canonical paths collapsed symlinks but not bind mounts:
+  // reproduced in a user namespace, entering through /mnt/u for a home at
+  // /home/u left the ceiling unmatched, so the alias became a project root and
+  // its .env -- the home one -- was read.
+  //
+  // And homedir() as a default parameter ran before the body with its result
+  // unchecked. With HOME='' it returns '', resolve('') is the working
+  // directory, and the walk stopped before it began: measured [] where a real
+  // project root one level up should have been found.
+
+  const scratch = mkdtempSync(join(tmpdir(), 'cgmb-ceiling-'));
+  after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const loader = () => SmartEnvLoader.getInstance();
+
+  /** <root>/proj/sub, with package.json at <root>/proj. */
+  function projectTree() {
+    const root = mkdtempSync(join(scratch, 'tree-'));
+    const project = join(root, 'proj');
+    const deep = join(project, 'sub');
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{}', 'utf8');
+    return { root, project, deep };
+  }
+
+  it('recognises the same directory reached by two names', () => {
+    const dir = mkdtempSync(join(scratch, 'same-'));
+    const other = mkdtempSync(join(scratch, 'other-'));
+
+    assert.equal(SmartEnvLoader.sameDirectory(dir, dir), true);
+    assert.equal(SmartEnvLoader.sameDirectory(dir, other), false, 'two real directories are not one');
+    assert.equal(
+      SmartEnvLoader.sameDirectory(dir, join(scratch, 'not-on-disk')), false,
+      'a path with nothing behind it cannot be the home directory'
+    );
+  });
+
+  it('sees through a bind mount', { skip: bindMountSkipReason() }, () => {
+    // The case canonical paths cannot answer. Only reachable where an
+    // unprivileged user namespace can mount -- Linux. Skipped elsewhere, which
+    // means a green run on Windows or macOS says nothing about this.
+    const home = mkdtempSync(join(scratch, 'bind-home-'));
+    const alias = mkdtempSync(join(scratch, 'bind-alias-'));
+    mkdirSync(join(home, '.git'));
+    mkdirSync(join(home, 'scratch', 'subdir'), { recursive: true });
+
+    const mounted = spawnSync('unshare', [
+      '--map-root-user', '--mount', '--',
+      'bash', '-c',
+      `mount --bind ${JSON.stringify(home)} ${JSON.stringify(alias)} && ` +
+      `node --input-type=module -e ${JSON.stringify(
+        `import { SmartEnvLoader } from ${JSON.stringify(loaderUrl)};` +
+        `console.log(JSON.stringify(SmartEnvLoader.getInstance()` +
+        `.ancestorsUpToProjectRoot(${JSON.stringify(join(alias, 'scratch', 'subdir'))}, ${JSON.stringify(home)})));`
+      )}`,
+    ], { encoding: 'utf8', timeout: 120000 });
+
+    assert.equal(mounted.status, 0, `the mount must have worked:\n${mounted.stderr}`);
+    assert.deepEqual(
+      JSON.parse(mounted.stdout.trim().split('\n').pop()), [],
+      'the alias names the home directory, so the walk must stop there too'
+    );
+  });
+
+  it('falls back when the home value is unusable', () => {
+    // Each of these resolves against the working directory if taken at face
+    // value, which is how the ceiling became cwd.
+    const { project, deep } = projectTree();
+
+    for (const home of ['', '   ', '../somewhere', 'relative/path']) {
+      assert.deepEqual(
+        loader().ancestorsUpToProjectRoot(deep, home), [project],
+        `home=${JSON.stringify(home)} must fall through, not become the ceiling`
+      );
+    }
+  });
+
+  it('walks nothing rather than throwing when no home can be found', () => {
+    // A container running as an arbitrary UID with no passwd entry: homedir()
+    // throws. That used to happen in a default parameter, taking down the whole
+    // environment load before it could look at variables already set.
+    const { deep } = projectTree();
+    const saved = { home: process.env.HOME, profile: process.env.USERPROFILE };
+    delete process.env.HOME;
+    delete process.env.USERPROFILE;
+
+    try {
+      const found = loader().ancestorsUpToProjectRoot(deep, '');
+      assert.ok(Array.isArray(found), 'it must return a list, not throw');
+    } finally {
+      if (saved.home === undefined) { delete process.env.HOME; } else { process.env.HOME = saved.home; }
+      if (saved.profile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = saved.profile;
+      }
+    }
+  });
+
+  it('still stops at a home it can resolve', () => {
+    const home = mkdtempSync(join(scratch, 'ok-home-'));
+    mkdirSync(join(home, '.git'));
+    const deep = join(home, 'a', 'b');
+    mkdirSync(deep, { recursive: true });
+
+    assert.deepEqual(loader().ancestorsUpToProjectRoot(deep, home), []);
   });
 });

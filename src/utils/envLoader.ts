@@ -1,8 +1,8 @@
 import { config } from 'dotenv';
-import { existsSync, realpathSync } from 'fs';
+import { existsSync, realpathSync, statSync } from 'fs';
 import { findExecutable } from './platformUtils.js';
-import { homedir } from 'os';
-import { dirname, join, resolve } from 'path';
+import { homedir, userInfo } from 'os';
+import { dirname, isAbsolute, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
 import { probeCommand } from './processUtils.js';
@@ -169,10 +169,16 @@ export class SmartEnvLoader {
     // findProjectRoot below cannot serve here: it only returns a directory
     // whose package.json is CGMB itself, so a host project's root is invisible
     // to it. Different question, different answer.
-    for (const ancestor of this.ancestorsUpToProjectRoot(process.cwd())) {
-      if (!paths.includes(ancestor)) {
-        paths.push(ancestor);
+    // Wrapped like steps 3-5: one leg of the search failing should narrow the
+    // search, not stop the environment from loading at all.
+    try {
+      for (const ancestor of this.ancestorsUpToProjectRoot(process.cwd())) {
+        if (!paths.includes(ancestor)) {
+          paths.push(ancestor);
+        }
       }
+    } catch (error) {
+      // Ignore errors walking up from the working directory
     }
 
     // 3. Look for package.json to find project root
@@ -236,6 +242,79 @@ export class SmartEnvLoader {
   }
 
   /**
+   * Whether two paths name the same directory on disk.
+   *
+   * Comparing canonical paths is not enough. realpath resolves symlinks but
+   * says nothing about bind mounts: mount /home/u at /mnt/u and the two paths
+   * stay distinct while being one directory. Reproduced in a user namespace --
+   * a walk entered through the alias put the home directory on the search list
+   * and read its .env, which is the credential boundary this ceiling exists to
+   * hold.
+   *
+   * The inode identity is POSIX-only on purpose. Windows fs.Stats does not
+   * populate dev/ino dependably, and the aliases Windows does offer --
+   * junctions and symlinks -- are already collapsed by realpath.
+   */
+  static sameDirectory(a: string, b: string): boolean {
+    if (SmartEnvLoader.canonical(a) === SmartEnvLoader.canonical(b)) {
+      return true;
+    }
+
+    if (process.platform === 'win32') {
+      return false;
+    }
+
+    try {
+      const left = statSync(a);
+      const right = statSync(b);
+      return left.dev === right.dev && left.ino === right.ino;
+    } catch {
+      // One of them is not on disk, so it is not the home directory.
+      return false;
+    }
+  }
+
+  /**
+   * The home directory to use as a ceiling, or undefined if there is none.
+   *
+   * homedir() used to be a default parameter, which meant it ran before the
+   * function body and its result went unchecked. Two ways that hurt: with
+   * HOME='' it returns '', and resolve('') is the working directory -- so the
+   * ceiling became cwd and the walk stopped before it started, losing a real
+   * project's .env one level up. And in a container running as an arbitrary UID
+   * with no passwd entry, homedir() throws outright, which took down the whole
+   * environment load before it could even look at the variables already set.
+   *
+   * Anything relative or blank is rejected for the same reason: it would
+   * resolve against cwd. When nothing usable turns up the caller gets
+   * undefined and does not walk at all -- without a ceiling there is no safe
+   * place to stop, and the working directory is still searched regardless.
+   */
+  private resolveHomeDirectory(explicit?: string): string | undefined {
+    const candidates = [
+      () => explicit,
+      () => homedir(),
+      () => userInfo().homedir,
+    ];
+
+    for (const candidate of candidates) {
+      let value: string | undefined;
+      try {
+        value = candidate();
+      } catch {
+        continue; // no passwd entry, or no HOME to fall back on
+      }
+
+      const trimmed = value?.trim();
+      if (trimmed && isAbsolute(trimmed)) {
+        return trimmed;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
    * Directories between `start` and the project root that contains it.
    *
    * A project root holds package.json or .git -- the markers every other tool
@@ -256,14 +335,18 @@ export class SmartEnvLoader {
    *
    * `start` itself is excluded; the caller already searched it.
    */
-  ancestorsUpToProjectRoot(start: string, home: string = homedir()): string[] {
-    const ceiling = SmartEnvLoader.canonical(home);
+  ancestorsUpToProjectRoot(start: string, home?: string): string[] {
+    const ceiling = this.resolveHomeDirectory(home);
+    if (ceiling === undefined) {
+      return [];
+    }
+
     const from = resolve(start);
     const ancestors: string[] = [];
     let current = from;
 
     while (current !== dirname(current)) {
-      if (SmartEnvLoader.canonical(current) === ceiling) {
+      if (SmartEnvLoader.sameDirectory(current, ceiling)) {
         return [];
       }
 
