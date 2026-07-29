@@ -130,3 +130,51 @@ describe('importing this module must not end the process', () => {
     );
   });
 });
+
+describe('deciding whether this is a CI run', () => {
+  // Review finding. `if (process.env.CI)` accepts any non-empty string, so
+  // CI=false said yes. Measured before the fix: CI=false, CI=0, CI=no and
+  // CI=off all skipped the setup. Somewhere that sets CI=false to declare it is
+  // *not* CI got no .env and no MCP registration, and learned that at first
+  // use. The earlier test only ever passed 'true'.
+
+  const scriptPath = join(HERE, '..', 'scripts', 'postinstall.cjs');
+  const { isCiEnvironment } = require(scriptPath);
+
+  const ENABLED = ['true', 'TRUE', '1', 'yes', 'on', ' true '];
+  const DISABLED = ['false', 'FALSE', '0', 'no', 'off', '', '   '];
+
+  it('reads a flag value rather than its presence', () => {
+    for (const value of ENABLED) {
+      assert.equal(isCiEnvironment({ CI: value }), true, `CI=${JSON.stringify(value)}`);
+    }
+    for (const value of DISABLED) {
+      assert.equal(isCiEnvironment({ CI: value }), false, `CI=${JSON.stringify(value)}`);
+    }
+    assert.equal(isCiEnvironment({}), false, 'unset');
+  });
+
+  it('applies the same reading to CONTINUOUS_INTEGRATION', () => {
+    assert.equal(isCiEnvironment({ CONTINUOUS_INTEGRATION: 'true' }), true);
+    assert.equal(isCiEnvironment({ CONTINUOUS_INTEGRATION: 'false' }), false);
+    // Either one saying yes is enough.
+    assert.equal(isCiEnvironment({ CI: 'false', CONTINUOUS_INTEGRATION: '1' }), true);
+  });
+
+  it('behaves that way when npm actually runs the script', () => {
+    // The unit check above tests the function; this tests the wiring, because
+    // the defect was in how the value reached the condition.
+    const run = value => spawnSync(process.execPath, [scriptPath], {
+      env: { ...process.env, CI: value, CONTINUOUS_INTEGRATION: '' },
+      encoding: 'utf8',
+      timeout: 120000,
+      windowsHide: true,
+    });
+
+    const skipped = result => /CI environment detected/.test(`${result.stdout}${result.stderr}`);
+
+    assert.ok(skipped(run('true')), 'a real CI run must still skip');
+    assert.ok(!skipped(run('false')), 'CI=false says this is not CI');
+    assert.ok(!skipped(run('0')), 'and so does CI=0');
+  });
+});

@@ -1,7 +1,8 @@
 import { config } from 'dotenv';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { findExecutable } from './platformUtils.js';
-import { dirname, join } from 'path';
+import { homedir } from 'os';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
 import { probeCommand } from './processUtils.js';
@@ -217,30 +218,60 @@ export class SmartEnvLoader {
   }
 
   /**
+   * One path, in the form comparisons can be made on.
+   *
+   * Symlinks are resolved because a home directory is often one, and Windows
+   * comparisons ignore case because C:\Users\x and c:\users\x are the same
+   * directory. A path that does not exist is left as resolved -- realpath
+   * cannot answer for it, and it cannot be the home directory either.
+   */
+  private static canonical(target: string): string {
+    let path = resolve(target);
+    try {
+      path = realpathSync(path);
+    } catch {
+      // not on disk; the resolved form is the best available
+    }
+    return process.platform === 'win32' ? path.toLowerCase() : path;
+  }
+
+  /**
    * Directories between `start` and the project root that contains it.
    *
-   * A project root is a directory holding package.json or .git -- the same
-   * markers every other tool uses. The walk stops there rather than continuing
-   * to the filesystem root, so a stray $HOME/.env or /.env is never picked up
-   * by a run that happens to be deep in a tree. When no marker is found the
-   * result is empty: nothing establishes where a "project" would even be.
+   * A project root holds package.json or .git -- the markers every other tool
+   * uses. The walk stops there rather than continuing upward, and returns
+   * nothing when it finds none: without a marker there is nothing to say where
+   * a project would even begin.
    *
-   * `start` itself is excluded; the caller already searched the working
-   * directory.
+   * The home directory is a hard ceiling, checked before the marker. Stopping
+   * at "the first marker" alone was not enough, because that marker can be the
+   * home directory itself -- ~/.git is an ordinary dotfiles setup, and measured
+   * with it in place, a run from ~/scratch/subdir put ~ on the search list and
+   * loaded ~/.env. That crosses a credential boundary: another project's
+   * AI_STUDIO_API_KEY would be billed silently, and its CGMB_ALLOWED_ROOTS
+   * would widen which files may be uploaded to Google. A project that genuinely
+   * lives at ~ gets nothing from this walk, which is the safe direction to
+   * fail: the working directory is still searched, and the path can be set
+   * explicitly.
+   *
+   * `start` itself is excluded; the caller already searched it.
    */
-  ancestorsUpToProjectRoot(start: string): string[] {
+  ancestorsUpToProjectRoot(start: string, home: string = homedir()): string[] {
+    const ceiling = SmartEnvLoader.canonical(home);
+    const from = resolve(start);
     const ancestors: string[] = [];
-    let current = start;
+    let current = from;
 
     while (current !== dirname(current)) {
-      const isProjectRoot = existsSync(join(current, 'package.json'))
-        || existsSync(join(current, '.git'));
+      if (SmartEnvLoader.canonical(current) === ceiling) {
+        return [];
+      }
 
-      if (current !== start) {
+      if (current !== from) {
         ancestors.push(current);
       }
 
-      if (isProjectRoot) {
+      if (existsSync(join(current, 'package.json')) || existsSync(join(current, '.git'))) {
         return ancestors;
       }
 

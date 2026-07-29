@@ -17,9 +17,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { after, afterEach, describe, it } from 'node:test';
 
 import { SmartEnvLoader } from '../dist/utils/envLoader.js';
@@ -127,16 +127,24 @@ describe('finding a .env from inside a project', () => {
   const scratch = mkdtempSync(join(tmpdir(), 'cgmb-env-search-'));
   after(() => rmSync(scratch, { recursive: true, force: true }));
 
-  const ancestors = start => SmartEnvLoader.getInstance().ancestorsUpToProjectRoot(start);
+  // Home is passed explicitly almost everywhere below. The real one varies by
+  // machine and, on Windows, contains tmpdir -- so leaving it implicit would
+  // make these cases mean different things on different platforms.
+  const ancestors = (start, home = join(scratch, 'no-such-home')) =>
+    SmartEnvLoader.getInstance().ancestorsUpToProjectRoot(start, home);
 
-  /** <root>/a/b, with a marker file at <root>. */
-  function projectWith(marker) {
-    const root = mkdtempSync(join(scratch, 'proj-'));
-    if (marker === 'package.json') {
-      writeFileSync(join(root, 'package.json'), '{}', 'utf8');
-    } else if (marker === '.git') {
-      mkdirSync(join(root, '.git'));
+  function marker(dir, kind) {
+    if (kind === 'package.json') {
+      writeFileSync(join(dir, 'package.json'), '{}', 'utf8');
+    } else if (kind === '.git') {
+      mkdirSync(join(dir, '.git'));
     }
+  }
+
+  /** <root>/a/b, with a marker at <root>. */
+  function projectWith(kind) {
+    const root = mkdtempSync(join(scratch, 'proj-'));
+    marker(root, kind);
     const deep = join(root, 'a', 'b');
     mkdirSync(deep, { recursive: true });
     return { root, deep };
@@ -181,5 +189,108 @@ describe('finding a .env from inside a project', () => {
     const { deep } = projectWith('package.json');
 
     assert.ok(!ancestors(deep).includes(deep), 'cwd is already search path #1');
+  });
+});
+
+describe('the home directory is a ceiling on that walk', () => {
+  // Review finding, high. Stopping at "the first package.json or .git" is not
+  // enough when that marker is the home directory itself -- ~/.git is an
+  // ordinary dotfiles setup. Measured before the fix, with .git at a stand-in
+  // home: a run from <home>/scratch/subdir returned ["<home>/scratch",
+  // "<home>"] and the loader read <home>/.env. That crosses a credential
+  // boundary; another project's AI_STUDIO_API_KEY gets billed silently and its
+  // CGMB_ALLOWED_ROOTS widens what may be uploaded to Google.
+  //
+  // The earlier tests could not have caught it: every fixture put its marker
+  // below the home directory, so the ceiling was never reached.
+
+  const scratch = mkdtempSync(join(tmpdir(), 'cgmb-home-ceiling-'));
+  after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const ancestors = (start, home) =>
+    SmartEnvLoader.getInstance().ancestorsUpToProjectRoot(start, home);
+
+  function homeWithMarker(kind) {
+    const home = mkdtempSync(join(scratch, 'home-'));
+    if (kind === 'package.json') {
+      writeFileSync(join(home, 'package.json'), '{}', 'utf8');
+    } else {
+      mkdirSync(join(home, '.git'));
+    }
+    const deep = join(home, 'scratch', 'subdir');
+    mkdirSync(deep, { recursive: true });
+    return { home, deep };
+  }
+
+  it('refuses the home directory even when it carries a marker', () => {
+    for (const kind of ['.git', 'package.json']) {
+      const { home, deep } = homeWithMarker(kind);
+
+      assert.deepEqual(
+        ancestors(deep, home), [],
+        `~/${kind} must not turn the home directory into a project root`
+      );
+    }
+  });
+
+  it('stops at home rather than continuing above it', () => {
+    // The marker is above home, so without a ceiling the walk would sail past
+    // and offer directories belonging to no project of the user's.
+    const above = mkdtempSync(join(scratch, 'above-'));
+    mkdirSync(join(above, '.git'));
+    const home = join(above, 'home');
+    const deep = join(home, 'a', 'b');
+    mkdirSync(deep, { recursive: true });
+
+    assert.deepEqual(ancestors(deep, home), []);
+  });
+
+  it('still finds a project that lives below home', () => {
+    // The ceiling must not cost us the case the walk exists for.
+    const { home } = homeWithMarker('.git');
+    const project = join(home, 'work', 'app');
+    const deep = join(project, 'src', 'lib');
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{}', 'utf8');
+
+    const found = ancestors(deep, home);
+    assert.ok(found.includes(project), 'the project root is what this walk is for');
+    assert.ok(!found.includes(home), 'and home is still not on the list');
+  });
+
+  it('returns nothing when the working directory is home itself', () => {
+    const { home } = homeWithMarker('.git');
+
+    assert.deepEqual(ancestors(home, home), []);
+  });
+
+  it('recognises home through a symlink', { skip: process.platform === 'win32' }, () => {
+    // Home is frequently a link -- /home/x -> /mnt/data/x and the like. Compare
+    // the resolved paths or the ceiling is trivially side-stepped.
+    const { home, deep } = homeWithMarker('.git');
+    const linked = join(scratch, `link-${Math.abs(home.length)}-${basename(home)}`);
+    symlinkSync(home, linked, 'dir');
+
+    assert.deepEqual(ancestors(deep, linked), [], 'the link names the same directory');
+  });
+
+  it('ignores case on Windows', { skip: process.platform !== 'win32' }, () => {
+    // C:\Users\x and c:\users\x are one directory; a case difference must not
+    // let the walk step onto home.
+    const { home, deep } = homeWithMarker('.git');
+
+    assert.deepEqual(ancestors(deep, home.toUpperCase()), []);
+    assert.deepEqual(ancestors(deep, home.toLowerCase()), []);
+  });
+
+  it('defaults to the real home directory', () => {
+    // The parameter exists for these tests; the default is what ships.
+    const real = homedir();
+    const deep = join(real, 'a', 'b', 'c');
+
+    assert.ok(
+      !SmartEnvLoader.getInstance().ancestorsUpToProjectRoot(deep).includes(real),
+      'called with no home argument, it must still refuse the real one'
+    );
   });
 });

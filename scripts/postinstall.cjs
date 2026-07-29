@@ -234,6 +234,27 @@ function checkClaudeCode() {
 }
 
 /**
+ * Whether a flag-shaped environment variable means yes.
+ *
+ * `if (process.env.CI)` treats "false" as set, because every non-empty string
+ * is truthy. Measured: CI=false, CI=0, CI=no and CI=off all skipped the setup.
+ * Somewhere that sets CI=false to say "this is not CI" got no .env and no MCP
+ * registration, and found out at first use.
+ */
+function isEnabledFlag(value) {
+  const normalised = String(value ?? '').trim().toLowerCase();
+  if (normalised === '') {
+    return false;
+  }
+  return !['false', '0', 'no', 'off'].includes(normalised);
+}
+
+/** True when this install is running on a CI runner. */
+function isCiEnvironment(env = process.env) {
+  return isEnabledFlag(env.CI) || isEnabledFlag(env.CONTINUOUS_INTEGRATION);
+}
+
+/**
  * True when npm is installing this package globally.
  *
  * Two spellings reach the same place and npm reports them differently:
@@ -532,6 +553,7 @@ function checkNodeVersion(version, requiredMajor) {
 module.exports = {
   checkNodeVersion,
   requiredNodeMajor,
+  isCiEnvironment,
   isGlobalInstall,
   localInstallRoot,
   isSourceCheckout,
@@ -633,7 +655,7 @@ if (require.main === module) {
   // install-kind detection. Exit code 0, so CI stayed green while proving
   // nothing. Inside the guard the skip still applies to the only situation it
   // was for: npm running this as a script.
-  if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
+  if (isCiEnvironment()) {
     log('🔄 CI environment detected, skipping interactive setup', 'info');
     process.exit(0);
   }
