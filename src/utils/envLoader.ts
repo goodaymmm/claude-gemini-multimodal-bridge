@@ -119,9 +119,15 @@ export class SmartEnvLoader {
         this.loadResult.loadedFrom = 'environment variables';
         
         if (verbose) {
+          // Reports the keys the decision above actually consulted. It used to
+          // log hasClaudeKey, which no longer takes part in that decision --
+          // and never named AI_STUDIO_API_KEY, so the diagnostic could not have
+          // explained why the verdict came out the way it did.
           logger.info('Using environment variables (no .env file needed)', {
-            hasGeminiKey: !!process.env.GEMINI_API_KEY,
-            hasClaudeKey: !!process.env.CLAUDE_API_KEY
+            hasAiStudioKey: !!process.env.AI_STUDIO_API_KEY,
+            usingDeprecatedFallback:
+              !process.env.AI_STUDIO_API_KEY &&
+              (!!process.env.GOOGLE_AI_STUDIO_API_KEY || !!process.env.GEMINI_API_KEY),
           });
         }
       }

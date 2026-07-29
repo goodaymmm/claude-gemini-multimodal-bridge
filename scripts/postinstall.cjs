@@ -233,9 +233,44 @@ function checkClaudeCode() {
   return false;
 }
 
-/** True when npm is installing this package globally (`npm i -g`). */
-function isGlobalInstall() {
-  return process.env.npm_config_global === 'true';
+/**
+ * True when npm is installing this package globally.
+ *
+ * Two spellings reach the same place and npm reports them differently:
+ * `npm i -g` sets npm_config_global=true, while `npm i --location=global`
+ * sets npm_config_location=global and leaves npm_config_global unset.
+ * Measured with a probe package on npm 10.9.2. Checking only the first meant
+ * the second kept the behaviour this was meant to fix.
+ */
+function isGlobalInstall(env = process.env) {
+  return env.npm_config_global === 'true' || env.npm_config_location === 'global';
+}
+
+/**
+ * The project root of a local install.
+ *
+ * npm passes the package root as npm_config_local_prefix. INIT_CWD is the
+ * directory npm was *invoked from*, which is only the same thing when the user
+ * happened to run npm at the top of the project -- measured, running
+ * `npm i <pkg>` from a subdirectory gives INIT_CWD=<proj>/subdir and
+ * npm_config_local_prefix=<proj>. INIT_CWD stays as a fallback for npm
+ * versions that do not set the former.
+ */
+function localInstallRoot(env = process.env) {
+  return env.npm_config_local_prefix || env.INIT_CWD || process.cwd();
+}
+
+/**
+ * Whether the user still has to build this package before it will run.
+ *
+ * "Not a global install" is not the same as "a source checkout": installing
+ * CGMB as a dependency is a local install of a published tarball, which ships
+ * dist/ already, and telling those users to run `npm run build` sends them at
+ * their own project's build script. The honest test is whether the entry point
+ * exists -- absent only in a checkout that has not been built yet.
+ */
+function needsBuildStep(packageRoot = path.join(__dirname, '..')) {
+  return !fs.existsSync(path.join(packageRoot, 'dist', 'cli.js'));
 }
 
 // Setup environment file
@@ -260,8 +295,8 @@ function setupEnvironment() {
     return true;
   }
 
-  // Local install: INIT_CWD is where npm was invoked, i.e. the project root.
-  const targetDir = process.env.INIT_CWD || process.cwd();
+  // Local install: the project root, which is not necessarily where npm was run.
+  const targetDir = localInstallRoot();
   const envPath = path.join(targetDir, '.env');
   const envExamplePath = path.join(targetDir, '.env.example');
 
@@ -424,9 +459,10 @@ function showCompletionSummary(results) {
     console.log(`   ${status} ${component}`);
   });
   
-  // The steps differ by install kind. A global install has no project to build
-  // and no .env to edit -- telling everyone to `npm run build` sent users of
-  // the published package looking for a source tree they do not have.
+  // The steps differ by install kind. A global install has no project .env to
+  // edit, and only an unbuilt checkout needs building -- gating the build step
+  // on "not global" still sent it to anyone installing CGMB as a dependency,
+  // whose published copy already ships dist/.
   const global = isGlobalInstall();
   const steps = [
     global
@@ -435,7 +471,7 @@ function showCompletionSummary(results) {
         '   Get a key: https://aistudio.google.com/app/apikey'
       : 'Edit .env and add your AI Studio API key:\n' +
         '   Get a key: https://aistudio.google.com/app/apikey',
-    ...(global ? [] : ['Build the project:\n   npm run build']),
+    ...(needsBuildStep() ? ['Build the project:\n   npm run build'] : []),
     'Verify installation:\n   cgmb verify',
     'Set up authentication:\n   cgmb auth --interactive',
     ...(results['MCP Integration'] ? [] : ['Set up Claude Code MCP integration:\n   cgmb setup-mcp']),
@@ -486,7 +522,14 @@ function checkNodeVersion(version, requiredMajor) {
   };
 }
 
-module.exports = { checkNodeVersion, requiredNodeMajor, isGlobalInstall, setupEnvironment };
+module.exports = {
+  checkNodeVersion,
+  requiredNodeMajor,
+  isGlobalInstall,
+  localInstallRoot,
+  needsBuildStep,
+  setupEnvironment,
+};
 
 // Main setup function
 async function main() {

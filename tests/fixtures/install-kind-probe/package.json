@@ -1,0 +1,12 @@
+{
+  "name": "cgmb-install-kind-probe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Records the lifecycle environment npm hands a postinstall script, so the install-kind detection can be tested against real npm rather than an assumption.",
+  "scripts": {
+    "postinstall": "node probe.cjs"
+  },
+  "files": [
+    "probe.cjs"
+  ]
+}
