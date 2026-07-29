@@ -282,14 +282,24 @@ export class SmartEnvLoader {
    * Check if required environment variables are already set
    */
   private checkEnvironmentVariables(): boolean {
-    // Check for at least one of the key environment variables
-    const requiredVars = [
-      'GEMINI_API_KEY',
-      'GOOGLE_AI_STUDIO_API_KEY',
-      'CLAUDE_API_KEY'
+    // The keys AuthVerifier actually resolves, in the order it tries them.
+    //
+    // AI_STUDIO_API_KEY -- the one the README tells everyone to set -- was
+    // missing from this list, so anyone who exported it instead of writing a
+    // .env file was told the environment had not loaded. Measured: with only
+    // that variable set, this returned false.
+    //
+    // CLAUDE_API_KEY used to be here and is gone: nothing in src/ reads it
+    // (Claude Code carries its own session auth) and .env.example dropped it
+    // long ago, yet its presence alone was enough to report a configured
+    // environment while the AI Studio layer had no credential at all.
+    const credentialVars = [
+      'AI_STUDIO_API_KEY',
+      'GOOGLE_AI_STUDIO_API_KEY',  // deprecated fallback
+      'GEMINI_API_KEY',            // deprecated fallback
     ];
 
-    return requiredVars.some(varName => !!process.env[varName]);
+    return credentialVars.some(varName => !!process.env[varName]);
   }
 
   /**
@@ -321,20 +331,35 @@ export class SmartEnvLoader {
     loaded: boolean;
     source: string | null;
     availableVars: Record<string, boolean>;
+    requiredVars: string[];
+    deprecatedVars: string[];
     foundFiles: string[];
     errors: string[];
   } {
-    const importantVars = [
-      'GEMINI_API_KEY',
-      'GOOGLE_AI_STUDIO_API_KEY', 
-      'CLAUDE_API_KEY',
+    // What this reports had drifted a whole migration behind what CGMB reads.
+    // AI_STUDIO_API_KEY -- the only credential the README asks for -- was
+    // absent, while GEMINI_CLI_PATH was shown as a healthy entry pointing at
+    // the CLI Google discontinued. Someone checking their setup was told the
+    // wrong things were fine and the right thing was missing.
+    const requiredVars = ['AI_STUDIO_API_KEY'];
+
+    const optionalVars = [
+      'ANTIGRAVITY_MODEL',
+      'ANTIGRAVITY_CLI_PATH',
       'CLAUDE_CODE_PATH',
-      'GEMINI_CLI_PATH',
-      'LOG_LEVEL'
+      // Decides which directories may have their contents uploaded to Google,
+      // so it belongs in any account of how this install is configured.
+      'CGMB_ALLOWED_ROOTS',
+      'LOG_LEVEL',
     ];
 
+    // Listed only when actually set: naming them unconditionally invites people
+    // to set a deprecated key, which is the opposite of the intent.
+    const deprecatedVars = ['GOOGLE_AI_STUDIO_API_KEY', 'GEMINI_API_KEY']
+      .filter(varName => !!process.env[varName]);
+
     const availableVars: Record<string, boolean> = {};
-    importantVars.forEach(varName => {
+    [...requiredVars, ...optionalVars, ...deprecatedVars].forEach(varName => {
       availableVars[varName] = !!process.env[varName];
     });
 
@@ -342,6 +367,8 @@ export class SmartEnvLoader {
       loaded: this.isLoaded && this.loadResult.success,
       source: this.loadResult.loadedFrom || null,
       availableVars,
+      requiredVars,
+      deprecatedVars,
       foundFiles: [...this.loadResult.foundFiles],
       errors: [...this.loadResult.errors]
     };

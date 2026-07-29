@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.1-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -456,6 +456,22 @@ src/
 ---
 
 ## 📜 バージョン履歴
+
+### v1.2.1 (2026-07-29)
+
+1.2.0 をクリーン環境へ導入するテストで発見したものです。
+
+- 🔑 **`AI_STUDIO_API_KEY` を認識するように**: 認証情報の判定に、この README が
+  唯一必須としている変数が入っておらず、環境変数で設定する運用（Linux / Windows
+  どちらの節でも案内している方法）が「環境を読み込めていない」と判定されていました。
+  併せて、どこからも読まれない `CLAUDE_API_KEY` を設定済みの根拠として扱っていた点も
+  修正しました
+- 📋 **`cgmb info` が現行の構成を反映**: 必須キー、Antigravity 関連の設定、
+  `CGMB_ALLOWED_ROOTS` を表示します。提供終了した Gemini CLI のパスを正常項目として
+  見せることをやめ、任意項目は異常ではなく任意として表示します
+- 📁 **インストール時の案内が実在する場所を指すように**: グローバル導入時に
+  パッケージ自身のディレクトリへ `.env` を作らなくなり、npm 利用者に
+  `npm run build` を促す手順も出さなくなりました
 
 ### v1.2.0 (2026-07-28)
 - 🔄 **Antigravity CLI へ移行**: Google が 2026-06-18 に Gemini CLI の個人向け提供を

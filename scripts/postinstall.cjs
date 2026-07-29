@@ -233,18 +233,43 @@ function checkClaudeCode() {
   return false;
 }
 
+/** True when npm is installing this package globally (`npm i -g`). */
+function isGlobalInstall() {
+  return process.env.npm_config_global === 'true';
+}
+
 // Setup environment file
 function setupEnvironment() {
   log('🔧 Setting up environment configuration...');
-  
-  const envPath = path.join(process.cwd(), '.env');
-  const envExamplePath = path.join(process.cwd(), '.env.example');
-  
+
+  // A global install has no project directory to put this in.
+  //
+  // process.cwd() during `npm install -g` is the package directory npm is
+  // installing into, so the file landed at
+  // <prefix>/lib/node_modules/claude-gemini-multimodal-bridge/.env -- measured
+  // -- while the next-steps text told the user to go and edit ".env". Nobody
+  // was going to find that. INIT_CWD would be wherever `npm i -g` was typed,
+  // which is just as likely to be $HOME, so writing a file is wrong either
+  // way: the right location is whichever directory they later run cgmb from,
+  // and only they know that.
+  if (isGlobalInstall()) {
+    log('ℹ️  Global install: create a .env where you will run cgmb', 'info');
+    log('   cd <your project> && printf "AI_STUDIO_API_KEY=<key>\\n" > .env', 'info');
+    log('   Get a key: https://aistudio.google.com/app/apikey', 'info');
+    log('   Or export AI_STUDIO_API_KEY instead -- no file needed', 'info');
+    return true;
+  }
+
+  // Local install: INIT_CWD is where npm was invoked, i.e. the project root.
+  const targetDir = process.env.INIT_CWD || process.cwd();
+  const envPath = path.join(targetDir, '.env');
+  const envExamplePath = path.join(targetDir, '.env.example');
+
   if (fs.existsSync(envPath)) {
     log('✅ .env file already exists', 'success');
     return true;
   }
-  
+
   let envContent = '';
   
   if (fs.existsSync(envExamplePath)) {
@@ -399,20 +424,25 @@ function showCompletionSummary(results) {
     console.log(`   ${status} ${component}`);
   });
   
+  // The steps differ by install kind. A global install has no project to build
+  // and no .env to edit -- telling everyone to `npm run build` sent users of
+  // the published package looking for a source tree they do not have.
+  const global = isGlobalInstall();
+  const steps = [
+    global
+      ? 'Set your AI Studio API key, in the directory you will run cgmb from:\n' +
+        '   printf "AI_STUDIO_API_KEY=<key>\\n" > .env   (or export it)\n' +
+        '   Get a key: https://aistudio.google.com/app/apikey'
+      : 'Edit .env and add your AI Studio API key:\n' +
+        '   Get a key: https://aistudio.google.com/app/apikey',
+    ...(global ? [] : ['Build the project:\n   npm run build']),
+    'Verify installation:\n   cgmb verify',
+    'Set up authentication:\n   cgmb auth --interactive',
+    ...(results['MCP Integration'] ? [] : ['Set up Claude Code MCP integration:\n   cgmb setup-mcp']),
+  ];
+
   console.log('\n📋 Next Steps:');
-  console.log('1. Edit .env file and add your API keys:');
-  console.log('   - Get Gemini API key: https://aistudio.google.com/app/apikey');
-  console.log('2. Build the project (if in development):');
-  console.log('   npm run build');
-  console.log('3. Verify installation:');
-  console.log('   cgmb verify');
-  console.log('4. Set up authentication:');
-  console.log('   cgmb auth --interactive');
-  
-  if (!results['MCP Integration']) {
-    console.log('5. Set up Claude Code MCP integration:');
-    console.log('   cgmb setup-mcp');
-  }
+  steps.forEach((step, i) => console.log(`${i + 1}. ${step}`));
   
   console.log('\n💡 For help and documentation:');
   console.log('   cgmb --help');
@@ -456,7 +486,7 @@ function checkNodeVersion(version, requiredMajor) {
   };
 }
 
-module.exports = { checkNodeVersion, requiredNodeMajor };
+module.exports = { checkNodeVersion, requiredNodeMajor, isGlobalInstall, setupEnvironment };
 
 // Main setup function
 async function main() {

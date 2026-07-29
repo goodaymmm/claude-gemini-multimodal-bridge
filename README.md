@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.1-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -457,6 +457,22 @@ src/
 ---
 
 ## 📜 Version History
+
+### v1.2.1 (2026-07-29)
+
+Found by installing 1.2.0 from the registry into a clean environment.
+
+- 🔑 **`AI_STUDIO_API_KEY` Is Recognised**: the credential check omitted the one
+  variable this README asks for, so exporting it — the documented setup on Linux
+  and Windows alike — was reported as an unloaded environment. It also accepted
+  `CLAUDE_API_KEY`, which nothing reads, as proof of configuration
+- 📋 **`cgmb info` Reflects This Release**: shows the required key, the
+  Antigravity settings and `CGMB_ALLOWED_ROOTS`; no longer presents the retired
+  Gemini CLI path as healthy, and marks optional settings as optional rather
+  than as errors
+- 📁 **Install Guidance Points Somewhere Real**: a global install no longer
+  writes a `.env` inside its own package directory, and the next steps no longer
+  tell users of the published package to run `npm run build`
 
 ### v1.2.0 (2026-07-28)
 - 🔄 **Antigravity CLI Migration**: Google discontinued Gemini CLI for individual

@@ -2174,14 +2174,21 @@ program
       console.log('🔑 Key Environment Variables');
       console.log('═'.repeat(30));
       Object.entries(envStatus.availableVars).forEach(([key, isSet]) => {
-        const icon = isSet ? '✅' : '❌';
+        // An unset optional setting is not a fault. Marking everything with ❌
+        // made a correctly configured install look broken, which is how the
+        // genuinely missing key went unnoticed.
+        const required = envStatus.requiredVars.includes(key);
+        const icon = isSet ? '✅' : (required ? '❌' : '➖');
+        const note = envStatus.deprecatedVars.includes(key) ? ' (deprecated)' : '';
+
         if (key.includes('KEY') && isSet) {
           const value = process.env[key];
           const masked = value ? `${value.substring(0, 8)}...${value.slice(-4)}` : 'Not set';
-          console.log(`${icon} ${key}: ${masked}`);
+          console.log(`${icon} ${key}: ${masked}${note}`);
         } else {
           const value = process.env[key];
-          console.log(`${icon} ${key}: ${value || 'Not set'}`);
+          const shown = value || (required ? 'Not set' : 'unset (optional)');
+          console.log(`${icon} ${key}: ${shown}${note}`);
         }
       });
 
