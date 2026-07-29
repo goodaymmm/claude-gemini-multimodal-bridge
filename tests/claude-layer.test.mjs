@@ -1,0 +1,240 @@
+/**
+ * The Claude Code layer.
+ *
+ * It had no direct tests at all: the migration suite reached it only through
+ * stubs injected into LayerManager, so nothing exercised how it actually spawns
+ * the CLI, reads its output, or decides a run failed. That is the half where
+ * the migration's worst defect lived -- `shell: true` silently discarding the
+ * prompt on Windows, producing a confident answer to a question the CLI never
+ * received.
+ *
+ * A stub `claude` on PATH stands in for the real one. It lives in tmpdir, not
+ * in the repository: findClaudeCodePath resolves through resolveTrustedCommand,
+ * which refuses candidates inside the working directory, so an in-repo stub
+ * would be ignored and these tests would pass without testing anything.
+ */
+
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
+import { after, describe, it } from 'node:test';
+
+import { ClaudeCodeLayer } from '../dist/layers/ClaudeCodeLayer.js';
+
+const isWindows = process.platform === 'win32';
+
+// Not `cgmb-agy-*`: the workspace-isolation test scans tmpdir for that prefix.
+const scratch = mkdtempSync(join(tmpdir(), 'cgmb-claude-'));
+
+after(() => {
+  rmSync(scratch, { recursive: true, force: true });
+});
+
+/**
+ * Write a stub `claude` into its own directory and return that directory.
+ *
+ * The shim calls process.execPath by absolute path: these tests put the stub
+ * directory at the front of PATH, and a shim that resolved `node` through PATH
+ * would be at the mercy of that.
+ */
+function makeStubDir(name, body) {
+  const dir = join(scratch, name);
+  const script = join(dir, 'stub.mjs');
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(script, body, 'utf8');
+
+  if (isWindows) {
+    writeFileSync(join(dir, 'claude.cmd'), `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`, 'utf8');
+  } else {
+    writeFileSync(join(dir, 'claude'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+  }
+
+  return dir;
+}
+
+/** Run `fn` with the stub directory at the front of PATH. */
+async function withStub(dir, fn) {
+  const savedPath = process.env.PATH;
+  const savedPathCased = process.env.Path;
+
+  process.env.PATH = `${dir}${delimiter}${savedPath ?? ''}`;
+  try {
+    return await fn();
+  } finally {
+    if (savedPath === undefined) { delete process.env.PATH; } else { process.env.PATH = savedPath; }
+    if (savedPathCased !== undefined) { process.env.Path = savedPathCased; }
+  }
+}
+
+/** A stub that echoes whatever body you give it and exits 0. */
+const ECHO_STUB = `
+  const chunks = [];
+  process.stdin.on('data', c => chunks.push(c));
+  process.stdin.on('end', () => {
+    const prompt = Buffer.concat(chunks).toString('utf8');
+    if (process.argv.includes('--version')) { console.log('1.0.0-stub'); process.exit(0); }
+    if (process.argv.includes('auth')) { console.log(JSON.stringify({ loggedIn: true })); process.exit(0); }
+    console.log('STUB_SAW:' + prompt.trim());
+    process.exit(0);
+  });
+`;
+
+describe('claude layer: task routing decisions', () => {
+  // canHandle decides whether this layer is offered a task at all, and it is
+  // pure -- no process, no credentials.
+
+  it('accepts the task shapes it serves and refuses an empty one', () => {
+    const layer = new ClaudeCodeLayer();
+
+    assert.equal(layer.canHandle({ type: 'reasoning', prompt: 'why?' }), true);
+    assert.equal(layer.canHandle({ type: 'workflow' }), true);
+    assert.equal(layer.canHandle({ action: 'synthesize_response' }), true);
+    assert.equal(layer.canHandle({ action: 'complex_reasoning' }), true);
+    assert.equal(layer.canHandle({ prompt: 'anything' }), true);
+
+    assert.equal(layer.canHandle({}), false, 'a task with nothing to act on is not handleable');
+    assert.equal(layer.canHandle(null), false);
+    assert.equal(layer.canHandle('string'), false);
+  });
+
+  it('reports capabilities and scales its estimate with depth', () => {
+    const layer = new ClaudeCodeLayer();
+
+    const capabilities = layer.getCapabilities();
+    assert.ok(Array.isArray(capabilities) && capabilities.length > 0);
+    assert.ok(capabilities.every(c => typeof c === 'string'));
+
+    const shallow = layer.getEstimatedDuration({ prompt: 'x', depth: 'shallow' });
+    const deep = layer.getEstimatedDuration({ prompt: 'x', depth: 'deep' });
+    assert.ok(Number.isFinite(shallow) && shallow > 0);
+    assert.ok(deep >= shallow, 'a deeper task must not be estimated as faster');
+  });
+});
+
+describe('claude layer: running the CLI', () => {
+  it('delivers the prompt on stdin and returns what the CLI printed', async () => {
+    // The regression this pins: with `shell: true` on Windows the prompt was
+    // joined into a cmd.exe command line and split on whitespace, so the CLI
+    // received nothing and answered something unrelated -- as a success.
+    const dir = makeStubDir('echo', ECHO_STUB);
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({ type: 'text_processing', prompt: 'Reply with exactly: MARKER_7f3a' });
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.metadata.layer, 'claude');
+    assert.match(
+      String(result.data), /MARKER_7f3a/,
+      'the prompt must reach the CLI intact, including the spaces'
+    );
+  });
+
+  it('treats an empty answer with exit 0 as a failure', async () => {
+    // Claude Code before the migration fix could exit 0 having printed nothing.
+    // Reporting that as a successful empty answer is how a broken install
+    // looked healthy.
+    const dir = makeStubDir('silent', `
+      const chunks = [];
+      process.stdin.on('data', c => chunks.push(c));
+      process.stdin.on('end', () => {
+        if (process.argv.includes('--version')) { console.log('1.0.0-stub'); process.exit(0); }
+        if (process.argv.includes('auth')) { console.log(JSON.stringify({ loggedIn: true })); process.exit(0); }
+        process.exit(0);   // exit 0, no output
+      });
+    `);
+
+    await assert.rejects(
+      () => withStub(dir, async () => new ClaudeCodeLayer().execute({ prompt: 'anything' })),
+      'an empty answer must not be reported as a successful one'
+    );
+  });
+
+  it('fails when the CLI exits non-zero, and keeps its stderr', async () => {
+    const dir = makeStubDir('failing', `
+      const chunks = [];
+      process.stdin.on('data', c => chunks.push(c));
+      process.stdin.on('end', () => {
+        if (process.argv.includes('--version')) { console.log('1.0.0-stub'); process.exit(0); }
+        if (process.argv.includes('auth')) { console.log(JSON.stringify({ loggedIn: true })); process.exit(0); }
+        process.stderr.write('STUB_REFUSED: quota exceeded');
+        process.exit(1);
+      });
+    `);
+
+    await assert.rejects(
+      () => withStub(dir, async () => new ClaudeCodeLayer().execute({ prompt: 'anything' })),
+      error => /STUB_REFUSED|exited with code 1/.test(error.message),
+      'the reason the CLI gave must survive'
+    );
+  });
+
+  it('does not let shell metacharacters in a prompt run anything', async () => {
+    // The prompt is caller-controlled and arrives from MCP input. Whatever the
+    // platform, it must reach the CLI as text -- never as a command line.
+    const dir = makeStubDir('metachars', ECHO_STUB);
+    const payload = 'x" & echo INJECTED & rem "; echo INJECTED; $(echo INJECTED); `echo INJECTED`';
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({ prompt: payload });
+    });
+
+    assert.equal(result.success, true);
+    const output = String(result.data);
+    assert.match(output, /STUB_SAW:/, 'the stub must have been the thing that ran');
+    assert.doesNotMatch(
+      output.replace(/STUB_SAW:.*/s, ''), /INJECTED/,
+      'nothing outside the stub may have executed'
+    );
+  });
+});
+
+describe('the configured path reaches the auth probe on both init paths', () => {
+  // Codex review, P2. initialize() was fixed to hand the resolved executable to
+  // verifyClaudeCodeAuth, but initializeLightweight was not -- and that is the
+  // path execute() takes for an ordinary prompt (no workflow, no depth, not
+  // complex_reasoning). So on a machine whose only install is the one
+  // CLAUDE_CODE_PATH names, the common case still probed the bare name, decided
+  // Claude was not installed, and cached that verdict for twelve hours.
+  //
+  // Hermetic: claudePath is set first so findClaudeCodePath never spawns, and
+  // authVerifier is replaced by a recorder. lastAuthCheck starts at 0, so the
+  // auth branch always runs.
+
+  function layerWithSpy() {
+    const layer = new ClaudeCodeLayer();
+    const seen = [];
+    layer.claudePath = '/opt/custom/claude';
+    layer.authVerifier = {
+      verifyClaudeCodeAuth: async codePath => {
+        seen.push(codePath);
+        return { success: true, status: { isAuthenticated: true }, requiresAction: false };
+      },
+    };
+    return { layer, seen };
+  }
+
+  it('passes the resolved path from lightweight initialization', async () => {
+    const { layer, seen } = layerWithSpy();
+
+    await layer.initializeLightweight();
+
+    assert.deepEqual(seen, ['/opt/custom/claude'], 'the probe must not be given the bare name');
+  });
+
+  it('does not re-probe once the check is recent', async () => {
+    // Guards the ordering: the path must be passed on the call that actually
+    // happens, not on a later one that the TTL skips.
+    const { layer, seen } = layerWithSpy();
+
+    await layer.initializeLightweight();
+    layer.isLightweightInitialized = false;
+    await layer.initializeLightweight();
+
+    assert.equal(seen.length, 1, 'the 24h auth cache must still hold');
+  });
+});

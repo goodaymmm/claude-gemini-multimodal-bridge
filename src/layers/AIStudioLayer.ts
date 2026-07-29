@@ -25,13 +25,13 @@ import {
   MediaGenResult,
   MultimodalFile,
   MultimodalResult,
-  VideoGenOptions
 } from '../core/types.js';
+import { AntigravityCLILayer } from './AntigravityCLILayer.js';
+import { taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { TimeoutManager } from '../utils/TimeoutManager.js';
-import { isPlatformWindows, normalizeCrossPlatformPath, isUrl } from '../utils/platformUtils.js';
+import { isPlatformWindows, normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
 
@@ -62,20 +62,8 @@ const SUPPORTED_LANGUAGES = {
   th: 'Thai'
 };
 
-// Problematic words to safe alternatives mapping
-const promptSanitizer: Record<string, string> = {
-  // Emotional modifiers to specific descriptions
-  'cute': 'friendly-looking',
-  'adorable': 'appealing',
-  'sweet': 'pleasant',
-  'baby': 'young',
-  'little': 'small-sized',
-  'tiny': 'miniature',
-  'sexy': 'elegant',
-  'hot': 'striking',
-  'beautiful': 'visually pleasing',
-  'pretty': 'well-formed'
-};
+// The word map that fed the duplicate sanitizePrompt above went with it; the
+// live copy lives in ai-studio-mcp-server.ts.
 
 // Function to detect language of prompt text
 function detectLanguage(text: string): string | null {
@@ -93,15 +81,9 @@ function detectLanguage(text: string): string | null {
   return 'en';
 }
 
-// Function to sanitize prompts by replacing problematic words
-function sanitizePrompt(prompt: string): string {
-  let sanitized = prompt;
-  for (const [problem, safe] of Object.entries(promptSanitizer)) {
-    const regex = new RegExp(`\\b${problem}\\b`, 'gi');
-    sanitized = sanitized.replace(regex, safe);
-  }
-  return sanitized;
-}
+// sanitizePrompt lived here as a byte-for-byte duplicate of the one in
+// ai-studio-mcp-server.ts and was never called from this file. The MCP server
+// applies it on the way to the model, which is the only place it can matter.
 
 /**
  * AIStudioLayer handles AI Studio MCP integration with enhanced authentication support
@@ -111,7 +93,11 @@ export class AIStudioLayer implements LayerInterface {
   private readonly instanceId: string;
   private authVerifier: AuthVerifier;
   private genAI: GoogleGenAI | null = null;
-  private geminiLayer?: any; // Reference to GeminiCLILayer for translation
+  // Typed, not `any`. This reference is how image generation reaches
+  // translateToEnglish; with `any` the compiler could not tell whether the
+  // method existed, which is the class of mistake that let a failed
+  // translation look like a successful one.
+  private antigravityLayer: AntigravityCLILayer | undefined;
   private mcpServerProcess?: any;
   private persistentMCPProcess?: any; // Persistent MCP process for better performance
   private mcpProcessStartTime = 0; // Track when MCP process was started
@@ -134,14 +120,14 @@ export class AIStudioLayer implements LayerInterface {
     code: ['.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.cs', '.rb', '.go', '.rs']
   };
 
-  constructor(geminiLayer?: any) {
+  constructor(antigravityLayer?: AntigravityCLILayer) {
     // Generate unique instance ID for duplicate detection
     this.instanceId = `aistudio-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
     
     logger.info(`🔧 [${this.instanceId}] AIStudioLayer constructor called - with latest translation fixes`, {
       instanceId: this.instanceId,
       timestamp: Date.now(),
-      hasGeminiLayer: !!geminiLayer,
+      hasAntigravityLayer: !!antigravityLayer,
       version: 'v2025-07-03-instance-tracking'
     });
     
@@ -149,7 +135,7 @@ export class AIStudioLayer implements LayerInterface {
     this.setupGhostLogDetection();
     
     this.authVerifier = new AuthVerifier();
-    this.geminiLayer = geminiLayer;
+    this.antigravityLayer = antigravityLayer;
     
     // Initialize Google AI Studio API client
     const apiKey = process.env.AI_STUDIO_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
@@ -343,12 +329,20 @@ export class AIStudioLayer implements LayerInterface {
             break;
           case 'document_analysis':
           case 'document':
+          // The action LayerManager.analyzeDocuments actually emits. Without it
+          // the step fell through to processGeneral(), which reads task.files --
+          // empty here, because this path carries `documents` -- so the whole
+          // MCP document-analysis tool could not analyse anything.
+          case 'process_documents':
             logger.info('🔧 Processing document analysis in execute method', {
               hasFiles: !!(task.files || task.documents),
               fileCount: (task.files || task.documents || []).length,
               hasInstructions: !!task.instructions
             });
-            result = await this.analyzeDocuments(task.files || task.documents, task.instructions);
+            // taskFileRefs normalises both shapes. `documents` arrives as bare
+            // path strings, and analyzeDocuments below reads `.path` off each
+            // entry -- so passing them through raw produced undefined paths.
+            result = await this.analyzeDocuments(taskFileRefs(task), task.instructions);
             break;
           case 'image':
             result = await this.analyzeImage(task.imagePath || task.files?.[0]?.path, task.analysisType || 'detailed');
@@ -393,7 +387,9 @@ export class AIStudioLayer implements LayerInterface {
             duration,
             tokens_used: this.estimateTokensUsed(task, result),
             cost: this.calculateCost(task, result),
-            model: 'gemini-2.5-pro',
+            // The layer default, not necessarily what this action used:
+            // generation and TTS dispatch to their own models above.
+            model: AI_MODELS.MULTIMODAL_DEFAULT,
           },
         };
       },
@@ -567,7 +563,7 @@ export class AIStudioLayer implements LayerInterface {
     logger.info('Generating image using GeminiCLI translation + MCP pattern', {
       promptLength: prompt.length,
       model: AI_MODELS.IMAGE_GENERATION,
-      quality: options.quality || 'standard'
+      quality: options.quality ?? 'standard'
     });
 
     const startTime = Date.now();
@@ -616,29 +612,29 @@ export class AIStudioLayer implements LayerInterface {
         detectedLanguage: detectedLang
       });
 
-      if (this.geminiLayer) {
+      if (this.antigravityLayer) {
         logger.info('GeminiCLI layer available, checking translateToEnglish method', {
-          hasTranslateMethod: typeof this.geminiLayer.translateToEnglish === 'function',
-          layerType: this.geminiLayer.constructor.name,
-          availableMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.geminiLayer)).slice(0, 10),
-          hasExecute: typeof this.geminiLayer.execute === 'function'
+          hasTranslateMethod: typeof this.antigravityLayer.translateToEnglish === 'function',
+          layerType: this.antigravityLayer.constructor.name,
+          availableMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.antigravityLayer)).slice(0, 10),
+          hasExecute: typeof this.antigravityLayer.execute === 'function'
         });
         
-        if (typeof this.geminiLayer.translateToEnglish === 'function') {
+        if (typeof this.antigravityLayer.translateToEnglish === 'function') {
           try {
             // Ensure GeminiCLI layer is initialized before translation
-            if (!await this.geminiLayer.isAvailable()) {
+            if (!await this.antigravityLayer.isAvailable()) {
               logger.warn('GeminiCLI layer not available, initializing...');
-              await this.geminiLayer.initialize();
+              await this.antigravityLayer.initialize();
             }
             
             logger.info('🔧 About to call translateToEnglish method', {
-              hasMethod: typeof this.geminiLayer.translateToEnglish === 'function',
-              geminiLayerType: this.geminiLayer.constructor.name,
+              hasMethod: typeof this.antigravityLayer.translateToEnglish === 'function',
+              antigravityLayerType: this.antigravityLayer.constructor.name,
               corePrompt: corePrompt.substring(0, 50)
             });
             
-            const translatedCore = await this.geminiLayer.translateToEnglish(corePrompt, detectedLang);
+            const translatedCore = await this.antigravityLayer.translateToEnglish(corePrompt, detectedLang);
             // Reconstruct prompt with original prefix + translated core
             const originalPrefix = prompt.substring(0, prompt.length - corePrompt.length);
             processedPrompt = originalPrefix + translatedCore;
@@ -693,8 +689,8 @@ export class AIStudioLayer implements LayerInterface {
       const mcpResult = await this.executeMCPCommand('generate_image', {
         prompt: processedPrompt,
         numberOfImages: options.numberOfImages || 1,
-        aspectRatio: options.aspectRatio || '1:1',
-        personGeneration: options.personGeneration || 'ALLOW',
+        aspectRatio: options.aspectRatio ?? '1:1',
+        personGeneration: options.personGeneration ?? 'ALLOW',
         model: AI_MODELS.IMAGE_GENERATION
       });
 
@@ -746,7 +742,7 @@ export class AIStudioLayer implements LayerInterface {
   async generateAudio(text: string, options: Partial<AudioGenOptions> = {}): Promise<MediaGenResult> {
     logger.info('Generating audio using MCP command (unified timeout pattern)', {
       textLength: text.length,
-      voice: options.voice || 'Kore',
+      voice: options.voice ?? 'Kore',
       format: 'wav',
       model: AI_MODELS.AUDIO_GENERATION
     });
@@ -757,7 +753,7 @@ export class AIStudioLayer implements LayerInterface {
       // Use MCP command (matches working timeout pattern from image/PDF analysis)
       const mcpResult = await this.executeMCPCommand('generate_audio', {
         text,
-        voice: options.voice || 'Kore',
+        voice: options.voice ?? 'Kore',
         model: AI_MODELS.AUDIO_GENERATION
       });
 
@@ -780,14 +776,14 @@ export class AIStudioLayer implements LayerInterface {
           model: AI_MODELS.AUDIO_GENERATION,
           settings: options,
           cost: this.calculateGenerationCost('audio', options),
-          voice: options.voice || 'Kore'
+          voice: options.voice ?? 'Kore'
         },
         media: {
           type: 'audio',
           data: audioData,
           metadata: {
             format: 'wav',
-            voice: options.voice || 'Kore'
+            voice: options.voice ?? 'Kore'
           }
         }
       };
@@ -885,7 +881,7 @@ export class AIStudioLayer implements LayerInterface {
   private async downloadGeneratedMedia(
     downloadUrl: string, 
     mediaType: 'image' | 'video' | 'audio',
-    quality: string
+    _quality: string
   ): Promise<string> {
     if (!downloadUrl) {
       throw new Error('No download URL provided for generated media');
@@ -1025,7 +1021,7 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Estimate cost for processing
    */
-  private estimateCost(input: any, result: any): number {
+  private estimateCost(input: any, _result: any): number {
     const basePrice = 0.001; // $0.001 per request
     
     if (input.files && input.files.length > 0) {
@@ -1133,7 +1129,7 @@ export class AIStudioLayer implements LayerInterface {
    * Check if we can use direct API call instead of MCP
    * REMOVED: Enforcing MCP-only architecture for consistency
    */
-  private canUseDirectAPI(params: any): boolean {
+  private canUseDirectAPI(_params: any): boolean {
     // Always use MCP server to enforce architectural consistency
     return false;
   }
@@ -1223,6 +1219,107 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * Candidate paths to a Windows-side npm install, seen from inside WSL.
+   *
+   * The previous version built exactly one path from `process.env.USER`:
+   *
+   *     join('/mnt/c/Users', process.env.USER, 'AppData', 'Roaming', 'npm', ...)
+   *
+   * `USER` is the *Linux* account name; the path is a *Windows* user profile.
+   * A profile of the same name may well exist -- on the machine this was
+   * measured on, /mnt/c/Users holds hikar, luisg and scarred, and the Linux
+   * user is scarred -- but that says nothing about which profile owns the npm
+   * install. There it lives under hikar, so the guessed candidate missed and
+   * the fallback could not fire. Listing the directory finds every profile, and
+   * finding none simply adds no candidates rather than a fabricated one.
+   *
+   * Exported-shaped (module scope, injectable options) so the behaviour can be
+   * tested from Windows, where /mnt/c does not exist.
+   */
+  static wslWindowsNpmPaths(
+    serverFileName: string,
+    options: {
+      isWsl?: boolean;
+      usersDir?: string;
+      listUsers?: (dir: string) => string[];
+    } = {}
+  ): string[] {
+    const isWsl = options.isWsl ?? Boolean(process.env.WSL_DISTRO_NAME);
+    if (!isWsl) {
+      return [];
+    }
+
+    const usersDir = options.usersDir ?? '/mnt/c/Users';
+    const listUsers = options.listUsers ?? ((dir: string): string[] => fs.readdirSync(dir));
+
+    // The directory is frequently unreadable -- no interop, a distro with no
+    // /mnt/c, or permissions -- and that is not an error worth propagating out
+    // of a path-guessing helper. Catching here rather than inside the default
+    // lister keeps the behaviour the same whoever supplies the listing.
+    let profiles: string[];
+    try {
+      profiles = listUsers(usersDir);
+    } catch {
+      return [];
+    }
+
+    // Profiles Windows creates for itself; none of them carry an npm install.
+    const systemProfiles = new Set([
+      'All Users', 'Default', 'Default User', 'Public', 'desktop.ini',
+    ]);
+
+    return profiles
+      .filter(name => !systemProfiles.has(name))
+      .map(name => join(
+        usersDir, name, 'AppData', 'Roaming', 'npm',
+        'node_modules', 'claude-gemini-multimodal-bridge',
+        'dist', 'mcp-servers', serverFileName
+      ));
+  }
+
+  /**
+   * Global npm locations that could hold this package's MCP server.
+   *
+   * Platform, environment and Node version are parameters with defaults, so the
+   * macOS branch can be exercised from a Windows or Linux test run. There is no
+   * darwin branch: macOS shares the Unix list, which makes /opt/homebrew the
+   * one Mac-specific entry -- and the one thing another OS can check.
+   */
+  static globalInstallPaths(
+    serverFileName: string,
+    platform: NodeJS.Platform = process.platform,
+    env: NodeJS.ProcessEnv = process.env,
+    nodeVersion: string = process.version
+  ): string[] {
+    const pkg = ['node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName];
+
+    if (platform === 'win32') {
+      return [
+        // Only include paths whose environment variable is actually set;
+        // joining onto '' produces a relative path that matches nothing.
+        ...(env.APPDATA ? [join(env.APPDATA, 'npm', ...pkg)] : []),
+        ...(env.LOCALAPPDATA ? [join(env.LOCALAPPDATA, 'npm', ...pkg)] : []),
+        ...(env.USERPROFILE ? [
+          join(env.USERPROFILE, 'AppData', 'Roaming', 'npm', ...pkg),
+          // nvm-windows support
+          join(env.USERPROFILE, '.nvm', 'versions', 'node', nodeVersion, ...pkg),
+        ] : []),
+        // Program Files for system-wide Node.js installations
+        join('C:', 'Program Files', 'nodejs', ...pkg),
+      ];
+    }
+
+    return [
+      ...(env.HOME ? [join(env.HOME, '.nvm', 'versions', 'node', nodeVersion, 'lib', ...pkg)] : []),
+      join('/usr/local/lib', ...pkg),
+      // Homebrew's prefix on Apple Silicon; Intel Macs use /usr/local above.
+      join('/opt/homebrew/lib', ...pkg),
+      // WSL: Windows npm location accessible from WSL
+      ...AIStudioLayer.wslWindowsNpmPaths(serverFileName, { isWsl: Boolean(env.WSL_DISTRO_NAME) }),
+    ];
+  }
+
+  /**
    * Resolve MCP server path with multiple fallback strategies
    * Priority: ESM __dirname → dev path → local npm → global npm paths
    */
@@ -1256,35 +1353,7 @@ export class AIStudioLayer implements LayerInterface {
     }
 
     // Strategy 4: Search in typical global npm locations (cross-platform)
-    // Filter out paths where environment variables are not set to avoid invalid paths
-    const isWindows = process.platform === 'win32';
-    const globalPaths = isWindows ? [
-      // Windows global npm paths - only include if env var exists
-      ...(process.env.APPDATA ? [
-        join(process.env.APPDATA, 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
-      ] : []),
-      ...(process.env.LOCALAPPDATA ? [
-        join(process.env.LOCALAPPDATA, 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
-      ] : []),
-      ...(process.env.USERPROFILE ? [
-        join(process.env.USERPROFILE, 'AppData', 'Roaming', 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
-        // nvm-windows support
-        join(process.env.USERPROFILE, '.nvm', 'versions', 'node', process.version, 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
-      ] : []),
-      // Program Files for system-wide Node.js installations
-      join('C:', 'Program Files', 'nodejs', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName),
-    ] : [
-      // Unix/macOS global npm paths - only include if env var exists
-      ...(process.env.HOME ? [
-        join(process.env.HOME, '.nvm', 'versions', 'node', process.version, 'lib', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
-      ] : []),
-      join('/usr/local/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
-      join('/opt/homebrew/lib/node_modules/claude-gemini-multimodal-bridge/dist/mcp-servers', serverFileName),
-      // WSL: Windows npm location accessible from WSL
-      ...(process.env.USER ? [
-        join('/mnt/c/Users', process.env.USER, 'AppData', 'Roaming', 'npm', 'node_modules', 'claude-gemini-multimodal-bridge', 'dist', 'mcp-servers', serverFileName)
-      ] : []),
-    ];
+    const globalPaths = AIStudioLayer.globalInstallPaths(serverFileName);
 
     for (const globalPath of globalPaths) {
       checkedPaths.push(globalPath);
@@ -1421,6 +1490,11 @@ export class AIStudioLayer implements LayerInterface {
 
       // Create cleanup function to ensure proper timeout clearing
       let isResolved = false;
+      // Must stay `let`, declared here. cleanup() below closes over it and is
+      // defined before setTimeout runs, so moving the declaration down to a
+      // `const` would make cleanup reference a block-scoped binding ahead of
+      // its declaration. The rule's analysis does not see the closure.
+      // eslint-disable-next-line prefer-const
       let timeoutId: NodeJS.Timeout;
       
       const cleanup = () => {
@@ -1513,7 +1587,16 @@ export class AIStudioLayer implements LayerInterface {
       timeoutId = setTimeout(() => {
         if (!isResolved) {
           cleanup();
-          reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
+          // Attach whatever the server wrote to stderr. It was being collected
+          // and then dropped, so a timeout reported only "timed out" while the
+          // reason -- a missing key, a quota refusal -- sat unread in the
+          // buffer. Trimmed because it can be long and is only a hint.
+          const stderrHint = errorOutput.trim()
+            ? ` Server stderr: ${errorOutput.trim().slice(-500)}`
+            : '';
+          reject(new Error(
+            `AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully.${stderrHint}`
+          ));
         }
       }, timeout);
 
@@ -1904,8 +1987,6 @@ export class AIStudioLayer implements LayerInterface {
   private setupGhostLogDetection(): void {
     const originalConsoleDebug = console.debug;
     const originalConsoleLog = console.log;
-    const originalConsoleWarn = console.warn;
-    const originalConsoleInfo = console.info;
 
     // Monkey-patch console methods to detect library logs
     console.debug = (...args: any[]) => {
@@ -1940,7 +2021,9 @@ export class AIStudioLayer implements LayerInterface {
 
     logger.info(`[${this.instanceId}] Ghost log detection active - monitoring console methods`, {
       instanceId: this.instanceId,
-      monitoredMethods: ['console.debug', 'console.log', 'console.warn', 'console.info'],
+      // Only these two are patched. warn and info were saved but never wrapped,
+      // so listing them here claimed coverage that did not exist.
+      monitoredMethods: ['console.debug', 'console.log'],
       purpose: 'Detect external library logs about direct API integration'
     });
   }
@@ -2061,7 +2144,7 @@ export class AIStudioLayer implements LayerInterface {
    * Windows backslashes are converted to forward slashes for consistency
    */
   private normalizeInputPath(filePath: string): string {
-    if (!filePath) return filePath;
+    if (!filePath) {return filePath;}
     // Convert Windows backslashes to forward slashes for cross-platform compatibility
     return filePath.replace(/\\/g, '/');
   }
@@ -2122,7 +2205,7 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Calculate cost
    */
-  private calculateCost(task: any, result: any): number {
+  private calculateCost(task: any, _result: any): number {
     const basePrice = 0.001;
     
     if (task.files && task.files.length > 0) {

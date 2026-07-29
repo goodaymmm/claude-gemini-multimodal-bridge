@@ -1,5 +1,4 @@
 import {
-  ExecutionPlan,
   FileReference,
   LayerResult,
   ResourceEstimate,
@@ -8,9 +7,10 @@ import {
   WorkflowResult,
   WorkflowStep,
 } from '../core/types.js';
+import { defaultLayerConfig } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
-import { GeminiCLILayer } from '../layers/GeminiCLILayer.js';
+import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -23,7 +23,7 @@ import { AuthVerifier } from '../auth/AuthVerifier.js';
 export class WorkflowOrchestrator {
   private layerManager: LayerManager;
   private claudeLayer: ClaudeCodeLayer;
-  private geminiLayer: GeminiCLILayer;
+  private antigravityLayer: AntigravityCLILayer;
   private aiStudioLayer: AIStudioLayer;
   private authVerifier: AuthVerifier;
   
@@ -33,17 +33,11 @@ export class WorkflowOrchestrator {
 
   constructor(config?: any) {
     // Create default config if not provided
-    const defaultConfig = {
-      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-      claude: { code_path: 'claude', timeout: 300000 },
-      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
-      cache: { enabled: true, ttl: 3600 },
-      logging: { level: 'info' as const },
-    };
+    const defaultConfig = defaultLayerConfig();
     
     this.layerManager = new LayerManager(config || defaultConfig);
     this.claudeLayer = new ClaudeCodeLayer();
-    this.geminiLayer = new GeminiCLILayer();
+    this.antigravityLayer = new AntigravityCLILayer();
     this.aiStudioLayer = new AIStudioLayer();
     this.authVerifier = new AuthVerifier();
   }
@@ -79,14 +73,24 @@ export class WorkflowOrchestrator {
         
         const totalDuration = Date.now() - startTime;
         
+        // Derive success from the steps, not from having reached this line.
+        //
+        // With continueOnError (which the multimodal pipeline uses), failed
+        // steps are kept and execution continues -- but the result was still
+        // reported as success:true, and steps_completed counted the failures
+        // too. A caller whose Antigravity or AI Studio step failed received a
+        // successful workflow built on missing data.
+        const failedSteps = this.countFailedSteps(stepResults);
+        const completedSteps = Object.values(stepResults).filter(step => step.success).length;
+
         return {
-          success: true,
+          success: failedSteps === 0,
           results: stepResults,
           summary: finalResult.summary,
           metadata: {
             total_duration: totalDuration,
-            steps_completed: Object.keys(stepResults).length,
-            steps_failed: this.countFailedSteps(stepResults),
+            steps_completed: completedSteps,
+            steps_failed: failedSteps,
             total_cost: this.calculateTotalCost(stepResults),
           },
         };
@@ -133,7 +137,7 @@ export class WorkflowOrchestrator {
    */
   async executePipeline(
     steps: Array<{
-      layer: 'claude' | 'gemini' | 'aistudio';
+      layer: 'claude' | 'antigravity' | 'gemini' | 'aistudio';
       action: string;
       input: any;
       dependsOn?: string[];
@@ -151,11 +155,11 @@ export class WorkflowOrchestrator {
         action: step.action,
         layer: step.layer,
         input: step.input,
-        dependsOn: step.dependsOn || [],
+        dependsOn: step.dependsOn ?? [],
         timeout: 120000, // 2 minutes per step
       })),
-      parallel: options?.parallel || false,
-      continueOnError: options?.continueOnError || false,
+      parallel: options?.parallel ?? false,
+      continueOnError: options?.continueOnError ?? false,
       timeout: options?.timeout || this.MAX_WORKFLOW_DURATION,
     };
     
@@ -165,7 +169,7 @@ export class WorkflowOrchestrator {
   /**
    * Get workflow status and progress
    */
-  async getWorkflowStatus(workflowId: string): Promise<{
+  async getWorkflowStatus(_workflowId: string): Promise<{
     status: 'running' | 'completed' | 'failed' | 'not_found';
     progress: number;
     currentStep?: string;
@@ -275,7 +279,7 @@ export class WorkflowOrchestrator {
         const sortedSteps = this.topologicalSort(workflow.steps);
         
         // Group steps by execution phase (for parallel execution)
-        const executionPhases = this.groupStepsByPhase(sortedSteps, workflow.parallel || false);
+        const executionPhases = this.groupStepsByPhase(sortedSteps, workflow.parallel ?? false);
         
         // Estimate resources for each step
         const resourceEstimates = await this.estimateResources(sortedSteps);
@@ -405,7 +409,8 @@ export class WorkflowOrchestrator {
           memory = 512;
           cpu = 1.0;
           break;
-        case 'gemini':
+        case 'antigravity':
+        case 'gemini': // deprecated alias
           duration = 30000; // 30 seconds
           cost = 0;
           memory = 256;
@@ -483,8 +488,9 @@ export class WorkflowOrchestrator {
         case 'claude':
           initPromises.push(this.claudeLayer.initialize());
           break;
-        case 'gemini':
-          initPromises.push(this.geminiLayer.initialize());
+        case 'antigravity':
+        case 'gemini': // deprecated alias
+          initPromises.push(this.antigravityLayer.initialize());
           break;
         case 'aistudio':
           initPromises.push(this.aiStudioLayer.initialize());
@@ -622,8 +628,9 @@ export class WorkflowOrchestrator {
             });
             break;
             
-          case 'gemini':
-            result = await this.geminiLayer.execute({
+          case 'antigravity':
+          case 'gemini': // deprecated alias
+            result = await this.antigravityLayer.execute({
               action: step.action,
               ...stepInput,
             });
@@ -819,7 +826,7 @@ export class WorkflowOrchestrator {
     id: string,
     files: FileReference[],
     instructions: string,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id,
@@ -833,7 +840,7 @@ export class WorkflowOrchestrator {
         },
         {
           id: 'contextual_grounding',
-          layer: 'gemini',
+          layer: 'antigravity',
           action: 'grounded_search',
           input: { 
             prompt: `${instructions}. Context: {{process_multimodal}}`,
@@ -866,7 +873,7 @@ export class WorkflowOrchestrator {
     id: string,
     files: FileReference[],
     instructions: string,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id,
@@ -880,7 +887,7 @@ export class WorkflowOrchestrator {
         },
         {
           id: 'enhance_with_search',
-          layer: 'gemini',
+          layer: 'antigravity',
           action: 'grounded_search',
           input: {
             prompt: `Enhance understanding with current information: {{extract_multimodal}}`,
@@ -915,14 +922,14 @@ export class WorkflowOrchestrator {
     id: string,
     files: FileReference[],
     instructions: string,
-    options?: any
+    _options?: any
   ): WorkflowDefinition {
     return {
       id,
       steps: [
         {
           id: 'initial_research',
-          layer: 'gemini',
+          layer: 'antigravity',
           action: 'grounded_search',
           input: {
             prompt: `Research background information: ${instructions}`,

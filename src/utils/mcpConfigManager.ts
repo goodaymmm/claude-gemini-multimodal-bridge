@@ -1,8 +1,16 @@
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { mkdir } from 'fs/promises';
 import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { homedir } from 'os';
+import { commandAvailable } from './processUtils.js';
 import { logger } from './logger.js';
+
+/** Absolute path to this package's own CLI entry point. */
+function resolveBundledCli(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '..', 'cli.js');
+}
 
 /**
  * MCP Configuration Manager
@@ -125,27 +133,58 @@ export class MCPConfigManager {
     const detectedCgmbPath = process.env.CGMB_DETECTED_PATH;
     const detectedNodePath = process.env.CGMB_DETECTED_NODE_PATH;
     
+    // These come from the environment, and `setup-mcp` loads the .env of
+    // whatever directory it runs in -- so a hostile project could otherwise
+    // persist an arbitrary command that Claude Code later executes. Accept them
+    // only when they name the running Node binary and this package's own CLI.
     if (detectedCgmbPath && detectedNodePath) {
-      // nvm/nodebrew/volta environment detected - use absolute paths
-      logger.info('Using environment-specific MCP configuration', {
-        nodePath: detectedNodePath,
-        cgmbPath: detectedCgmbPath
-      });
-      
-      return {
-        command: detectedNodePath,
-        args: [detectedCgmbPath, 'serve'],
-        env: {
-          NODE_ENV: 'production',
-          PATH: process.env.PATH || ''
+      const bundledCli = resolveBundledCli();
+      const sameFile = (a: string, b: string): boolean => {
+        try {
+          return realpathSync(a) === realpathSync(b);
+        } catch {
+          return false;
         }
       };
+
+      if (sameFile(detectedNodePath, process.execPath) && sameFile(detectedCgmbPath, bundledCli)) {
+        // Persist the canonical paths, not the strings that were checked.
+        //
+        // Storing the environment's own value left a check/use gap: a symlink
+        // pointing at the real Node and CLI passes realpath comparison, and
+        // retargeting it afterwards changes what Claude Code launches later.
+        // What goes into the file is what was verified.
+        logger.info('Using environment-specific MCP configuration', {
+          nodePath: process.execPath,
+          cgmbPath: bundledCli
+        });
+
+        return {
+          command: process.execPath,
+          args: [bundledCli, 'serve'],
+          env: {
+            NODE_ENV: 'production',
+            PATH: process.env.PATH || ''
+          }
+        };
+      }
+
+      logger.warn('Ignoring CGMB_DETECTED_* paths: they do not match this installation', {
+        detectedNodePath,
+        detectedCgmbPath,
+      });
     }
     
-    // Default configuration for standard environments
+    // Absolute paths, never a bare name.
+    //
+    // `command: 'cgmb'` was re-resolved when Claude Code launched the server --
+    // against PATH, and the working directory on Windows -- so a repository
+    // could supply the server binary. On Windows the global shim is cgmb.cmd,
+    // which also fails when passed to node as a script. Pointing at this
+    // package's own dist/cli.js removes both problems.
     return {
-      command: 'cgmb',
-      args: ['serve'],
+      command: process.execPath,
+      args: [resolveBundledCli(), 'serve'],
       env: {
         NODE_ENV: 'production'
       }
@@ -197,7 +236,10 @@ export class MCPConfigManager {
     dryRun?: boolean;
     interactive?: boolean;
   } = {}): Promise<ConfigManagerResult> {
-    const { force = false, skipBackup = false, dryRun = false, interactive = false } = options;
+    // `interactive` stays on the options type for callers, but this method has
+    // no interactive path -- setupCGMBMCP() is where that flag is inspected --
+    // so it is not destructured here.
+    const { force = false, skipBackup = false, dryRun = false } = options;
 
     try {
       const configPath = this.findConfigPath();
@@ -230,7 +272,15 @@ export class MCPConfigManager {
       }
 
       if (dryRun) {
+        // generateCGMBConfig() was called here and its result dropped. Keeping
+        // the call so a dry run still exercises path validation, and naming the
+        // command in the message so the caller can see what would be written.
         const cgmbConfig = this.generateCGMBConfig();
+        logger.info('Dry run: CGMB MCP entry that would be written', {
+          configPath,
+          command: cgmbConfig.command,
+          args: cgmbConfig.args,
+        });
         return {
           success: true,
           message: `Would add CGMB configuration to ${configPath}`,
@@ -274,7 +324,7 @@ export class MCPConfigManager {
       logger.info('Generated CGMB configuration', {
         command: cgmbConfig.command,
         args: cgmbConfig.args,
-        env: Object.keys(cgmbConfig.env || {})
+        env: Object.keys(cgmbConfig.env ?? {})
       });
       
       // Add CGMB configuration to existing config
@@ -312,7 +362,7 @@ export class MCPConfigManager {
         success: true,
         message: `Successfully ${action} CGMB configuration in Claude Code`,
         configPath,
-        backupPath: backupPath !== null ? backupPath : undefined,
+        backupPath: backupPath ?? undefined,
         action
       };
 
@@ -391,7 +441,7 @@ export class MCPConfigManager {
         success: true,
         message: 'Successfully removed CGMB configuration from Claude Code',
         configPath,
-        backupPath: backupPath !== null ? backupPath : undefined,
+        backupPath: backupPath ?? undefined,
         action: 'updated'
       };
 
@@ -536,8 +586,10 @@ If the MCP server doesn't load:
     // Check CGMB command availability
     let cgmbAvailable = false;
     try {
-      const { execSync } = require('child_process');
-      execSync('cgmb --version', { stdio: 'ignore', timeout: 5000 });
+      // Same rule as every other probe: resolve, then run by absolute path.
+      if (!commandAvailable('cgmb')) {
+        throw new Error('cgmb is not available');
+      }
       cgmbAvailable = true;
     } catch {
       cgmbAvailable = false;
@@ -581,8 +633,8 @@ export async function setupCGMBMCP(options: {
   }
   
   return manager.addCGMBConfiguration({
-    force: options.force || false,
-    dryRun: options.dryRun || false
+    force: options.force ?? false,
+    dryRun: options.dryRun ?? false
   });
 }
 

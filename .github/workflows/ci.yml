@@ -1,0 +1,73 @@
+name: CI
+
+# Runs on the three platforms CGMB claims to support. macOS is the point of the
+# matrix: the codebase has no `process.platform === 'darwin'` branch, so a Mac
+# takes the same code path as Linux, but nothing had ever executed it on Darwin
+# -- filesystem case-insensitivity, Homebrew prefixes and signed-binary
+# behaviour only show up there.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the others: the whole reason for
+      # the matrix is to see where behaviour diverges.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # `npm install`, not `npm ci`: package-lock.json is gitignored, and npm ci
+      # requires a lockfile. That also rules out setup-node's npm cache, which
+      # keys off the lockfile. The cost is a slower install and dependency
+      # versions that can drift between runs -- worth knowing, but not worth
+      # committing a lockfile for without asking.
+      #
+      # No API keys are provided. The suite drives stub binaries and pure
+      # functions; the live layer checks that need credentials are run by hand.
+      - name: Install
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: node --test "tests/*.test.mjs"
+
+      # The published package must not carry tests or sources. This catches a
+      # `files` entry going missing, which would ship them silently.
+      - name: Check package contents
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const files = JSON.parse(require('fs').readFileSync('pack.json','utf8'))[0].files.map(f => f.path);
+            const leaked = files.filter(f => f.startsWith('tests/') || f.startsWith('src/'));
+            if (leaked.length) {
+              console.error('These must not be published:\n' + leaked.join('\n'));
+              process.exit(1);
+            }
+            console.log('Package contents look right: ' + files.length + ' files, no tests or sources.');
+          "

@@ -29,7 +29,13 @@ import {
   WorkflowDefinitionArgsSchema,
   WorkflowResult,
 } from './types.js';
+import { normalizeLayerName } from './types.js';
 import { Config, ConfigSchema } from './types.js';
+import { isOneOf } from './types.js';
+import { LegacyCGMBRequestSchema, ProcessingOptionsSchema } from './types.js';
+import { pickFinalResultText } from '../utils/workflowUtils.js';
+import { LayerResult, LayerType } from './types.js';
+import { AI_MODELS } from './types.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -151,7 +157,7 @@ export class CGMBServer {
               '  - Input formats and requirements\n' +
               '  - Capabilities and features\n' +
               '  - Limitations and quotas\n' +
-              '• Layers: gemini (text/search), aistudio (multimodal), adaptive',
+              '• Layers: antigravity (text/search), aistudio (multimodal), adaptive',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -164,7 +170,7 @@ export class CGMBServer {
               '\n' +
               '📋 **Supported Commands** (auto-detected from prompt):\n' +
               '• chat/ask/tell → Interactive conversation\n' +
-              '• search/find/look up → Web search via Gemini CLI\n' +
+              '• search/find/look up → Web search via Antigravity CLI\n' +
               '• analyze/review/examine → Document/file analysis\n' +
               '• generate/create image → Image generation via AI Studio\n' +
               '• generate/create audio/speech → Audio generation via AI Studio\n' +
@@ -174,7 +180,7 @@ export class CGMBServer {
               '• translate/convert → Translation/conversion\n' +
               '\n' +
               '🔧 **Features**:\n' +
-              '• URL Detection: https:// links processed directly by Gemini CLI\n' +
+              '• URL Detection: https:// links processed directly by Antigravity CLI\n' +
               '• Path Resolution: ./relative → /absolute using workingDirectory\n' +
               '• File Validation: Checks existence and read permissions\n' +
               '• Smart Routing: Auto-selects optimal AI layer\n' +
@@ -216,8 +222,8 @@ export class CGMBServer {
                 },
                 targetLayer: {
                   type: 'string',
-                  enum: ['gemini', 'aistudio', 'adaptive'],
-                  description: 'Target layer for direct routing (optional)',
+                  enum: ['antigravity', 'gemini', 'aistudio', 'claude', 'adaptive'],
+                  description: 'Target layer for direct routing (optional). "gemini" is a deprecated alias for "antigravity". Omit or use "adaptive" to let CGMB choose.',
                 },
                 preformatted: {
                   type: 'boolean',
@@ -325,8 +331,8 @@ export class CGMBServer {
                   properties: {
                     layer_priority: {
                       type: 'string',
-                      enum: ['claude', 'gemini', 'aistudio', 'adaptive'],
-                      description: 'Preferred layer for processing',
+                      enum: ['claude', 'antigravity', 'gemini', 'aistudio', 'adaptive'],
+                      description: 'Preferred layer for processing. "gemini" is a deprecated alias for "antigravity".',
                     },
                     execution_mode: {
                       type: 'string',
@@ -519,7 +525,7 @@ export class CGMBServer {
         example: {
           apiData: {
             prompt: 'Analyze this document and extract key points',
-            model: 'gemini-2.0-flash-exp',
+            model: AI_MODELS.MULTIMODAL_ANALYSIS,
             generationConfig: {
               temperature: 0.7,
               maxOutputTokens: 16384
@@ -532,6 +538,27 @@ export class CGMBServer {
           'API quota restrictions',
           'Processing time for large files'
         ]
+      },
+      claude: {
+        format: 'Text prompts; the layer builds its own prompt from the request',
+        requirements: [
+          'Text-based prompts for reasoning and synthesis',
+          'No file upload capability - text only, like the search layer',
+          'Claude Code must be installed and signed in',
+        ],
+        capabilities: [
+          'Complex reasoning',
+          'Synthesis across earlier workflow steps',
+          'Workflow orchestration',
+        ],
+        example: {
+          prompt: 'Explain the trade-offs between these two designs',
+          targetLayer: 'claude',
+        },
+        limitations: [
+          'Cannot read files; use the aistudio layer for documents and media',
+          'Each call starts a fresh headless session',
+        ],
       },
       adaptive: {
         format: 'Automatic selection based on task requirements',
@@ -587,12 +614,56 @@ export class CGMBServer {
           const result = await this.processPreformattedRequest(request);
           return this.formatResponse(result, true);
         }
-        
+
+        // An explicit target is an instruction, not a hint.
+        //
+        // targetLayer was only consulted on the preformatted path above, so an
+        // ordinary request naming a layer went through the analyser instead and
+        // could be answered by a different one entirely -- measured: a request
+        // for Claude was served by the search layer. 'adaptive' (and omitting
+        // the field) still means "you choose".
+        // 1. Input validation and normalization
+        //
+        // Runs before the routing decision, not after. Naming a layer chooses
+        // WHERE the work goes; it is not a reason to skip checking the input.
+        // Returning early with the raw args left relative paths unresolved, so
+        // AI Studio looked for them against the server's own cwd, found
+        // nothing, and could report success on files it never opened.
+        const normalizedRequest = this.validateAndNormalize(args);
+
+        const requested = normalizeLayerName(request.targetLayer ?? 'adaptive');
+        if (requested !== 'adaptive') {
+          logger.info('Routing directly to the requested layer', {
+            layer: requested,
+            filesCount: normalizedRequest.files.length,
+          });
+
+          // Claude Code is reached through `claude --print` with the prompt on
+          // stdin and no file access -- executeGeneral reads task.prompt and
+          // nothing else. Answering from the prompt alone returned success on a
+          // document nobody opened, which is worse than an error: the caller
+          // has an answer and no reason to doubt it. The search layer refuses
+          // file work the same way, for the same reason.
+          if (requested === 'claude' && normalizedRequest.files.length > 0) {
+            throw new Error(
+              `The Claude layer cannot read files (${normalizedRequest.files.length} attached). ` +
+              'Send file work to the aistudio layer, or omit targetLayer to let CGMB route it.'
+            );
+          }
+
+          const direct = await this.layerManager.executeWithLayer(requested as LayerType, {
+            type: 'text_processing',
+            prompt: normalizedRequest.prompt,
+            files: normalizedRequest.files,
+            options: normalizedRequest.options ?? {},
+          });
+
+          return this.toCallToolResult(direct);
+        }
+
         // Fallback to original processing for backward compatibility
         logger.info('Using standard processing (not preformatted)');
-        
-        // 1. Input validation and normalization
-        const normalizedRequest = this.validateAndNormalize(args);
+
         logger.info('Request normalized', {
           hasCGMB: normalizedRequest.hasCGMB,
           promptLength: normalizedRequest.prompt.length,
@@ -672,8 +743,8 @@ export class CGMBServer {
             }
           }
 
-          // Route web URLs through Gemini CLI (search/browse)
-          logger.info('Web URLs - routing to Gemini CLI layer', {
+          // Route web URLs through the Antigravity CLI (search/browse)
+          logger.info('Web URLs - routing to Antigravity CLI layer', {
             urls: webUrls.length > 0 ? webUrls.map(u => u.url) : normalizedRequest.urlsDetected
           });
 
@@ -688,10 +759,17 @@ export class CGMBServer {
             analysisPrompt = `Analyze the content at these URLs: ${normalizedRequest.urlsDetected.join(', ')}. ${normalizedRequest.prompt}`;
           }
 
-          logger.info('Executing URL analysis via Gemini CLI', { analysisPrompt });
+          // Length only: prompts and URLs can carry personal or confidential
+          // content, and logger metadata goes to the console and LOG_FILE
+          // unredacted. Stripping prompt text inside the layer is pointless if
+          // the routing code above logs the same text first.
+          logger.info('Executing URL analysis via Antigravity CLI', {
+            promptLength: analysisPrompt.length,
+            urlCount: webUrls.length,
+          });
 
           // Direct execution on Gemini layer for URL processing (with async initialization)
-          const geminiLayer = await this.layerManager.getGeminiLayerAsync();
+          const geminiLayer = await this.layerManager.getAntigravityLayerAsync();
           const result = await geminiLayer.execute({
             type: 'text_processing',
             prompt: analysisPrompt,
@@ -705,7 +783,7 @@ export class CGMBServer {
             data: result.data,
             metadata: {
               ...result.metadata,
-              layer: 'gemini',
+              layer: 'antigravity',
               routing_reason: 'web_url_auto_routing',
               urls_processed: normalizedRequest.urlsDetected.length,
               processing_time: result.metadata?.duration || 0
@@ -715,19 +793,19 @@ export class CGMBServer {
           return this.formatResponse(urlResponse, normalizedRequest.hasCGMB);
         }
 
-        // 2.5 Search Auto-routing: If search keywords detected (no files), route directly to Gemini CLI
+        // 2.5 Search Auto-routing: If search keywords detected (no files), route directly to Antigravity CLI
         const searchKeywords = ['search', 'find', 'look up', 'lookup', 'what is', 'latest', 'news', 'current', 'today', '検索', '最新', 'ニュース'];
         const lowerPrompt = normalizedRequest.prompt.toLowerCase();
         const isSearchTask = searchKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase())) && normalizedRequest.files.length === 0;
 
         if (isSearchTask) {
-          logger.info('Search keywords detected - auto-routing to Gemini CLI layer', {
-            prompt: normalizedRequest.prompt,
+          logger.info('Search keywords detected - auto-routing to Antigravity CLI layer', {
+            promptLength: normalizedRequest.prompt.length,
             matchedKeywords: searchKeywords.filter(k => lowerPrompt.includes(k.toLowerCase()))
           });
 
           // Direct execution on Gemini layer for search (with async initialization)
-          const geminiLayerForSearch = await this.layerManager.getGeminiLayerAsync();
+          const geminiLayerForSearch = await this.layerManager.getAntigravityLayerAsync();
           const result = await geminiLayerForSearch.execute({
             type: 'search',
             prompt: normalizedRequest.prompt,
@@ -741,7 +819,7 @@ export class CGMBServer {
             data: result.data,
             metadata: {
               ...result.metadata,
-              layer: 'gemini',
+              layer: 'antigravity',
               routing_reason: 'search_auto_routing',
               processing_time: result.metadata?.duration || 0
             }
@@ -758,7 +836,7 @@ export class CGMBServer {
 
         if ((isImageGeneration || isAudioGeneration) && normalizedRequest.files.length === 0) {
           logger.info('Generation task detected - auto-routing to AI Studio layer', {
-            prompt: normalizedRequest.prompt,
+            promptLength: normalizedRequest.prompt.length,
             isImageGeneration,
             isAudioGeneration
           });
@@ -859,33 +937,66 @@ export class CGMBServer {
    * Parse enhanced CGMB request
    */
   private parseEnhancedRequest(args: unknown): EnhancedCGMBRequest {
-    try {
-      return EnhancedCGMBRequestSchema.parse(args);
-    } catch (error) {
-      // Fallback for backward compatibility
-      logger.debug('Failed to parse as enhanced request, using basic format');
-      const basicArgs = args as any;
-      return {
-        prompt: basicArgs.prompt || '',
-        targetLayer: undefined,
-        preformatted: false,
-        formattedData: undefined,
-        files: basicArgs.files || [],
-        options: basicArgs.options || {}
-      };
+    const enhanced = EnhancedCGMBRequestSchema.safeParse(args);
+    if (enhanced.success) {
+      return enhanced.data;
     }
+
+    // Fall back to the older request shape -- but still validate it.
+    //
+    // This used to cast to `any` and read the fields off directly, so anything
+    // that failed the schema above was passed on completely unchecked: `files`
+    // could be a bare string or objects without a path, and the problem only
+    // surfaced deep in a layer as an unrelated error. The legacy schema keeps
+    // the compatibility while rejecting shapes nothing downstream can use.
+    logger.debug('Failed to parse as enhanced request, trying the legacy shape');
+
+    const legacy = LegacyCGMBRequestSchema.safeParse(args);
+    if (!legacy.success) {
+      throw new CGMBError(
+        `Invalid CGMB request: ${legacy.error.message}`,
+        'INVALID_REQUEST'
+      );
+    }
+
+    return {
+      prompt: legacy.data.prompt ?? '',
+      targetLayer: undefined,
+      preformatted: false,
+      formattedData: undefined,
+      files: legacy.data.files ?? [],
+      options: legacy.data.options ?? {}
+    };
+  }
+
+  /** Present a single layer result in the shape callers of this path expect. */
+  private toWorkflowResult(result: LayerResult, layer: LayerType): WorkflowResult {
+    return {
+      success: result.success,
+      results: [result],
+      metadata: {
+        workflow: 'analysis',
+        execution_mode: 'direct',
+        total_duration: result.metadata?.duration ?? 0,
+        steps_completed: result.success ? 1 : 0,
+        steps_failed: result.success ? 0 : 1,
+        layers_used: [layer],
+        optimization: 'direct-target',
+      },
+    };
   }
 
   /**
    * Process preformatted request from Claude Code
    */
   private async processPreformattedRequest(request: EnhancedCGMBRequest): Promise<WorkflowResult> {
-    const targetLayer = request.targetLayer || 'adaptive';
-    
-    if (targetLayer === 'gemini' && request.formattedData?.geminiFormat) {
-      // Direct execution on Gemini layer (with async initialization)
-      logger.info('Executing preformatted request on Gemini layer');
-      const geminiLayerPreformatted = await this.layerManager.getGeminiLayerAsync();
+    // Accept the deprecated 'gemini' spelling from older clients.
+    const targetLayer = normalizeLayerName(request.targetLayer ?? 'adaptive');
+
+    if (targetLayer === 'antigravity' && request.formattedData?.geminiFormat) {
+      // Direct execution on the Antigravity layer (with async initialization)
+      logger.info('Executing preformatted request on Antigravity layer');
+      const geminiLayerPreformatted = await this.layerManager.getAntigravityLayerAsync();
       const result = await geminiLayerPreformatted.execute({
         type: 'text_processing',
         prompt: request.formattedData.geminiFormat.stdin,
@@ -903,23 +1014,44 @@ export class CGMBServer {
           total_duration: result.metadata?.duration || 0,
           steps_completed: 1,
           steps_failed: 0,
-          layers_used: ['gemini'],
+          layers_used: ['antigravity'],
           optimization: 'preformatted-direct'
         }
       };
     }
     
     if (targetLayer === 'aistudio' && request.formattedData?.aistudioFormat) {
-      // Direct execution on AI Studio layer
-      logger.info('Executing preformatted request on AI Studio layer');
-      // Implementation for AI Studio direct execution
-      // This would use the preformatted API data
+      // Preformatted AI Studio payloads are not implemented. Saying so beats
+      // dropping through to adaptive routing, which answers from a different
+      // layer and gives the caller no reason to suspect their formatting was
+      // ignored.
+      logger.warn('Preformatted AI Studio payloads are not supported; routing this request normally', {
+        hint: 'Send the request without preformatted/formattedData to use the AI Studio layer.',
+      });
     }
-    
+
+    // Any other explicit target still goes to that layer -- just without the
+    // preformatted shortcut.
+    if (targetLayer !== 'adaptive') {
+      logger.info('No preformatted payload for the requested layer; executing it directly', {
+        layer: targetLayer,
+      });
+
+      return this.toWorkflowResult(
+        await this.layerManager.executeWithLayer(targetLayer as LayerType, {
+          type: 'text_processing',
+          prompt: request.prompt,
+          files: request.files ?? [],
+          options: request.options ?? {},
+        }),
+        targetLayer as LayerType
+      );
+    }
+
     // Fallback to adaptive routing
     return this.layerManager.processMultimodal(
       request.prompt,
-      request.files || [],
+      request.files ?? [],
       'analysis',
       request.options
     );
@@ -942,8 +1074,29 @@ export class CGMBServer {
       throw new Error('Invalid arguments: prompt is required');
     }
     
-    const { prompt, files = [], options = {}, workingDirectory } = args as any;
-    
+    // Read off `unknown` rather than casting the whole object to `any`. The
+    // runtime checks below were already doing the real work; the cast only
+    // stopped the compiler from noticing that `prompt` might not be a string.
+    const source = args as Record<string, unknown>;
+    const prompt = source.prompt;
+    const files = source.files ?? [];
+    // Parsed, not cast. The cast let any key through: this object is handed
+    // straight to a layer, and AI Studio reads options.multiplePDFs -- which is
+    // not in the schema -- to switch itself to processMultiplePDFs(). That flag
+    // is one internal callers set deliberately, not something MCP input should
+    // be able to reach.
+    //
+    // This cannot reject anything new. The only caller runs after
+    // parseEnhancedRequest, and both the enhanced and the legacy schema already
+    // validate `options` with this same ProcessingOptionsSchema -- an
+    // out-of-range known value has therefore thrown before reaching here. All
+    // this adds is the stripping of unrecognised keys, which the earlier parse
+    // performs on its own copy but which survives in the raw args.
+    const options = ProcessingOptionsSchema.parse(source.options ?? {});
+    const workingDirectory = typeof source.workingDirectory === 'string'
+      ? source.workingDirectory
+      : undefined;
+
     if (typeof prompt !== 'string' || !prompt.trim()) {
       throw new Error('Invalid prompt: must be a non-empty string');
     }
@@ -953,7 +1106,7 @@ export class CGMBServer {
 
     // URL Detection - check for URLs in the prompt and file paths
     const urlRegex = /https?:\/\/[^\s]+/g;
-    const urlsInPrompt = prompt.match(urlRegex) || [];
+    const urlsInPrompt = prompt.match(urlRegex) ?? [];
     
     // Also check file paths for URLs
     const fileArray = Array.isArray(files) ? files : [];
@@ -1047,7 +1200,12 @@ Solutions:
           if (error instanceof Error && error.message.includes('not found')) {
             throw error; // Re-throw file not found errors with context
           }
-          logger.warn(`File path resolution error: ${filePath}`, error as Error);
+          // logger.warn takes a metadata bag, not an Error. Passing the Error
+          // straight in logged an object with no enumerable keys -- the message
+          // and stack were dropped.
+          logger.warn(`File path resolution error: ${filePath}`, {
+            error: (error as Error).message,
+          });
           throw new Error(`Invalid file path: ${filePath}`);
         }
       }
@@ -1057,7 +1215,7 @@ Solutions:
     // Extract file paths embedded in the prompt text (like URL detection above)
     // Fix: Support both uppercase and lowercase drive letters (M:\ and m:\)
     const filePathRegex = /(?:[A-Za-z]:\\[^\s"'<>|]+\.[a-zA-Z0-9]+|\/(?!https?:)[^\s"'<>|]+\.[a-zA-Z0-9]+|\.\.?\/[^\s"'<>|]+\.[a-zA-Z0-9]+)/gi;
-    const localPathsInPrompt = prompt.match(filePathRegex) || [];
+    const localPathsInPrompt = prompt.match(filePathRegex) ?? [];
 
     if (localPathsInPrompt.length > 0) {
       logger.info('Local file paths detected in prompt', { paths: localPathsInPrompt });
@@ -1194,6 +1352,30 @@ Solutions:
    * Format unified response for Claude Code
    * Improved data extraction to handle various result structures
    */
+  /**
+   * Convert a layer or workflow result into an MCP CallToolResult.
+   *
+   * The dedicated tools (workflow orchestration, multimodal, document
+   * analysis) each JSON-stringified their result without consulting
+   * result.success, so a workflow whose steps failed -- which
+   * LayerManager.executeWorkflow returns as a normal value, not a throw --
+   * arrived at the client with no isError and was recorded as a success. The
+   * round-15 fix only covered the unified tool's formatResponse path.
+   */
+  private toCallToolResult(result: { success?: boolean | undefined; error?: string | undefined }): CallToolResult {
+    const failed = result?.success === false;
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+      ...(failed ? { isError: true } : {}),
+    };
+  }
+
   private formatResponse(result: any, hasCGMB: boolean): CallToolResult {
     const prefix = hasCGMB ? '🎯 **CGMB**: ' : '';
 
@@ -1204,50 +1386,19 @@ Solutions:
     if (typeof result.data === 'string' && result.data.trim()) {
       responseData = result.data;
     }
-    // 2. Results array format (from workflow)
+    // 2 & 3. Workflow results, either as an array or as named steps.
+    //
+    // This used to hold two byte-for-byte copies of the same four-shape probe,
+    // one per container, and both took element [0] without looking at whether
+    // that step succeeded or what it was for. In a named workflow element [0]
+    // is the preprocess step, so an intermediate result -- or a failed one --
+    // was returned as the final answer. pickFinalResultText walks from the end
+    // and skips failures.
     else if (Array.isArray(result.results) && result.results.length > 0) {
-      const firstResult = result.results[0];
-      if (typeof firstResult?.data === 'string' && firstResult.data.trim()) {
-        responseData = firstResult.data;
-      }
-      // Handle nested data.content format: {data: {content: [{type: 'text', text: '...'}]}}
-      else if (firstResult?.data?.content && Array.isArray(firstResult.data.content) && firstResult.data.content[0]?.text) {
-        responseData = firstResult.data.content[0].text;
-      }
-      else if (firstResult?.content) {
-        // Handle MCP content array format: [{type: 'text', text: '...'}]
-        if (Array.isArray(firstResult.content) && firstResult.content[0]?.text) {
-          responseData = firstResult.content[0].text;
-        } else if (typeof firstResult.content === 'string') {
-          responseData = firstResult.content;
-        } else {
-          responseData = JSON.stringify(firstResult.content);
-        }
-      }
+      responseData = pickFinalResultText(result.results);
     }
-    // 3. Results object format (from workflow with named steps)
-    else if (result.results && typeof result.results === 'object' && !Array.isArray(result.results)) {
-      const resultValues = Object.values(result.results) as any[];
-      if (resultValues.length > 0) {
-        const firstResult = resultValues[0];
-        if (typeof firstResult?.data === 'string' && firstResult.data.trim()) {
-          responseData = firstResult.data;
-        }
-        // Handle nested data.content format: {data: {content: [{type: 'text', text: '...'}]}}
-        else if (firstResult?.data?.content && Array.isArray(firstResult.data.content) && firstResult.data.content[0]?.text) {
-          responseData = firstResult.data.content[0].text;
-        }
-        else if (firstResult?.content) {
-          // Handle MCP content array format: [{type: 'text', text: '...'}]
-          if (Array.isArray(firstResult.content) && firstResult.content[0]?.text) {
-            responseData = firstResult.content[0].text;
-          } else if (typeof firstResult.content === 'string') {
-            responseData = firstResult.content;
-          } else {
-            responseData = JSON.stringify(firstResult.content);
-          }
-        }
-      }
+    else if (result.results && typeof result.results === 'object') {
+      responseData = pickFinalResultText(Object.values(result.results));
     }
     // 4. Summary or content fallback
     else if (result.summary && typeof result.summary === 'string') {
@@ -1288,11 +1439,31 @@ Solutions:
         '• Process: "CGMB process files..."';
     }
 
+    // A failed result must reach the wire as a failure.
+    //
+    // formatResponse ignored result.success entirely and, when it could not
+    // extract data, substituted "Processing completed" -- so a workflow whose
+    // steps failed produced a CallToolResult with no isError, which upstream
+    // handlers record as success. Partial failures were worse: the first
+    // successful step's data was returned and the later failures disappeared.
+    const failed = result?.success === false;
+
     return {
       content: [{
         type: 'text',
-        text: responseText
-      }]
+        text: failed
+          ? `${responseText}
+
+❌ This request did not complete successfully.` +
+            (typeof result?.error === 'string' ? `
+Error: ${result.error}` : '') +
+            (typeof result?.metadata?.steps_failed === 'number'
+              ? `
+Failed steps: ${result.metadata.steps_failed}`
+              : '')
+          : responseText
+      }],
+      ...(failed ? { isError: true } : {})
     };
   }
 
@@ -1328,14 +1499,7 @@ Solutions:
         }
 
         // Full response for complex workflows
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
+        return this.toCallToolResult(result);
       },
       {
         operationName: 'multimodal_process',
@@ -1359,14 +1523,7 @@ Solutions:
           validatedArgs.options
         );
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
+        return this.toCallToolResult(result);
       },
       {
         operationName: 'document_analysis',
@@ -1392,14 +1549,7 @@ Solutions:
           }
         );
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
+        return this.toCallToolResult(result);
       },
       {
         operationName: 'workflow_orchestration',
@@ -1428,7 +1578,7 @@ Solutions:
         name: 'Gemini CLI',
         check: async () => {
           try {
-            const layer = await this.layerManager.getGeminiLayerAsync();
+            const layer = await this.layerManager.getAntigravityLayerAsync();
             return await layer.isAvailable();
           } catch {
             return false;
@@ -1467,7 +1617,7 @@ Solutions:
       );
 
     if (failures.length > 0) {
-      logger.warn('Some dependencies are not available:', failures);
+      logger.warn('Some dependencies are not available:', { failures });
       // Note: We continue with partial functionality rather than failing completely
     }
 
@@ -1536,7 +1686,7 @@ Solutions:
     const lowerLevel = level.toLowerCase();
     if (lowerLevel === 'verbose') {return 'debug';}
 
-    return validLevels.includes(lowerLevel as any) ? lowerLevel as any : 'info';
+    return isOneOf(validLevels, lowerLevel) ? lowerLevel : 'info';
   }
 
   /**

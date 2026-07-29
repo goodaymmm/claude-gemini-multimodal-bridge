@@ -354,10 +354,10 @@ export class PromptOptimizer {
     // Kanji: 1 character ≈ 1-2 tokens
     // Alphanumeric: 4 characters ≈ 1 token
     
-    const hiragana = (text.match(/[ひ-ゞ]/g) || []).length;
-    const katakana = (text.match(/[ァ-ヶー]/g) || []).length;
-    const kanji = (text.match(/[一-龯]/g) || []).length;
-    const alphanumeric = (text.match(/[a-zA-Z0-9]/g) || []).length;
+    const hiragana = (text.match(/[ひ-ゞ]/g) ?? []).length;
+    const katakana = (text.match(/[ァ-ヶー]/g) ?? []).length;
+    const kanji = (text.match(/[一-龯]/g) ?? []).length;
+    const alphanumeric = (text.match(/[a-zA-Z0-9]/g) ?? []).length;
     
     return hiragana + katakana + (kanji * 1.5) + Math.ceil(alphanumeric / 4);
   }

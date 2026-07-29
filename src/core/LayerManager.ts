@@ -1,8 +1,9 @@
+import { basename } from 'path';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
-import { GeminiCLILayer } from '../layers/GeminiCLILayer.js';
+import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
-import { ErrorHandler, safeExecute } from '../utils/errorHandler.js';
+import { safeExecute } from '../utils/errorHandler.js';
 import {
   CGMBError,
   Config,
@@ -16,6 +17,53 @@ import {
   WorkflowType,
   WorkloadAnalysis,
 } from './types.js';
+import { taskFileRefs } from './types.js';
+import { normalizeLayerName } from './types.js';
+
+/**
+ * Names that must not be transmitted to Google, checked at the AI Studio
+ * boundary.
+ *
+ * Deliberately a name check and nothing more. The workspace-confinement and
+ * canonicalisation machinery this replaces refused legitimate paths outside the
+ * working directory -- `cgmb analyze ~/docs/report.pdf` is the product's main
+ * use, not an attack -- and needed a trusted-context argument threaded through
+ * every routing method to work at all. A denylist costs neither: no ordinary
+ * request analyses a .env, so nothing legitimate is lost.
+ *
+ * Matched on the basename only. A symlink pointing at a credential file is out
+ * of scope by design: resolving it is what dragged in realpath, TOCTOU handling
+ * and the identity checks that made the previous version untenable.
+ */
+const CREDENTIAL_FILE_PATTERNS = [
+  /^\.env(\..*)?$/i,
+  /^\.npmrc$/i,
+  /^\.netrc$/i,
+  /^id_(rsa|dsa|ecdsa|ed25519)$/i,
+  /^credentials(\..*)?$/i,
+  /^secrets?\.[a-z0-9]+$/i,
+  /\.(pem|key|pfx|p12|keystore|jks)$/i,
+];
+
+/**
+ * Refuse a task that names anything credential-shaped.
+ *
+ * Goes through taskFileRefs so it sees both the `files` and `documents` keys --
+ * see that function for why the codebase has two.
+ */
+export function assertNoCredentialFiles(task: unknown): void {
+  for (const file of taskFileRefs(task)) {
+    // basename() handles both separators, so no path parsing is needed here.
+    const name = basename(file.path);
+    if (CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(name))) {
+      throw new CGMBError(
+        `Refusing to process ${name}: it matches a credential file pattern, and the AI Studio ` +
+        `layer transmits file contents to Google.`,
+        'CREDENTIAL_FILE_REFUSED'
+      );
+    }
+  }
+}
 
 // ===================================
 // Layer Manager - Orchestrates all three layers
@@ -44,22 +92,22 @@ interface TaskAnalysis {
 
 export class LayerManager {
   private claudeLayer: ClaudeCodeLayer | null = null;
-  private geminiLayer: GeminiCLILayer | null = null;
+  private antigravityLayer: AntigravityCLILayer | null = null;
   private aiStudioLayer: AIStudioLayer | null = null;
   private config: Config;
   private layerInitialized: {
     claude: boolean;
-    gemini: boolean;
+    antigravity: boolean;
     aistudio: boolean;
   } = {
     claude: false,
-    gemini: false,
+    antigravity: false,
     aistudio: false
   };
 
   // Promise cache for async layer initialization
   private claudeLayerPromise: Promise<ClaudeCodeLayer> | null = null;
-  private geminiLayerPromise: Promise<GeminiCLILayer> | null = null;
+  private antigravityLayerPromise: Promise<AntigravityCLILayer> | null = null;
   private aiStudioLayerPromise: Promise<AIStudioLayer> | null = null;
 
   constructor(config: Config) {
@@ -73,7 +121,7 @@ export class LayerManager {
   public getClaudeLayer(): ClaudeCodeLayer {
     if (!this.claudeLayer) {
       logger.info('Lazy initializing Claude Code layer');
-      this.claudeLayer = new ClaudeCodeLayer();
+      this.claudeLayer = new ClaudeCodeLayer(this.config?.claude?.code_path);
       if (!this.layerInitialized.claude) {
         // Initialize only when first accessed
         this.claudeLayer.initialize().then(() => {
@@ -88,15 +136,34 @@ export class LayerManager {
   }
 
   /**
-   * Get Gemini layer with lazy initialization
+   * Get Antigravity layer with lazy initialization
    */
-  public getGeminiLayer(): GeminiCLILayer {
-    if (!this.geminiLayer) {
-      logger.info('Lazy initializing Gemini CLI layer');
-      this.geminiLayer = new GeminiCLILayer();
-      // Gemini layer doesn't require initialization for fast path
+  public getAntigravityLayer(): AntigravityCLILayer {
+    if (!this.antigravityLayer) {
+      logger.info('Lazy initializing Antigravity CLI layer');
+      this.antigravityLayer = new AntigravityCLILayer();
+      // Antigravity layer doesn't require initialization for fast path
     }
-    return this.geminiLayer;
+    return this.antigravityLayer;
+  }
+
+  /**
+   * @deprecated Renamed to getAntigravityLayer(). Kept because LayerManager is
+   * a public export and this method was public before the Antigravity rename --
+   * removing it outright breaks compilation for TypeScript consumers and throws
+   * TypeError for JavaScript ones. Returns the same instance; scheduled for
+   * removal in the next major release.
+   */
+  public getGeminiLayer(): AntigravityCLILayer {
+    return this.getAntigravityLayer();
+  }
+
+  /**
+   * @deprecated Renamed to getAntigravityLayerAsync(). See getGeminiLayer().
+   * Returns the same shared initialization promise.
+   */
+  public async getGeminiLayerAsync(): Promise<AntigravityCLILayer> {
+    return this.getAntigravityLayerAsync();
   }
 
   /**
@@ -105,8 +172,8 @@ export class LayerManager {
   public getAIStudioLayer(): AIStudioLayer {
     if (!this.aiStudioLayer) {
       logger.info('Lazy initializing AI Studio layer');
-      // Pass GeminiCLILayer reference for translation functionality
-      this.aiStudioLayer = new AIStudioLayer(this.getGeminiLayer());
+      // Pass AntigravityCLILayer reference for translation functionality
+      this.aiStudioLayer = new AIStudioLayer(this.getAntigravityLayer());
       if (!this.layerInitialized.aistudio) {
         // Initialize only when first accessed
         this.aiStudioLayer.initialize().then(() => {
@@ -128,7 +195,7 @@ export class LayerManager {
       this.claudeLayerPromise = (async () => {
         if (!this.claudeLayer) {
           logger.info('Async initializing Claude Code layer');
-          this.claudeLayer = new ClaudeCodeLayer();
+          this.claudeLayer = new ClaudeCodeLayer(this.config?.claude?.code_path);
         }
         if (!this.layerInitialized.claude) {
           await this.claudeLayer.initialize();
@@ -142,24 +209,24 @@ export class LayerManager {
   }
 
   /**
-   * Get Gemini layer with guaranteed initialization (async)
+   * Get Antigravity layer with guaranteed initialization (async)
    */
-  public async getGeminiLayerAsync(): Promise<GeminiCLILayer> {
-    if (!this.geminiLayerPromise) {
-      this.geminiLayerPromise = (async () => {
-        if (!this.geminiLayer) {
-          logger.info('Async initializing Gemini CLI layer');
-          this.geminiLayer = new GeminiCLILayer();
+  public async getAntigravityLayerAsync(): Promise<AntigravityCLILayer> {
+    if (!this.antigravityLayerPromise) {
+      this.antigravityLayerPromise = (async () => {
+        if (!this.antigravityLayer) {
+          logger.info('Async initializing Antigravity CLI layer');
+          this.antigravityLayer = new AntigravityCLILayer();
         }
-        if (!this.layerInitialized.gemini) {
-          await this.geminiLayer.initialize();
-          this.layerInitialized.gemini = true;
-          logger.info('Gemini CLI layer initialized (async)');
+        if (!this.layerInitialized.antigravity) {
+          await this.antigravityLayer.initialize();
+          this.layerInitialized.antigravity = true;
+          logger.info('Antigravity CLI layer initialized (async)');
         }
-        return this.geminiLayer;
+        return this.antigravityLayer;
       })();
     }
-    return this.geminiLayerPromise;
+    return this.antigravityLayerPromise;
   }
 
   /**
@@ -170,9 +237,11 @@ export class LayerManager {
       this.aiStudioLayerPromise = (async () => {
         if (!this.aiStudioLayer) {
           logger.info('Async initializing AI Studio layer');
-          // Ensure Gemini layer is initialized first (needed for translation)
-          await this.getGeminiLayerAsync();
-          this.aiStudioLayer = new AIStudioLayer(this.geminiLayer!);
+          // Ensure Antigravity layer is initialized first (needed for translation).
+          // Use what the getter returns rather than re-reading the field and
+          // asserting it: the getter is what guarantees the layer exists.
+          const antigravity = await this.getAntigravityLayerAsync();
+          this.aiStudioLayer = new AIStudioLayer(antigravity);
         }
         if (!this.layerInitialized.aistudio) {
           await this.aiStudioLayer.initialize();
@@ -189,7 +258,10 @@ export class LayerManager {
    * Fast processing for simple prompts (reference implementation style)
    * Bypasses heavy layer initialization and routing overhead
    */
-  public async processSimpleFast(prompt: string, files?: FileReference[]): Promise<LayerResult> {
+  public async processSimpleFast(
+    prompt: string,
+    files?: FileReference[]
+  ): Promise<LayerResult> {
     logger.info('Fast simple processing', {
       promptLength: prompt.length,
       hasFiles: !!files?.length,
@@ -197,12 +269,12 @@ export class LayerManager {
     });
 
     try {
-      // Use simplified execution directly on Gemini layer (with async initialization)
-      const geminiLayer = await this.getGeminiLayerAsync();
-      const result = await geminiLayer.execute({
+      // Use simplified execution directly on Antigravity layer (with async initialization)
+      const antigravityLayer = await this.getAntigravityLayerAsync();
+      const result = await antigravityLayer.execute({
         type: 'text_processing',
         prompt,
-        files: files || [],
+        files: files ?? [],
         useSearch: true // Enable search by default for current information
       });
 
@@ -225,8 +297,13 @@ export class LayerManager {
    */
   public analyzeTask(task: any, userPreferredLayer?: LayerType): TaskAnalysis {
     const prompt = task.prompt || task.request || task.input || '';
-    const files = task.files || [];
-    
+
+    // Both keys, not just `files`. A document-analysis task carries `documents`,
+    // so hasFiles was false for it: routing treated it as text, and the
+    // capability filter in getFallbackOrder never fired -- which is how a
+    // file-carrying request reached layers that cannot read files.
+    const files = taskFileRefs(task);
+
     // Analyze file types and complexity
     const fileTypes = files.map((f: FileReference) => f.type || this.detectFileType(f.path));
     const hasFiles = files.length > 0;
@@ -291,18 +368,18 @@ export class LayerManager {
     }
     // Priority 5: Current information needs - Route to Gemini CLI for web search
     else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
-      preferredLayer = 'gemini';
-      reasoning = 'Current information or search required - Gemini CLI optimal';
+      preferredLayer = 'antigravity';
+      reasoning = 'Current information or search required - Antigravity CLI optimal';
     }
     // Priority 6: Complex reasoning or code-related prompts - Route to Claude Code
     else if (complexity === 'high' || isCodeRelated || promptLength > 2000) {
       preferredLayer = 'claude';
       reasoning = 'Complex reasoning or code analysis - Claude Code optimal';
     }
-    // Priority 7: Simple tasks - Route to Gemini CLI for speed
+    // Priority 7: Simple tasks - Route to Antigravity CLI for speed
     else if (complexity === 'low' && promptLength < 500) {
-      preferredLayer = 'gemini';
-      reasoning = 'Simple task - Gemini CLI for speed';
+      preferredLayer = 'antigravity';
+      reasoning = 'Simple task - Antigravity CLI for speed';
     }
     // Default: Route to AI Studio (primary layer)
     else {
@@ -330,7 +407,9 @@ export class LayerManager {
    * Implements intelligent routing with fallback strategies
    * Enhanced to support user-specified layer preferences
    */
-  public async executeWithOptimalLayer(task: any): Promise<LayerResult> {
+  public async executeWithOptimalLayer(
+    task: any
+  ): Promise<LayerResult> {
     // Extract user-preferred layer from task options
     const userPreferredLayer = task.options?.preferredLayer;
     
@@ -360,20 +439,36 @@ export class LayerManager {
   /**
    * Execute task with specific layer
    */
-  public async executeWithLayer(layerType: LayerType, task: any): Promise<LayerResult> {
+  public async executeWithLayer(
+    layerType: LayerType,
+    task: any
+  ): Promise<LayerResult> {
+    // Checked before routing, for every layer.
+    //
+    // AI Studio is where the disclosure would happen -- its MCP server
+    // readFileSync()s whatever path it is handed and sends the bytes to Google,
+    // and unlike a local read the user never sees that leave. But guarding only
+    // that branch made the refusal depend on routing: the analysis workflow
+    // runs claude -> aistudio -> claude, so a request naming a credential file
+    // was handed to the Claude layer twice before anything objected. Claude
+    // never reads task.files, so nothing was disclosed, but the refusal should
+    // not be contingent on which step happens to run first.
+    assertNoCredentialFiles(task);
+
     switch (layerType) {
       case 'claude':
         const claudeLayer = await this.getClaudeLayerAsync();
         return await claudeLayer.execute(task);
-        
-      case 'gemini':
-        const geminiLayer = await this.getGeminiLayerAsync();
-        return await geminiLayer.execute(task);
-        
+
+      case 'gemini': // deprecated alias
+      case 'antigravity':
+        const antigravityLayer = await this.getAntigravityLayerAsync();
+        return await antigravityLayer.execute(task);
+
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();
         return await aiStudioLayer.execute(task);
-        
+
       default:
         throw new Error(`Unknown layer type: ${layerType}`);
     }
@@ -382,7 +477,10 @@ export class LayerManager {
   /**
    * Execute with fallback strategy
    */
-  private async executeWithFallback(task: any, failedLayer: LayerType): Promise<LayerResult> {
+  private async executeWithFallback(
+    task: any,
+    failedLayer: LayerType
+  ): Promise<LayerResult> {
     const fallbackOrder = this.getFallbackOrder(failedLayer, task);
 
     for (const layerType of fallbackOrder) {
@@ -413,31 +511,78 @@ export class LayerManager {
       }
     }
 
+    if (fallbackOrder.length === 0) {
+      // Reached when the task carries files and no remaining layer can read
+      // them. Naming that explicitly beats "Fallbacks: " with an empty list.
+      throw new Error(
+        `The ${failedLayer} layer failed and no fallback layer can process files. ` +
+        `Only the AI Studio layer reads file contents; the search and Claude layers ` +
+        `would answer from the prompt alone.`
+      );
+    }
+
     throw new Error(`All layers failed for task. Primary: ${failedLayer}, Fallbacks: ${fallbackOrder.join(', ')}`);
   }
+
+  /**
+   * Layers that actually read task.files.
+   *
+   * Only AI Studio does. The Antigravity layer refuses them outright, and
+   * ClaudeCodeLayer declares `files` on its task type but never reads it -- it
+   * builds the prompt and nothing else. Falling back to either for a
+   * file-carrying task produces an answer about documents that were never
+   * opened, returned as success.
+   */
+  private static readonly FILE_CAPABLE_LAYERS: ReadonlySet<LayerType> = new Set(['aistudio']);
 
   /**
    * Get fallback order based on failed layer and task characteristics
    */
   private getFallbackOrder(failedLayer: LayerType, task: any): LayerType[] {
     const analysis = this.analyzeTask(task);
-    
-    switch (failedLayer) {
-      case 'claude':
-        // If Claude fails, try Gemini for search or AI Studio for files
-        return analysis.hasFiles ? ['aistudio', 'gemini'] : ['gemini', 'aistudio'];
-        
-      case 'gemini':
-        // If Gemini fails, prefer AI Studio, then Claude for complex tasks only
-        return analysis.complexity === 'high' ? ['aistudio', 'claude'] : ['aistudio', 'claude'];
-        
-      case 'aistudio':
-        // If AI Studio fails, prefer Gemini for search, then Claude for complex tasks
-        return analysis.complexity === 'high' ? ['gemini', 'claude'] : ['gemini', 'claude'];
-        
-      default:
-        return ['aistudio', 'gemini', 'claude'];
+
+    const order = ((): LayerType[] => {
+      switch (failedLayer) {
+        case 'claude':
+          // If Claude fails, try Gemini for search or AI Studio for files
+          return analysis.hasFiles ? ['aistudio', 'antigravity'] : ['antigravity', 'aistudio'];
+
+        case 'gemini': // deprecated alias
+        case 'antigravity':
+          // If Gemini fails, prefer AI Studio, then Claude for complex tasks only
+          return analysis.complexity === 'high' ? ['aistudio', 'claude'] : ['aistudio', 'claude'];
+
+        case 'aistudio':
+          // If AI Studio fails, prefer Gemini for search, then Claude for complex tasks
+          return analysis.complexity === 'high' ? ['antigravity', 'claude'] : ['antigravity', 'claude'];
+
+        default:
+          return ['aistudio', 'antigravity', 'claude'];
+      }
+    })();
+
+    if (!analysis.hasFiles) {
+      return order;
     }
+
+    // Fallback for a file-carrying task must be capability-aware.
+    //
+    // executeWithFallback catches each layer's error and moves on, so the
+    // Antigravity layer's refusal was swallowed and the task slid to Claude,
+    // which answers from the prompt alone -- "Analysis complete" for a document
+    // nobody read. Dropping incapable layers here makes the loop run out and
+    // report the real failure instead.
+    const capable = order.filter(layer => LayerManager.FILE_CAPABLE_LAYERS.has(layer));
+
+    if (capable.length < order.length) {
+      logger.debug('Dropped file-incapable layers from the fallback order', {
+        failedLayer,
+        considered: order,
+        usable: capable,
+      });
+    }
+
+    return capable;
   }
 
   /**
@@ -454,9 +599,10 @@ export class LayerManager {
           await this.getAIStudioLayer().initialize();
           this.layerInitialized.aistudio = true;
           break;
-        case 'gemini':
-          await this.getGeminiLayer().initialize();
-          this.layerInitialized.gemini = true;
+        case 'gemini': // deprecated alias
+        case 'antigravity':
+          await this.getAntigravityLayer().initialize();
+          this.layerInitialized.antigravity = true;
           break;
       }
     }
@@ -592,7 +738,7 @@ export class LayerManager {
     // NEW: Check for file paths embedded in prompt (Windows + Unix)
     // If paths found, this is not a simple prompt - needs file processing
     const filePathRegex = /(?:[A-Za-z]:\\[^\s"'<>|]+\.[a-zA-Z0-9]+|\/(?!https?:)[^\s"'<>|]+\.[a-zA-Z0-9]+|\.\.?\/[^\s"'<>|]+\.[a-zA-Z0-9]+)/gi;
-    const embeddedPaths = prompt.match(filePathRegex) || [];
+    const embeddedPaths = prompt.match(filePathRegex) ?? [];
 
     if (embeddedPaths.length > 0) {
       logger.debug('File paths detected in prompt - not simple', { paths: embeddedPaths });
@@ -662,7 +808,7 @@ export class LayerManager {
             total_duration: result.metadata?.duration || 0,
             steps_completed: 1,
             steps_failed: 0,
-            layers_used: ['gemini'],
+            layers_used: ['antigravity'],
             optimization: 'fast-path-bypass'
           }
         };
@@ -683,14 +829,20 @@ export class LayerManager {
       });
 
       try {
-        // Direct AI Studio execution for file analysis (skip 3-step workflow)
-        const aiStudioLayer = await this.getAIStudioLayerAsync();
-        const result = await aiStudioLayer.execute({
+        // Routed through executeWithLayer so admission still applies.
+        //
+        // This called AIStudioLayer.execute() directly, so the workspace
+        // confinement and credential-name checks added in the previous round
+        // never ran for one- and two-file analyses -- the most common MCP
+        // request. A file outside the workspace, or credentials.json, reached
+        // the AI Studio MCP server and was sent onward. Placing the gate in
+        // executeWithLayer only helps if every file-bearing path goes through it.
+        const result = await this.executeWithLayer('aistudio', {
           type: 'multimodal_processing',
           action: 'analyze',
           prompt,
           files,
-          options: options || {}
+          options: options ?? {}
         });
 
         // Convert to WorkflowResult format
@@ -723,14 +875,18 @@ export class LayerManager {
     const executionPlan = await this.createWorkflowPlan(workflow, {
       prompt,
       files,
-      options: options || {},
+      options: options ?? {},
     });
 
     // Execute the workflow
-    return this.executeWorkflow(executionPlan, { prompt, files }, {
-      executionMode: options?.execution_mode || 'adaptive',
-      timeout: options?.timeout || 300000,
-    });
+    return this.executeWorkflow(
+      executionPlan,
+      { prompt, files },
+      {
+        executionMode: options?.execution_mode ?? 'adaptive',
+        timeout: options?.timeout || 300000,
+      }
+    );
   }
 
   /**
@@ -767,6 +923,11 @@ export class LayerManager {
           input: {
             documents,
             analysisType,
+            // The AI Studio layer reads `instructions` for this action. Without
+            // it the request reached the model with nothing to ask.
+            instructions: outputRequirements?.trim()
+              ? outputRequirements
+              : `Perform a ${analysisType} analysis of the attached documents.`,
           },
           dependsOn: ['preprocess'],
         },
@@ -786,7 +947,7 @@ export class LayerManager {
           replace: 'document_processing',
           with: {
             id: 'fallback_processing',
-            layer: 'gemini',
+            layer: 'antigravity',
             action: 'analyze_documents',
             input: {
               documents,
@@ -798,7 +959,7 @@ export class LayerManager {
     };
 
     return this.executeWorkflow(executionPlan, { documents, analysisType }, {
-      executionMode: options?.execution_mode || 'sequential',
+      executionMode: options?.execution_mode ?? 'sequential',
       timeout: options?.timeout || 300000,
     });
   }
@@ -892,9 +1053,24 @@ export class LayerManager {
         
         // Execute step
         const result = await this.executeStep(step, stepInput, options);
+
+        // A failed step must reach the fallback path.
+        //
+        // executeStep catches its own exceptions and returns success:false, so
+        // the catch block below was only ever entered for errors it could not
+        // handle -- meaning a declared fallback such as aistudio_unavailable
+        // never ran, and later steps carried on with the failure as input.
+        if (!result.success) {
+          throw new CGMBError(
+            result.error ?? `Step ${step.id} failed`,
+            'STEP_FAILED',
+            step.layer
+          );
+        }
+
         results[step.id] = result;
-        
-        if (result.success && result.data) {
+
+        if (result.data) {
           stepOutputs[step.id] = { output: result.data };
         }
 
@@ -1061,15 +1237,15 @@ export class LayerManager {
     }
 
     // Determine recommended layer with generation priority
-    let recommendedLayer: LayerType = 'gemini'; // Default to Gemini CLI for simple prompts
+    let recommendedLayer: LayerType = 'antigravity'; // Default to Gemini CLI for simple prompts
     
     // Check if this is a simple prompt (no files, no generation, no complex reasoning)
     const isSimplePrompt = !hasMultimodalFiles && !isGenerationRequest && !requiresComplexReasoning && !multipleSteps;
     
     // HIGHEST PRIORITY: Web search goes to Gemini CLI
     if (requiresGrounding && !hasMultimodalFiles) {
-      recommendedLayer = 'gemini';
-      logger.info('Routing to Gemini CLI for web search', {
+      recommendedLayer = 'antigravity';
+      logger.info('Routing to Antigravity CLI for web search', {
         prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 100) + '...' : 'No prompt',
         requiresGrounding: true
       });
@@ -1093,8 +1269,8 @@ export class LayerManager {
       recommendedLayer = 'aistudio';
     } else if (isSimplePrompt) {
       // Simple prompts go to Gemini CLI (2.5 Pro) for best performance
-      recommendedLayer = 'gemini';
-      logger.info('Routing simple prompt to Gemini CLI', {
+      recommendedLayer = 'antigravity';
+      logger.info('Routing simple prompt to Antigravity CLI', {
         promptLength: typeof inputData.prompt === 'string' ? inputData.prompt.length : 0,
         hasFiles: hasMultimodalFiles,
         requiresGrounding
@@ -1141,17 +1317,29 @@ export class LayerManager {
     const stepGroups = this.groupStepsByRecommendedLayer(workflow.steps, analysis);
     const results: Record<string, LayerResult> = {};
 
+    // Dependency references use `@step.output`, so every execution mode has to
+    // publish the same shape. Only sequential did: hybrid and parallel passed
+    // the raw LayerResult, so `@step.output` resolved to undefined and a
+    // downstream synthesis or quality check ran with no upstream data -- then
+    // reported success because it returned something of its own.
+    const stepOutputs: Record<string, Record<string, unknown>> = {};
+
     // Execute high-priority steps first
     for (const [_priority, steps] of Object.entries(stepGroups)) {
-      if (steps.length === 1) {
+      const [first] = steps;
+      if (steps.length === 1 && first) {
         // Single step - execute directly
-        const step = steps[0]!;
-        const stepInput = this.resolveStepInput(step.input, results, inputData);
-        results[step.id] = await this.executeStep(step, stepInput, options);
+        const step = first;
+        const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
+        const result = await this.executeStep(step, stepInput, options);
+        results[step.id] = result;
+        if (result.success) {
+          stepOutputs[step.id] = { output: result.data };
+        }
       } else {
         // Multiple steps - execute in parallel if possible
         const promises = steps.map(async (step) => {
-          const stepInput = this.resolveStepInput(step.input, results, inputData);
+          const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
           return {
             stepId: step.id,
             result: await this.executeStep(step, stepInput, options),
@@ -1161,6 +1349,9 @@ export class LayerManager {
         const stepResults = await Promise.all(promises);
         stepResults.forEach(({ stepId, result }) => {
           results[stepId] = result;
+          if (result.success) {
+            stepOutputs[stepId] = { output: result.data };
+          }
         });
       }
     }
@@ -1189,6 +1380,26 @@ export class LayerManager {
       return null;
     }
 
+    // A file-carrying step cannot fall back to the Antigravity CLI layer.
+    //
+    // That layer takes a text prompt only, so it would answer from the prompt
+    // alone -- summarising documents it was never given, and reporting success.
+    // Failing loudly here surfaces the real problem (AI Studio was unavailable)
+    // instead of substituting a fluent, unfounded answer.
+    const fallbackLayer = normalizeLayerName(String(strategy.with.layer));
+    // taskFileRefs so a step carrying `documents` counts too -- the
+    // document-analysis workflow uses that key, and reading only `files` let its
+    // fallback route to the search layer.
+    const stepFiles = taskFileRefs(failedStep.input);
+    if (fallbackLayer === 'antigravity' && stepFiles.length > 0) {
+      throw new CGMBError(
+        `Step ${failedStep.id} carries files and cannot fall back to the Antigravity CLI layer, ` +
+        `which accepts a text prompt only. The AI Studio layer is required for file processing. ` +
+        `Original failure: ${error.message}`,
+        'FILE_FALLBACK_UNAVAILABLE'
+      );
+    }
+
     logger.info(`Attempting fallback strategy for step ${failedStep.id}`, {
       strategy: strategyKey,
       fallbackLayer: strategy.with.layer,
@@ -1200,7 +1411,7 @@ export class LayerManager {
         {},
         failedStep.input
       );
-      
+
       return await this.executeStep(strategy.with, fallbackInput, options);
     } catch (fallbackError) {
       logger.error(`Fallback strategy failed for step ${failedStep.id}`, fallbackError as Error);
@@ -1276,7 +1487,7 @@ export class LayerManager {
           replace: 'multimodal_analysis',
           with: {
             id: 'fallback_analysis',
-            layer: 'gemini',
+            layer: 'antigravity',
             action: 'analyze_with_grounding',
             input: {
               prompt: context.prompt,
@@ -1320,7 +1531,7 @@ export class LayerManager {
         },
         {
           id: 'quality_check',
-          layer: 'gemini',
+          layer: 'antigravity',
           action: 'validate_conversion',
           input: {
             original_files: context.files,
@@ -1435,8 +1646,9 @@ export class LayerManager {
     switch (layerType) {
       case 'claude':
         return this.getClaudeLayer();
-      case 'gemini':
-        return this.getGeminiLayer();
+      case 'gemini': // deprecated alias
+      case 'antigravity':
+        return this.getAntigravityLayer();
       case 'aistudio':
         return this.getAIStudioLayer();
       default:
@@ -1451,8 +1663,9 @@ export class LayerManager {
     switch (layerType) {
       case 'claude':
         return await this.getClaudeLayerAsync();
-      case 'gemini':
-        return await this.getGeminiLayerAsync();
+      case 'gemini': // deprecated alias
+      case 'antigravity':
+        return await this.getAntigravityLayerAsync();
       case 'aistudio':
         return await this.getAIStudioLayerAsync();
       default:
@@ -1477,7 +1690,7 @@ export class LayerManager {
       visiting.add(step.id);
 
       // Visit dependencies first
-      const dependencies = step.dependsOn || [];
+      const dependencies = step.dependsOn ?? [];
       for (const depId of dependencies) {
         const depStep = steps.find(s => s.id === depId);
         if (depStep) {
@@ -1504,7 +1717,7 @@ export class LayerManager {
     while (processed.size < steps.length) {
       const currentLevel = steps.filter(step => {
         if (processed.has(step.id)) {return false;}
-        const dependencies = step.dependsOn || [];
+        const dependencies = step.dependsOn ?? [];
         return dependencies.every(dep => processed.has(dep));
       });
 
@@ -1523,7 +1736,11 @@ export class LayerManager {
     steps: WorkflowStep[],
     analysis: WorkloadAnalysis
   ): Record<string, WorkflowStep[]> {
-    const groups: Record<string, WorkflowStep[]> = {
+    // Typed by its exact keys rather than Record<string, ...>. With an index
+    // signature, noUncheckedIndexedAccess makes every lookup possibly-undefined,
+    // which is why each push needed an assertion -- even though the three keys
+    // are initialised right here.
+    const groups: { high: WorkflowStep[]; medium: WorkflowStep[]; low: WorkflowStep[] } = {
       high: [],
       medium: [],
       low: [],
@@ -1531,11 +1748,11 @@ export class LayerManager {
 
     steps.forEach(step => {
       if (step.layer === analysis.recommendedLayer) {
-        groups.high!.push(step);
+        groups.high.push(step);
       } else if (step.layer === 'claude') {
-        groups.medium!.push(step);
+        groups.medium.push(step);
       } else {
-        groups.low!.push(step);
+        groups.low.push(step);
       }
     });
 
@@ -1553,7 +1770,12 @@ export class LayerManager {
       if (typeof value === 'string' && value.startsWith('@')) {
         // Reference to another step's output
         const [stepId, ...pathParts] = value.slice(1).split('.');
-        const stepOutput = stepOutputs[stepId!];
+        // split() always yields at least one element, but the type does not say
+        // so; check rather than assert, and skip a reference with no step name.
+        if (stepId === undefined || stepId === '') {
+          continue;
+        }
+        const stepOutput = stepOutputs[stepId];
 
         if (stepOutput) {
           // Check if the step result is a failed LayerResult (has success: false)
@@ -1754,9 +1976,6 @@ export class LayerManager {
     });
 
     try {
-      // Get the appropriate layer
-      const layer = await this.getLayerAsync(step.layer);
-      
       // Prepare the execution parameters
       const executionParams = {
         type: this.mapActionToTaskType(step.action),
@@ -1765,8 +1984,13 @@ export class LayerManager {
       };
 
       // Execute the step with timeout
+      // Route through executeWithLayer so the trusted root reaches the layer.
+      // Calling layer.execute() directly here dropped the context, which meant
+      // the confinement fell back to process.cwd() for every workflow step --
+      // including the Antigravity quality check in conversion workflows and the
+      // fallback used when AI Studio fails.
       const result = await safeExecute(
-        () => layer.execute(executionParams),
+        () => this.executeWithLayer(step.layer, executionParams),
         {
           operationName: `execute-step-${step.id}`,
           layer: step.layer,
@@ -1799,10 +2023,19 @@ export class LayerManager {
         };
       }
 
+      // Return the layer's own result, not a wrapper around it.
+      //
+      // executeWithLayer already returns a LayerResult. Re-wrapping it as
+      // { success, data: result } meant dependent steps received the envelope
+      // instead of the payload, and the response formatter could not unwrap
+      // data.data -- so a multi-step workflow succeeded while emitting
+      // "Processing completed" and handed the wrong object to the next model.
+      // (Introduced when executeStep was routed through executeWithLayer to
+      // carry the trusted workspace root.)
       return {
-        success: true,
-        data: result,
+        ...result,
         metadata: {
+          ...result.metadata,
           layer: step.layer,
           duration,
           model: step.action,

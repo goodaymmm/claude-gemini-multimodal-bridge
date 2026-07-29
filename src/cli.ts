@@ -2,19 +2,22 @@
 
 import { Command } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
+import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } from './core/types.js';
+import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
+import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
-import { loadEnvironmentSmart, getEnvironmentStatus } from './utils/envLoader.js';
-import { setupCGMBMCP, getMCPStatus, getManualSetupInstructions } from './utils/mcpConfigManager.js';
-import { execSync } from 'child_process';
+import { getEnvironmentStatus, loadEnvironmentSmart } from './utils/envLoader.js';
+import { getManualSetupInstructions, getMCPStatus, setupCGMBMCP } from './utils/mcpConfigManager.js';
 import path from 'path';
+import { dirname as pathDirname, join as pathJoin } from 'path';
+import { fileURLToPath as toPath } from 'url';
 import fs from 'fs';
-import { OAuthManager } from './auth/OAuthManager.js';
 import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
 import { AuthCache } from './auth/AuthCache.js';
 import { LayerManager } from './core/LayerManager.js';
 import { Logger } from './utils/logger.js';
-import { TimeoutManager, withCLITimeout } from './utils/TimeoutManager.js';
+import { withCLITimeout } from './utils/TimeoutManager.js';
 
 // ===================================
 // Helper Functions for CLI Commands
@@ -28,7 +31,7 @@ function showChatHelp() {
   console.log('  cgmb c "your question"');
   console.log('');
   console.log('🔧 Advanced usage:');
-  console.log('  cgmb chat "question" --model gemini-2.5-flash');
+  console.log('  cgmb chat "question" --model gemini-3.6-flash-low');
   console.log('  cgmb chat "question" --fast');
   console.log('');
   console.log('🌐 Web search is automatic - just ask about current events!');
@@ -43,6 +46,42 @@ function showChatHelp() {
   console.log('  cgmb analyze file.pdf             # Analyze documents');
   console.log('');
   console.log('❓ Having issues? Try: cgmb auth-status');
+}
+
+/**
+ * Render a layer's `data` for a human reader.
+ *
+ * Layers do not agree on the shape: the Antigravity layer returns a plain
+ * string, while the AI Studio layer returns the MCP envelope it received
+ * ({ content: [{ type: 'text', text }], metadata }). Printing that object
+ * directly dumped `{ content: [ { type: 'text', ... } ] }` at the user with the
+ * actual summary buried inside -- previously masked because AI Studio was
+ * failing and analysis fell back to the string-returning layer.
+ */
+function renderLayerData(data: unknown): string {
+  if (data === undefined || data === null) {
+    return 'Analysis completed';
+  }
+
+  if (typeof data === 'string') {
+    return data;
+  }
+
+  const envelope = data as { content?: Array<{ type?: string; text?: string }> };
+  if (Array.isArray(envelope.content)) {
+    const text = envelope.content
+      .filter(part => part?.type === 'text' && typeof part.text === 'string')
+      .map(part => part.text)
+      .join('\n')
+      .trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  // Unknown shape: show it rather than silently printing "[object Object]".
+  return JSON.stringify(data, null, 2);
 }
 
 function showGeminiHelp() {
@@ -93,13 +132,16 @@ program
       process.env.CGMB_SERVE_MODE = 'true';
       process.env.CGMB_NO_CLAUDE_EXEC = 'true';
       
-      // Set log level first if specified
-      if (options.verbose) {
+      // Set log level first if specified.
+      //
+      // CGMB_DEBUG as well as LOG_LEVEL: the logger reads the level from
+      // LOG_LEVEL but decided whether to have a console transport at all from
+      // CGMB_DEBUG. Setting only the level meant `cgmb serve --debug` under the
+      // NODE_ENV=production that MCP registrations carry produced no output
+      // whatsoever -- the flag looked ignored because, for the console, it was.
+      if (options.verbose || options.debug) {
         process.env.LOG_LEVEL = 'debug';
-      }
-      
-      if (options.debug) {
-        process.env.LOG_LEVEL = 'debug';
+        process.env.CGMB_DEBUG = 'true';
       }
 
       // Load environment variables with smart discovery
@@ -155,7 +197,7 @@ program
   .command('setup')
   .description('Set up CGMB dependencies and configuration')
   .option('--force', 'Force reinstall dependencies')
-  .action(async (options) => {
+  .action(async (_options) => {
     try {
       logger.info('Setting up CGMB...');
       
@@ -170,7 +212,7 @@ program
       
       // Check for required tools
       await checkDependency('claude', 'Claude Code CLI');
-      await checkDependency('gemini', 'Gemini CLI');
+      const antigravityReady = await checkAntigravityDependency();
       
       // Create configuration file if it doesn't exist
       const envPath = path.join(process.cwd(), '.env');
@@ -190,6 +232,13 @@ program
         logger.info('✓ Created logs directory');
       }
       
+      if (!antigravityReady) {
+        // Report the truth and exit non-zero: the web-search layer cannot work.
+        logger.error('Setup incomplete: the Antigravity CLI is missing or too old.');
+        logger.info('Install or update it, then re-run: cgmb setup');
+        process.exit(1);
+      }
+
       logger.info('Setup completed successfully!');
       logger.info('Next steps:');
       logger.info('1. Set up authentication: cgmb auth --interactive');
@@ -217,7 +266,6 @@ program
       // Load environment variables
       await loadEnvironmentSmart({ verbose: false });
       
-      const authManager = new OAuthManager();
       const interactiveSetup = new InteractiveSetup();
       
       logger.info('CGMB Authentication Manager');
@@ -236,17 +284,36 @@ program
         process.exit(0);
       }
       
+      // Keep the result: both APIs report failure by returning success=false,
+      // and discarding it made `cgmb auth` print "completed successfully" and
+      // exit 0 for an unauthenticated setup -- which deployment automation
+      // would read as a working install.
+      let authSucceeded: boolean;
+
       if (options.interactive) {
-        await interactiveSetup.runAuthSetupWizard();
+        authSucceeded = (await interactiveSetup.runAuthSetupWizard()).success;
       } else if (options.service) {
-        logger.info(`Setting up authentication for ${options.service}...`);
-        await interactiveSetup.setupServiceAuth(options.service as any);
+        // The flag is free text, so check it against what setupServiceAuth
+        // accepts. `as any` let `--service nonsense` through to a switch that
+        // matched nothing and reported success.
+        const services = ['antigravity', 'gemini', 'aistudio', 'claude'] as const;
+        if (!isOneOf(services, options.service)) {
+          logger.error(`Unknown service "${options.service}". Expected one of: ${services.join(', ')}`);
+          process.exit(1);
+        }
+        const service = options.service;
+        logger.info(`Setting up authentication for ${service}...`);
+        authSucceeded = (await interactiveSetup.setupServiceAuth(service)).success;
       } else {
         logger.info('Running full authentication setup...');
-        await interactiveSetup.runAuthSetupWizard();
+        authSucceeded = (await interactiveSetup.runAuthSetupWizard()).success;
       }
-      
-      // Explicit exit after authentication completion
+
+      if (!authSucceeded) {
+        logger.error('Authentication setup did not complete. See the errors above.');
+        process.exit(1);
+      }
+
       logger.info('Authentication setup completed successfully');
       process.exit(0);
       
@@ -267,7 +334,7 @@ program
       await loadEnvironmentSmart({ verbose: false });
       
       const verifier = new AuthVerifier();
-      const result = await verifier.verifyAllAuthentications();
+      const result = await verifier.verifyAllAuthentications({ live: true });
       
       console.log('\n🔐 Authentication Status Report\n');
       console.log('═'.repeat(50));
@@ -304,8 +371,10 @@ program
       
       console.log('');
       
-      // Exit immediately after displaying results (matching image/audio generation pattern)
-      process.exit(0);
+      // The exit code must agree with what was just printed: reporting
+      // NEEDS ATTENTION and exiting 0 let automation treat an unauthenticated
+      // system as ready.
+      process.exit(result.overall ? 0 : 1);
       
     } catch (error) {
       logger.error('Failed to check authentication status', error as Error);
@@ -318,7 +387,7 @@ program
   .command('quota-status')
   .description('Check Gemini API quota usage')
   .option('--detailed', 'Show detailed information')
-  .action(async (options) => {
+  .action(async (_options) => {
     // Set CLI mode environment variable FIRST
     process.env.CGMB_CLI_MODE = 'true';
     
@@ -356,7 +425,7 @@ program
       
       const tools = [
         { name: 'Claude Code', commands: ['claude', 'claude-code'], env: 'CLAUDE_CODE_PATH' },
-        { name: 'Gemini CLI', commands: ['gemini'], env: 'GEMINI_CLI_PATH' },
+        { name: 'Antigravity CLI', commands: ['agy'], env: 'ANTIGRAVITY_CLI_PATH' },
         { name: 'Node.js', commands: ['node'], env: 'NODE_PATH' },
         { name: 'NPM', commands: ['npm'], env: 'NPM_PATH' }
       ];
@@ -367,25 +436,19 @@ program
         let foundPath = null;
         for (const command of tool.commands) {
           try {
-            const output = execSync(`which ${command} 2>/dev/null || where ${command} 2>nul`, {
-              encoding: 'utf8',
-              stdio: 'pipe',
-              timeout: 5000,
-            });
-            foundPath = output.trim().split('\n')[0];
+            // Resolve and probe through the shared helpers. This ran the
+            // shell's lookup and then interpolated its first result into
+            // another shell command, so `detect-paths` alone executed whatever
+            // agy.exe or claude.exe the project directory contained -- and a
+            // path containing a space or metacharacter broke it besides.
+            foundPath = resolveTrustedCommand(command) ?? null;
             if (foundPath) {
               console.log(`  ✅ Found: ${foundPath}`);
-              
-              // Test if it works
-              try {
-                execSync(`${foundPath} --version 2>/dev/null || ${foundPath} -v 2>/dev/null`, {
-                  stdio: 'ignore',
-                  timeout: 3000,
-                });
-                console.log(`     Works: ✅`);
-              } catch {
-                console.log(`     Works: ❌ (command failed)`);
-              }
+
+              const works =
+                probeCommand(foundPath, ['--version'], { timeoutMs: 3000 }) !== undefined ||
+                probeCommand(foundPath, ['-v'], { timeoutMs: 3000 }) !== undefined;
+              console.log(works ? '     Works: ✅' : '     Works: ❌ (command failed)');
               break;
             }
           } catch {
@@ -400,7 +463,7 @@ program
           }
           
           if (options.fix && tool.name === 'Gemini CLI') {
-            console.log(`     💡 Install with: npm install -g @google/gemini-cli`);
+            console.log(`     💡 Install with: ${AGY_INSTALL_HINT}`);
           }
         }
       }
@@ -492,15 +555,32 @@ program
       // Check Claude Code CLI version and use appropriate method
       let claudeVersion = '';
       
-      // Skip claude command execution if in serve mode to prevent duplication
-      if (process.env.CGMB_NO_CLAUDE_EXEC === 'true') {
-        console.log('🔄 Claude command execution skipped (serve mode protection)');
-        console.log('💡 Manual setup required. See: cgmb setup-mcp --manual');
-        return;
+      // Two different needs were conflated here.
+      //
+      // CGMB_NO_CLAUDE_EXEC exists to stop a nested `claude` invocation. But
+      // this branch returned before doing any configuration at all, while the
+      // process still exited 0 -- so postinstall recorded "configured" and a
+      // fresh install ended up with no MCP configuration written.
+      //
+      // CGMB_MCP_SETUP_ONLY keeps the guard against running `claude` while
+      // still performing the configuration that was actually requested.
+      const skipClaudeProbe =
+        process.env.CGMB_MCP_SETUP_ONLY === 'true' || process.env.CGMB_NO_CLAUDE_EXEC === 'true';
+
+      if (process.env.CGMB_NO_CLAUDE_EXEC === 'true' && process.env.CGMB_MCP_SETUP_ONLY !== 'true') {
+        console.log('🔄 MCP setup skipped (serve mode protection)');
+        console.log('💡 Run it directly with: cgmb setup-mcp');
+        process.exit(1);
       }
       
       try {
-        claudeVersion = execSync('claude --version', { encoding: 'utf8' }).trim();
+        if (skipClaudeProbe) {
+          throw new Error('Claude version probe skipped by request');
+        }
+        claudeVersion = (probeCommand('claude', ['--version']) ?? '').trim();
+        if (claudeVersion === '') {
+          throw new Error('claude --version produced no output');
+        }
         console.log(`Claude Code CLI version: ${claudeVersion}`);
       } catch (error) {
         console.log('⚠️  Could not detect Claude Code CLI version');
@@ -509,9 +589,14 @@ program
       // Check if claude mcp command is available (v1.0.35+)
       let hasNewMCPCommand = false;
       
-      if (process.env.CGMB_NO_CLAUDE_EXEC !== 'true') {
+      // Every Claude invocation below honours skipClaudeProbe, not just the
+       // version check. Guarding only the first one meant setup-only mode still
+       // ran `claude mcp --help` -- through a shell, which re-resolved the name.
+      if (!skipClaudeProbe) {
         try {
-          execSync('claude mcp --help', { stdio: 'ignore' });
+          if (probeCommand('claude', ['mcp', '--help']) === undefined) {
+            throw new Error('claude mcp --help unavailable');
+          }
           hasNewMCPCommand = true;
           console.log('✅ Detected new Claude Code CLI with mcp command support\n');
         } catch {
@@ -520,14 +605,14 @@ program
       }
       
       // If new MCP command is available, use it instead
-      if (hasNewMCPCommand && !options.force && process.env.CGMB_NO_CLAUDE_EXEC !== 'true') {
+      if (hasNewMCPCommand && !options.force && !skipClaudeProbe) {
         try {
           // Check if already configured with new method
-          const mcpListOutput = execSync('claude mcp list', { encoding: 'utf8' });
+          const mcpListOutput = probeCommand('claude', ['mcp', 'list']) ?? '';
           if (mcpListOutput.includes('claude-gemini-multimodal-bridge')) {
             console.log('✅ CGMB is already configured in Claude Code MCP');
             console.log('\nCurrent configuration:');
-            const mcpGetOutput = execSync('claude mcp get claude-gemini-multimodal-bridge', { encoding: 'utf8' });
+            const mcpGetOutput = probeCommand('claude', ['mcp', 'get', 'claude-gemini-multimodal-bridge']) ?? '';
             console.log(mcpGetOutput);
             
             if (!options.force) {
@@ -538,14 +623,26 @@ program
           
           // Add CGMB using new method
           console.log('Adding CGMB to Claude Code using new MCP command...');
-          const addCommand = 'claude mcp add claude-gemini-multimodal-bridge cgmb serve -e NODE_ENV=production';
-          
+          // Register absolute paths, not a bare `cgmb`.
+          //
+          // The helper validated the `claude` executable but the server command
+          // it registered was still a bare name, which Claude Code re-resolves
+          // when it launches the server -- from inside a project, against that
+          // project's PATH and directory. That is a persisted execution path.
+          const bundledCli = pathJoin(pathDirname(toPath(import.meta.url)), 'cli.js');
+          const addArgs = [
+            'mcp', 'add', 'claude-gemini-multimodal-bridge',
+            process.execPath, bundledCli, 'serve', '-e', 'NODE_ENV=production',
+          ];
+
           if (options.dryRun) {
-            console.log(`🧪 Dry Run: Would execute: ${addCommand}`);
+            console.log(`🧪 Dry Run: Would execute: claude ${addArgs.join(' ')}`);
             return;
           }
-          
-          execSync(addCommand, { stdio: 'inherit' });
+
+          if (probeCommand('claude', addArgs, { timeoutMs: 30000 }) === undefined) {
+            throw new Error('claude mcp add did not complete');
+          }
           console.log('\n✅ Successfully added CGMB to Claude Code MCP!');
           console.log('\nNext steps:');
           console.log('1. Restart Claude Code to load the new MCP configuration');
@@ -738,11 +835,14 @@ program
         },
         {
           name: 'Claude Code CLI',
-          check: () => checkCommand('claude --version')
+          check: () => checkCommand('claude', ['--version'])
         },
         {
-          name: 'Gemini CLI',
-          check: () => checkCommand('gemini --help')
+          name: 'Antigravity CLI',
+          check: async () => {
+            const binary = await findAntigravityBinary();
+            return binary !== undefined && binary.versionSupported;
+          }
         }
       ];
       
@@ -752,8 +852,18 @@ program
       
       for (const { name, check } of systemChecks) {
         try {
-          await check();
-          logger.info(`✓ ${name}`);
+          // The return value decides the verdict. It used to be discarded, so a
+          // check that answered `false` -- agy missing, or older than the 1.1.7
+          // minimum -- still printed a tick and `cgmb verify` exited 0. That is
+          // a false success for a condition where every real request returns
+          // empty output, not an advisory warning.
+          const ok = await check();
+          if (ok === false) {
+            logger.error(`✗ ${name}`);
+            systemChecksPassed = false;
+          } else {
+            logger.info(`✓ ${name}`);
+          }
         } catch (error) {
           logger.error(`✗ ${name}: ${(error as Error).message}`);
           systemChecksPassed = false;
@@ -762,7 +872,7 @@ program
       
       // Run authentication verification
       logger.info('\n🔐 Authentication Verification:');
-      const authResults = await authVerifier.verifyAllAuthentications();
+      const authResults = await authVerifier.verifyAllAuthentications({ live: true });
       
       // Display authentication results
       let authChecksPassed = true;
@@ -813,20 +923,36 @@ program
         
         // Test server initialization (lightweight test)
         logger.info('\n🚀 Testing server initialization...');
+        // A failed initialization is a verification failure, not a footnote:
+        // `cgmb serve` would hit the same error moments later, so reporting
+        // "ready to use" and exiting 0 makes verify useless for CI or for
+        // deciding whether an install is good.
+        let server: CGMBServer | undefined;
         try {
-          const server = new CGMBServer();
+          server = new CGMBServer();
           await server.initialize();
           logger.info('✓ Server initialization test passed');
-          
-          // Ensure any resources are cleaned up
-          if (server && typeof (server as any).cleanup === 'function') {
-            await (server as any).cleanup();
-          }
         } catch (initError) {
-          logger.warn('Server initialization test failed, but basic checks passed', {
-            error: (initError as Error).message
-          });
-          logger.info('✓ Basic verification completed (server test skipped)');
+          logger.error('✗ Server initialization failed', initError as Error);
+          logger.info('`cgmb serve` will fail with the same error until this is resolved.');
+          process.exit(1);
+        } finally {
+          // Always release a partially initialized server.
+          //
+          // This used to duck-type a `cleanup` method through `as any`.
+          // CGMBServer has no such method -- the teardown is stop() -- so the
+          // check was always false and nothing was ever released. Calling the
+          // real method, and not letting a teardown failure mask the original
+          // error that brought us into this block.
+          if (server) {
+            try {
+              await server.stop();
+            } catch (stopError) {
+              logger.debug('Server teardown after failed initialization also failed', {
+                error: (stopError as Error).message,
+              });
+            }
+          }
         }
         
         logger.info('\n✨ CGMB is ready to use!');
@@ -921,7 +1047,12 @@ program
           options.prompt,
           { timeout: parseInt(options.timeout) }
         );
-        
+
+        if (!result.success) {
+          logger.error('❌ File processing test failed', new Error(result.error ?? 'unknown error'));
+          process.exit(1);
+        }
+
         logger.info('✅ File processing test completed successfully!');
         logger.info(`Result: ${result.content.substring(0, 200)}...`);
         logger.info(`Processing time: ${result.processing_time}ms`);
@@ -937,7 +1068,12 @@ program
           workflow: 'analysis',
           options: { timeout: parseInt(options.timeout) }
         });
-        
+
+        if (!result.success) {
+          logger.error('❌ Text processing test failed', new Error(result.error ?? 'unknown error'));
+          process.exit(1);
+        }
+
         logger.info('✅ Text processing test completed successfully!');
         logger.info(`Result: ${result.content.substring(0, 200)}...`);
         logger.info(`Processing time: ${result.processing_time}ms`);
@@ -964,7 +1100,7 @@ program
   .alias('c')
   .description('Chat with Gemini (user-friendly interface)')
   .argument('[prompt...]', 'Your question or prompt')
-  .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
+  .option('-m, --model <model>', 'Antigravity model to use (see `agy models`)', DEFAULT_ANTIGRAVITY_MODEL)
   .option('--fast', 'Use fast path for better performance')
   .action(async (promptArgs, options) => {
     try {
@@ -1014,7 +1150,7 @@ program
       if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
         logger.error('❌ Chat API Error', error as Error);
         logger.info('🔧 This looks like an authentication issue:');
-        logger.info('   • Try OAuth: gemini auth');
+        logger.info('   • Sign in: run `agy` in a terminal');
         logger.info('   • Check status: cgmb auth-status --verbose');
       } else {
         logger.error('❌ Chat command failed', error as Error);
@@ -1026,15 +1162,15 @@ program
     }
   });
 
-// ADVANCED/TROUBLESHOOTING: Direct Gemini CLI command  
+// ADVANCED/TROUBLESHOOTING: Direct Antigravity CLI command  
 program
   .command('gemini')
-  .description('⚠️  ADVANCED: Direct Gemini CLI access (troubleshooting only - use cgmb chat instead)')
+  .description('⚠️  ADVANCED: Direct Antigravity CLI access (troubleshooting only - use cgmb chat instead)')
   .argument('[prompt...]', 'Direct prompt (auto-detects if -p missing)')
-  .option('-p, --prompt <text>', 'Explicit prompt for Gemini CLI')
-  .option('-m, --model <model>', 'Gemini model to use', 'gemini-2.5-pro')
+  .option('-p, --prompt <text>', 'Explicit prompt for Antigravity CLI')
+  .option('-m, --model <model>', 'Antigravity model to use (see `agy models`)', DEFAULT_ANTIGRAVITY_MODEL)
   .option('-f, --file <path>', 'File to analyze with prompt')
-  .option('--fast', 'Use direct CLI call (bypass CGMB layers for faster response)')
+  .option('--fast', 'Skip the search cache (text prompts only)')
   .action(async (promptArgs, options) => {
     try {
       let prompt = options.prompt;
@@ -1086,27 +1222,27 @@ program
       if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
         logger.error('❌ API Function Call Error', error as Error);
         logger.info('🔧 This error usually indicates an authentication issue:');
-        logger.info('   1. Try OAuth authentication: gemini auth');
+        logger.info('   1. Sign in: run `agy` in a terminal');
         logger.info('   2. Check API key configuration');
-        logger.info('   3. Verify Gemini CLI version: gemini --version');
+        logger.info('   3. Verify Antigravity CLI version: agy --version');
         logger.info('   4. Check status: cgmb auth-status --verbose');
       } else if (errorMessage.includes('UNAUTHENTICATED') || errorMessage.includes('API_KEY')) {
         logger.error('❌ Authentication Error', error as Error);
         logger.info('🔧 Fix authentication:');
-        logger.info('   • OAuth (recommended): gemini auth');
+        logger.info('   • Sign in (recommended): run `agy` in a terminal');
         logger.info('   • Check status: cgmb auth-status');
       } else if (errorMessage.includes('quota exceeded') || errorMessage.includes('Quota exceeded') || errorMessage.includes('Resource exhausted')) {
-        logger.error('❌ Gemini CLI Service Quota Exceeded', error as Error);
-        logger.info('🔧 This is a Gemini CLI service limitation (separate from Gemini API):');
+        logger.error('❌ Antigravity CLI Service Quota Exceeded', error as Error);
+        logger.info('🔧 This is an Antigravity CLI service limitation (separate from the Gemini API):');
         logger.info('   • Wait a few minutes for quota reset');
         logger.info('   • Try AI Studio layer: cgmb aistudio -p "your question"');
         logger.info('   • Check AI Studio quota: cgmb quota-status');
-        logger.info('   💡 Note: Gemini CLI quota ≠ Gemini API quota (different services)');
+        logger.info('   💡 Note: Antigravity quota ≠ Gemini API quota (different services)');
       } else if (errorMessage.includes('not found') || errorMessage.includes('command not found')) {
-        logger.error('❌ Gemini CLI Not Found', error as Error);
-        logger.info('🔧 Install Gemini CLI:');
+        logger.error('❌ Antigravity CLI Not Found', error as Error);
+        logger.info('🔧 Install Antigravity CLI:');
         logger.info('   • Run setup: cgmb setup');
-        logger.info('   • Manual install: npm install -g @google/gemini-cli');
+        logger.info(`   • Manual install: ${AGY_INSTALL_HINT}`);
       } else if (errorMessage.includes('timeout')) {
         logger.error('❌ Request Timeout', error as Error);
         logger.info('💡 Try:');
@@ -1114,7 +1250,7 @@ program
         logger.info('   • Check network connection');
         logger.info('   • Use --fast flag for direct calls');
       } else {
-        logger.error('❌ Gemini CLI processing failed', error as Error);
+        logger.error('❌ Antigravity CLI processing failed', error as Error);
         logger.info('💡 General troubleshooting:');
         logger.info('   • Check authentication: cgmb auth-status');
         logger.info('   • Verify setup: cgmb verify');
@@ -1133,7 +1269,7 @@ async function executeGeminiCommand(options: any) {
 
     // Handle common incorrect option usage
     if (process.argv.includes('--search')) {
-      console.log('\n💡 Note: Web search is automatically enabled in Gemini CLI.');
+      console.log('\n💡 Note: Web search is automatically enabled in Antigravity CLI.');
       console.log('   No --search flag needed. Just ask about current events or trends!');
       console.log('   Example: cgmb gemini -p "latest AI security trends 2025"\n');
       // Continue processing without the flag
@@ -1141,90 +1277,44 @@ async function executeGeminiCommand(options: any) {
 
     await loadEnvironmentSmart({ verbose: false });
     
-    logger.info('🔍 Processing with Gemini CLI...');
-    
-    // Fast path: Direct Gemini CLI call (bypass CGMB layers)
-    if (options.fast && !options.file) {
-      logger.info('Using fast path (direct Gemini CLI call)...');
-      
-      const args = ['gemini'];
-      if (options.model && options.model !== 'gemini-2.5-pro') {
-        args.push('-m', options.model);
-      }
-      args.push('-p', options.prompt);
-      // Note: Web search is automatic in Gemini CLI, no flags needed
-      
-      try {
-        const { spawn } = await import('child_process');
-        const child = spawn(args[0]!, args.slice(1));
-        
-        let result = '';
-        let error = '';
-        
-        child.stdout?.on('data', (data: Buffer) => {
-          result += data.toString();
-        });
-        
-        child.stderr?.on('data', (data: Buffer) => {
-          error += data.toString();
-        });
-        
-        await new Promise<void>((resolve, reject) => {
-          child.on('close', (code: number | null) => {
-            if (code !== 0) {
-              reject(new Error(`Process exited with code ${code}: ${error}`));
-            } else {
-              resolve();
-            }
-          });
-          
-          child.on('error', (err: Error) => {
-            reject(err);
-          });
-          
-          // Timeout
-          setTimeout(() => {
-            child.kill();
-            reject(new Error('Process timeout'));
-          }, 90000);
-        });
-        
-        logger.info('✅ Fast path Gemini CLI processing completed');
-        console.log('\n📋 Result:');
-        console.log('═'.repeat(50));
-        console.log(result);
-        console.log('\n📊 Metadata:');
-        console.log('Method: Direct Gemini CLI (fast path)');
-        console.log('Bypass: CGMB layer overhead eliminated');
-        return;
-      } catch (error) {
-        logger.warn('Fast path failed, falling back to CGMB layers', { 
-          error: (error as Error).message 
-        });
-        // Continue to normal processing
-      }
+    logger.info('🔍 Processing with Antigravity CLI...');
+
+    // Fast path used to spawn the retired `gemini` binary directly, with its own
+    // 90s timeout, no workspace isolation and no environment allowlist. Every
+    // agy invocation now goes through AntigravityCLILayer so the hardening lives
+    // in exactly one place; `--fast` simply skips CGMB's search cache.
+    const useSearch = !(options.fast && !options.file);
+    if (!useSearch) {
+      logger.info('Using fast path (search cache bypassed)...');
     }
-    
-    // Import and use Gemini CLI layer directly
-    const { GeminiCLILayer } = await import('./layers/GeminiCLILayer.js');
-    const geminiLayer = new GeminiCLILayer();
-    
-    await geminiLayer.initialize();
-    
+
+    const { AntigravityCLILayer } = await import('./layers/AntigravityCLILayer.js');
+    const antigravityLayer = new AntigravityCLILayer();
+
+    await antigravityLayer.initialize();
+
     let result;
     if (options.file) {
       // Process with file
-      result = await geminiLayer.processFiles([{ path: options.file, type: 'document' }], options.prompt);
+      // The search layer takes a text prompt only, so this always fails with an
+      // actionable message pointing at `cgmb analyze`. Kept as an explicit call
+      // rather than a local error so the two paths cannot drift apart.
+      const filePath = path.resolve(options.file);
+      result = await antigravityLayer.processFiles(
+        [{ path: filePath, type: 'document' }],
+        options.prompt
+      );
     } else {
       // Text-only processing
-      result = await geminiLayer.execute({
+      result = await antigravityLayer.execute({
         type: 'text_processing',
         prompt: options.prompt,
-        useSearch: true  // Default to true - Gemini CLI has intelligent search decision-making
+        ...(options.model ? { model: options.model } : {}),
+        useSearch,
       });
     }
     
-    logger.info('✅ Gemini CLI processing completed');
+    logger.info('✅ Antigravity CLI processing completed');
     console.log('\n📋 Result:');
     console.log('═'.repeat(50));
     
@@ -1238,7 +1328,9 @@ async function executeGeminiCommand(options: any) {
     
     if (result.metadata) {
       console.log('\n📊 Metadata:');
-      const metadata = result.metadata as any;
+      // Layers and tools report different metadata shapes, so name the fields
+      // this block prints rather than casting the whole object away.
+      const metadata = result.metadata as { duration?: number; processing_time?: number; model?: string; tokens_used?: number };
       console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
       console.log(`Model: ${metadata.model || 'N/A'}`);
       console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
@@ -1248,7 +1340,7 @@ async function executeGeminiCommand(options: any) {
     process.exit(0);
     
   } catch (error) {
-    logger.error('❌ Gemini CLI processing failed', error as Error);
+    logger.error('❌ Antigravity CLI processing failed', error as Error);
     logger.info('💡 Check authentication: cgmb auth-status');
     process.exit(1);
   }
@@ -1260,7 +1352,7 @@ program
   .description('⚠️  ADVANCED: Direct AI Studio access (use cgmb analyze instead for documents)')
   .option('-p, --prompt <text>', 'Prompt for AI Studio')
   .option('-f, --files <paths...>', 'Files to process (images, documents, etc.)')
-  .option('-m, --model <model>', 'AI Studio model to use', 'gemini-2.0-flash-exp')
+  .option('-m, --model <model>', 'AI Studio model to use', AI_MODELS.MULTIMODAL_ANALYSIS)
   .action(async (options) => {
     try {
       if (!options.prompt) {
@@ -1374,7 +1466,9 @@ program
       
       if (result.metadata) {
         console.log('\n📊 Metadata:');
-        const metadata = result.metadata as any;
+        // Layers and tools report different metadata shapes, so name the fields
+        // this block prints rather than casting the whole object away.
+        const metadata = result.metadata as { duration?: number; processing_time?: number; model?: string; tokens_used?: number };
         console.log(`Processing time: ${metadata.duration || metadata.processing_time || 'N/A'}ms`);
         console.log(`Model: ${metadata.model || 'N/A'}`);
         console.log(`Tokens used: ${metadata.tokens_used || 'N/A'}`);
@@ -1415,18 +1509,26 @@ program
       
       const files = options.files ? options.files.map((path: string) => ({ path, type: 'document' })) : [];
       
-      const result = await processor.processMultimodal({
-        prompt: options.prompt,
-        files,
-        workflow: options.workflow,
-        options: {
-          layer_priority: options.strategy === 'claude-first' ? 'claude' :
-                         options.strategy === 'gemini-first' ? 'gemini' :
-                         options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
-          detailed: true
+      const result = await processor.processMultimodal(
+        {
+          prompt: options.prompt,
+          files,
+          workflow: options.workflow,
+          options: {
+            layer_priority: options.strategy === 'claude-first' ? 'claude' :
+                           options.strategy === 'gemini-first' ? 'antigravity' :
+                           options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
+            detailed: true
+          }
         }
-      });
-      
+      );
+
+      if (!result.success) {
+        logger.error('❌ Multimodal processing failed', new Error(result.error ?? 'unknown error'));
+        console.error(result.content || 'Processing failed');
+        process.exit(1);
+      }
+
       logger.info('✅ Multimodal processing completed');
       console.log('\n📋 Result:');
       console.log('═'.repeat(50));
@@ -1668,13 +1770,7 @@ program
           console.log('');
           
           // Use LayerManager with AI Studio layer for PDF URL processing
-          const layerManager = new LayerManager({
-            gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-            claude: { code_path: 'claude', timeout: 300000 },
-            aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
-            cache: { enabled: true, ttl: 3600 },
-            logging: { level: 'info' as const }
-          });
+          const layerManager = new LayerManager(defaultLayerConfig());
           
           try {
             await layerManager.initializeLayers();
@@ -1731,9 +1827,9 @@ program
           }
         }
         
-        // Handle regular web URLs with Gemini CLI
+        // Handle regular web URLs with the Antigravity CLI
         if (webUrls.length > 0) {
-          console.log('🔍 Web URL(s) detected - routing to Gemini CLI for current information...');
+          console.log('🔍 Web URL(s) detected - routing to Antigravity CLI for current information...');
           console.log('💡 Tip: For best results, use CGMB within Claude Code:');
           console.log('   "CGMB search for the latest AI developments"\n');
 
@@ -1752,7 +1848,7 @@ program
           // Execute via Gemini CLI for web content
           const geminiOptions = {
             prompt: analysisPrompt,
-            model: 'gemini-2.5-pro',
+            model: DEFAULT_ANTIGRAVITY_MODEL,
             fast: false
           };
           
@@ -1832,7 +1928,7 @@ program
       console.log('   "CGMB analyze the document at /path/to/report.pdf"\n');
       console.log(`📁 Files (${resolvedFiles.length}):`);
       console.log(`📂 Current directory: ${process.cwd()}`);
-      resolvedFiles.forEach((file: string, index: number) => {
+      resolvedFiles.forEach((file: string, _index: number) => {
         const originalFile = files[resolvedFiles.indexOf(file)] || file;
         const isRelative = !path.isAbsolute(originalFile);
         if (isRelative && originalFile !== file) {
@@ -1895,16 +1991,18 @@ program
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => layerManager.executeWithOptimalLayer({
-          prompt: analysisPrompt,
-          files: fileReferences,
-          options: {
-            analysisType: options.type,
-            depth: 'deep',
-            multiplePDFs: pdfFiles.length > 1,
-            preferredLayer: userPreferredLayer
+        () => layerManager.executeWithOptimalLayer(
+          {
+            prompt: analysisPrompt,
+            files: fileReferences,
+            options: {
+              analysisType: options.type,
+              depth: 'deep',
+              multiplePDFs: pdfFiles.length > 1,
+              preferredLayer: userPreferredLayer
+            }
           }
-        }),
+        ),
         'analyze-documents',
         240000 // 4 minutes base, automatically adjusted for environment and file count
       );
@@ -1912,7 +2010,7 @@ program
       if (result.success) {
         console.log('\n✅ Analysis complete!');
         console.log('═'.repeat(50));
-        console.log(result.data || 'Analysis completed');
+        console.log(renderLayerData(result.data));
         console.log('═'.repeat(50));
         
         if (result.metadata) {
@@ -1970,9 +2068,9 @@ program
       const fileRefs = files.map((file: string) => {
         const ext = path.extname(file).toLowerCase();
         let type: string = 'document';
-        if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) type = 'image';
-        else if (['.pdf'].includes(ext)) type = 'pdf';
-        else if (['.mp3', '.wav', '.m4a'].includes(ext)) type = 'audio';
+        if (['.png', '.jpg', '.jpeg', '.gif'].includes(ext)) {type = 'image';}
+        else if (['.pdf'].includes(ext)) {type = 'pdf';}
+        else if (['.mp3', '.wav', '.m4a'].includes(ext)) {type = 'audio';}
         return { path: file, type };
       });
       
@@ -1980,15 +2078,17 @@ program
       
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => layerManager.executeWithOptimalLayer({
-          prompt: options.prompt,
-          files: fileRefs,
-          options: {
-            workflow: options.workflow,
-            outputFormat: options.output,
-            execution_mode: 'adaptive'
+        () => layerManager.executeWithOptimalLayer(
+          {
+            prompt: options.prompt,
+            files: fileRefs,
+            options: {
+              workflow: options.workflow,
+              outputFormat: options.output,
+              execution_mode: 'adaptive'
+            }
           }
-        }),
+        ),
         'multimodal-process',
         300000 // 5 minutes base, automatically adjusted for environment and file count
       );
@@ -2000,7 +2100,7 @@ program
         if (options.output === 'json' && result.data) {
           console.log(JSON.stringify(result.data, null, 2));
         } else {
-          console.log(result.data || 'Analysis completed');
+          console.log(renderLayerData(result.data));
         }
         
         console.log('═'.repeat(50));
@@ -2101,22 +2201,59 @@ program
 
 // Helper functions
 async function checkDependency(command: string, name: string): Promise<void> {
-  try {
-    execSync(`which ${command}`, { stdio: 'ignore' });
+  // `which ${command}` through a shell resolved the name outside every check.
+  if (commandAvailable(command)) {
     logger.info(`✓ ${name} is installed`);
-  } catch (error) {
+  } else {
     logger.warn(`⚠ ${name} not found in PATH`);
     logger.info(`Please install ${name} and ensure it's in your PATH`);
   }
 }
 
-async function checkCommand(command: string): Promise<boolean> {
-  try {
-    execSync(command, { stdio: 'ignore' });
-    return true;
-  } catch (error) {
-    throw new Error(`Command failed: ${command}`);
+/**
+ * Report on the search-layer CLI using the same resolver the runtime uses, so a
+ * `cgmb setup` result can never disagree with what the layer will actually do.
+ */
+/**
+ * @returns whether the search layer's dependency is actually usable.
+ *
+ * Previously returned void, so `cgmb setup` printed "Setup completed
+ * successfully" even with agy missing or below the 1.1.7 minimum -- a version
+ * that returns empty output for every real request. The caller now decides
+ * what to do with a negative result.
+ */
+async function checkAntigravityDependency(): Promise<boolean> {
+  const binary = await findAntigravityBinary();
+
+  if (!binary) {
+    logger.warn('⚠ Antigravity CLI (agy) not found');
+    logger.info(`Install it with: ${AGY_INSTALL_HINT}`);
+    return false;
   }
+
+  if (!binary.versionSupported) {
+    logger.warn(`⚠ Antigravity CLI ${binary.version ?? 'unknown'} is too old (need ${MIN_AGY_VERSION}+)`);
+    logger.info('Update it with: agy update');
+    return false;
+  }
+
+  logger.info(`✓ Antigravity CLI is installed (${binary.version ?? 'version unknown'})`);
+  return true;
+}
+
+/**
+ * Probe a command by name and argv -- never a shell string.
+ *
+ * This took a whole command line and handed it to execSync, so `cgmb verify`
+ * resolved `claude` through a shell: the working directory on Windows, a
+ * polluted PATH anywhere. Running the recommended diagnostic was enough to
+ * execute a repository-local binary with the AI Studio key in its environment.
+ */
+async function checkCommand(command: string, args: string[] = ['--version']): Promise<boolean> {
+  if (!commandAvailable(command, args)) {
+    throw new Error(`Command failed: ${command} ${args.join(' ')}`);
+  }
+  return true;
 }
 
 // Handle unknown options with helpful error messages

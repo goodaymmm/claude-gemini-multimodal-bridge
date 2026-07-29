@@ -1,10 +1,10 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
-import { commandExists, findExecutable } from './platformUtils.js';
+import { findExecutable } from './platformUtils.js';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
 import { logger } from './logger.js';
+import { probeCommand } from './processUtils.js';
 
 /**
  * Smart environment loader that finds .env files from multiple locations
@@ -49,7 +49,7 @@ export class SmartEnvLoader {
     }
 
     const { verbose = false } = options;
-    const searchPaths = options.searchPaths || await this.getDefaultSearchPaths();
+    const searchPaths = options.searchPaths ?? await this.getDefaultSearchPaths();
     
     this.loadResult = {
       success: false,
@@ -94,7 +94,7 @@ export class SmartEnvLoader {
             if (verbose) {
               logger.info('Successfully loaded .env file', { 
                 path: envPath,
-                variablesLoaded: Object.keys(result.parsed || {}).length
+                variablesLoaded: Object.keys(result.parsed ?? {}).length
               });
             }
             
@@ -242,11 +242,13 @@ export class SmartEnvLoader {
   private async findGlobalNpmInstallation(): Promise<string | null> {
     try {
       // Try to find global npm directory
-      const npmRoot = execSync('npm root -g', { 
-        encoding: 'utf8', 
-        timeout: 5000,
-        stdio: 'pipe'
-      }).trim();
+      // Resolved and run by absolute path like every other probe: `npm` via a
+      // shell resolves against PATH -- and on Windows the current directory --
+      // so a repository could supply its own npm here.
+      const npmRoot = (probeCommand('npm', ['root', '-g'], { timeoutMs: 5000 }) ?? '').trim();
+      if (npmRoot === '') {
+        return null;
+      }
       
       const cgmbGlobalPath = join(npmRoot, 'claude-gemini-multimodal-bridge');
       if (existsSync(cgmbGlobalPath)) {

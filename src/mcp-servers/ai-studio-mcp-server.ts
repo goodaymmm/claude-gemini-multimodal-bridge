@@ -35,6 +35,91 @@ const require = createRequire(import.meta.url);
 const packageJson = require('../../package.json') as { version: string };
 const VERSION = packageJson.version;
 
+// ===================================
+// Which files may be sent to Google
+// ===================================
+
+/**
+ * Directories whose contents this server is allowed to transmit.
+ *
+ * This is the only place in CGMB where a caller-supplied path turns into bytes
+ * on Google's servers, which makes it the right place to bound them. Being able
+ * to read a file locally is not the same authorisation as uploading it: a
+ * prompt-injected caller could otherwise name any absolute path the user can
+ * read -- .kube/config, application_default_credentials.json, an SSH key under
+ * a name no denylist enumerates -- and the contents would leave without the
+ * user ever seeing it.
+ *
+ * The basename denylist in LayerManager stays as a second layer for
+ * credential-shaped names *inside* these roots.
+ *
+ * Resolved once, at startup, from the directory the server was launched in.
+ * Additional roots come from CGMB_ALLOWED_ROOTS, delimiter-separated.
+ */
+function resolveAllowedRoots(): string[] {
+  const raw = [
+    process.cwd(),
+    ...(process.env.CGMB_ALLOWED_ROOTS ?? '')
+      .split(path.delimiter)
+      .map(entry => entry.trim())
+      .filter(entry => entry !== ''),
+  ];
+
+  const roots: string[] = [];
+  for (const entry of raw) {
+    try {
+      // realpath here too: a root reached through a symlink must compare equal
+      // to the resolved paths checked against it.
+      const resolved = fs.realpathSync(path.resolve(entry));
+      if (!roots.includes(resolved)) {
+        roots.push(resolved);
+      }
+    } catch {
+      console.error(`Ignoring CGMB_ALLOWED_ROOTS entry that does not exist: ${entry}`);
+    }
+  }
+
+  return roots;
+}
+
+const ALLOWED_ROOTS = resolveAllowedRoots();
+
+/**
+ * Resolve a path and confirm it sits inside an allowed root.
+ *
+ * Returns the resolved path so callers read through the same value that was
+ * checked -- resolving twice would reopen the gap this closes. realpath is what
+ * makes `..` and symlinks harmless: a link inside a root that points outside it
+ * resolves outside and is refused.
+ */
+export function assertReadableRoot(filePath: string): string {
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(path.resolve(filePath));
+  } catch (error) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Cannot resolve ${filePath}: ${(error as Error).message}`
+    );
+  }
+
+  const inside = ALLOWED_ROOTS.some(root => {
+    const relative = path.relative(root, resolved);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  });
+
+  if (!inside) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Refusing to send ${resolved} to Google: it is outside every allowed directory ` +
+      `(${ALLOWED_ROOTS.join(', ')}). File contents are uploaded, so this server only reads ` +
+      `from the directory it was started in. Set CGMB_ALLOWED_ROOTS to add others, ` +
+      `delimiter-separated with "${path.delimiter}".`
+    );
+  }
+
+  return resolved;
+}
 
 // Input validation schemas
 const GenerateImageSchema = z.object({
@@ -48,7 +133,7 @@ const GenerateImageSchema = z.object({
 const AnalyzeImageSchema = z.object({
   imagePath: z.string(),
   prompt: z.string().optional().default('Analyze this image and describe what you see'),
-  model: z.string().optional().default('gemini-2.0-flash-exp')
+  model: z.string().optional().default(AI_MODELS.MULTIMODAL_ANALYSIS)
 });
 
 const MultimodalProcessSchema = z.object({
@@ -57,7 +142,7 @@ const MultimodalProcessSchema = z.object({
     type: z.string()
   })),
   instructions: z.string(),
-  model: z.string().optional().default('gemini-2.0-flash-exp')
+  model: z.string().optional().default(AI_MODELS.MULTIMODAL_ANALYSIS)
 });
 
 const GetGeneratedFileSchema = z.object({
@@ -198,7 +283,7 @@ class AIStudioMCPServer {
                 model: {
                   type: 'string',
                   description: 'Gemini model to use for analysis',
-                  default: 'gemini-2.0-flash-exp'
+                  default: AI_MODELS.MULTIMODAL_ANALYSIS
                 }
               },
               required: ['imagePath']
@@ -229,7 +314,7 @@ class AIStudioMCPServer {
                 model: {
                   type: 'string',
                   description: 'Gemini model to use',
-                  default: 'gemini-2.0-flash-exp'
+                  default: AI_MODELS.MULTIMODAL_ANALYSIS
                 }
               },
               required: ['files', 'instructions']
@@ -616,7 +701,8 @@ To retrieve this file, use:
         throw new Error(`Image file not found: ${params.imagePath}`);
       }
 
-      const imageData = fs.readFileSync(params.imagePath);
+      const imagePath = assertReadableRoot(params.imagePath);
+      const imageData = fs.readFileSync(imagePath);
       const mimeType = this.getMimeType(params.imagePath);
 
       const parts = [
@@ -702,8 +788,11 @@ To retrieve this file, use:
             continue;
           }
 
-          const fileData = fs.readFileSync(file.path);
-          const mimeType = this.getMimeType(file.path);
+          // Read through the checked path, not the caller-supplied one:
+          // resolving twice would reopen the gap the check closes.
+          const localPath = assertReadableRoot(file.path);
+          const fileData = fs.readFileSync(localPath);
+          const mimeType = this.getMimeType(localPath);
           console.error(`File detected as MIME type: ${mimeType}`);
 
           if (mimeType.startsWith('image/')) {
@@ -778,13 +867,14 @@ To retrieve this file, use:
           continue;
         }
 
-        const mimeType = this.getMimeType(docPath);
+        const allowedDocPath = assertReadableRoot(docPath);
+        const mimeType = this.getMimeType(allowedDocPath);
         console.error(`Document detected as MIME type: ${mimeType}`);
 
         if (mimeType === 'application/pdf') {
           // Use File API to upload PDF for native processing with OCR support
           console.error(`Uploading PDF to Gemini File API for OCR processing: ${docPath}`);
-          const uploadedFile = await this.uploadPDFWithFileAPI(docPath);
+          const uploadedFile = await this.uploadPDFWithFileAPI(allowedDocPath);
           parts.push({
             fileData: {
               fileUri: uploadedFile.uri,
@@ -793,7 +883,7 @@ To retrieve this file, use:
           });
         } else {
           // For text files, read as UTF-8
-          const docData = fs.readFileSync(docPath, 'utf-8');
+          const docData = fs.readFileSync(allowedDocPath, 'utf-8');
           parts.push({
             text: `Document: ${docPath}\nContent: ${docData}`
           });
@@ -1244,9 +1334,10 @@ To retrieve this file, use:
         throw new Error(`PDF file too large: ${fileSizeMB.toFixed(1)}MB (max 50MB)`);
       }
       
-      // Read file as binary data
-      const fileData = fs.readFileSync(pdfPath);
-      
+      // The upload takes a path, so there is nothing to read here. This used to
+      // pull the whole PDF -- up to the 50MB limit checked above -- into memory
+      // and then discard it.
+
       // Upload the file using GoogleGenAI files API
       const uploadResult = await this.genAI.files.upload({
         file: pdfPath,
@@ -1268,7 +1359,10 @@ To retrieve this file, use:
         await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
         waitTime += 2000;
         
-        file = await this.genAI.files.get({ name: file.name! });
+        if (!file.name) {
+          throw new Error('The uploaded file has no name; cannot poll its processing state.');
+        }
+        file = await this.genAI.files.get({ name: file.name });
         console.error(`PDF processing state: ${file.state}`);
       }
       
@@ -1320,7 +1414,10 @@ To retrieve this file, use:
         await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
         waitTime += 2000;
         
-        file = await this.genAI.files.get({ name: file.name! });
+        if (!file.name) {
+          throw new Error('The uploaded file has no name; cannot poll its processing state.');
+        }
+        file = await this.genAI.files.get({ name: file.name });
         console.error(`PDF URL processing state: ${file.state}`);
       }
       

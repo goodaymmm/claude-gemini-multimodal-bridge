@@ -1,5 +1,5 @@
 import { logger } from './logger.js';
-import { findProcesses, getHomeDir } from './platformUtils.js';
+import { findProcesses } from './platformUtils.js';
 
 
 /**
@@ -41,7 +41,7 @@ export class TimeoutManager {
       baseTimeout,
       multiplier,
       finalTimeout,
-      environmentType: options.environmentType || 'standard'
+      environmentType: options.environmentType ?? 'standard'
     });
 
     let timeoutId: NodeJS.Timeout | undefined;
@@ -49,11 +49,14 @@ export class TimeoutManager {
 
     try {
       // Set up warning timeout (at 70% of total timeout)
-      if (options.onWarning) {
+      const onWarning = options.onWarning;
+      if (onWarning) {
+        // Captured before the timer: narrowing an object property does not
+        // survive into a callback, which is why this needed an assertion.
         const warningTime = Math.round(finalTimeout * 0.7);
         warningTimeoutId = setTimeout(() => {
           const elapsed = Date.now() - startTime;
-          options.onWarning!(elapsed);
+          onWarning(elapsed);
         }, warningTime);
       }
 
@@ -70,7 +73,7 @@ export class TimeoutManager {
           });
           reject(new Error(
             `Operation "${options.name}" timed out after ${finalTimeout}ms ` +
-            `(${Math.round(elapsed/1000)}s elapsed, environment: ${options.environmentType || 'standard'})`
+            `(${Math.round(elapsed/1000)}s elapsed, environment: ${options.environmentType ?? 'standard'})`
           ));
         }, finalTimeout);
       });
@@ -160,7 +163,8 @@ export class TimeoutManager {
       // Check for typical fresh installation indicators
       const indicators = [
         // No previous authentication cache
-        !process.env.HOME || !require('fs').existsSync(require('path').join(process.env.HOME, '.config', 'gemini')),
+        // Antigravity CLI keeps its state under ~/.gemini/antigravity-cli
+        !process.env.HOME || !require('fs').existsSync(require('path').join(process.env.HOME, '.gemini', 'antigravity-cli')),
         // No local CGMB cache/config
         !require('fs').existsSync(require('path').join(process.cwd(), 'logs')),
         // Environment variables suggest fresh setup
@@ -178,10 +182,9 @@ export class TimeoutManager {
    */
   private static needsMCPServerStartup(): boolean {
     try {
-      // Check if MCP processes are likely running
-      const { execSync } = require('child_process');
-      
       // Check for node processes running AI Studio MCP server
+      // (findProcesses does the work; a leftover require('child_process') here
+      // was unused and would not resolve in this ESM module anyway.)
       try {
         const processes = findProcesses("ai-studio-mcp-server");
         return processes.length === 0; // No processes found = needs startup
@@ -204,7 +207,7 @@ export class TimeoutManager {
     const environment = this.detectEnvironment();
     
     return this.executeWithTimeout(
-      async (signal) => {
+      async (_signal) => {
         // Pass abort signal to command if it supports it
         return await command();
       },
@@ -224,7 +227,7 @@ export class TimeoutManager {
    * Create timeout for MCP operations with layer-specific settings
    */
   public static createMCPTimeout(
-    layer: 'claude' | 'gemini' | 'aistudio',
+    layer: 'claude' | 'antigravity' | 'gemini' | 'aistudio',
     operation: string,
     hasFiles: boolean = false
   ): {
@@ -234,9 +237,10 @@ export class TimeoutManager {
     const environment = this.detectEnvironment();
     
     const baseTimeouts = {
-      claude: 300000,    // 5 minutes for complex reasoning
-      gemini: 60000,     // 1 minute for search/text processing
-      aistudio: 180000,  // 3 minutes for multimodal processing
+      claude: 300000,      // 5 minutes for complex reasoning
+      antigravity: 60000,  // 1 minute for search/text processing
+      gemini: 60000,       // deprecated alias for 'antigravity'
+      aistudio: 180000,    // 3 minutes for multimodal processing
     };
 
     let baseTimeout = baseTimeouts[layer];

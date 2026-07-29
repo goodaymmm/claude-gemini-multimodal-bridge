@@ -9,6 +9,7 @@ import {
   WorkflowResult,
   WorkflowType,
 } from '../core/types.js';
+import { defaultLayerConfig, isOneOf } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -36,13 +37,7 @@ export class MultimodalProcess {
 
   constructor(config?: any) {
     // Create default config if not provided
-    const defaultConfig = {
-      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-      claude: { code_path: 'claude', timeout: 300000 },
-      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
-      cache: { enabled: true, ttl: 3600 },
-      logging: { level: 'info' as const },
-    };
+    const defaultConfig = defaultLayerConfig();
     
     this.layerManager = new LayerManager(config || defaultConfig);
     this.authVerifier = new AuthVerifier();
@@ -76,9 +71,14 @@ export class MultimodalProcess {
         
         const totalDuration = Date.now() - startTime;
         
+        // Report what actually happened. Hard-coding success:true meant a
+        // failed workflow -- including one that never read the requested files
+        // because the fallback layer refused them -- was returned as a
+        // completed result and the CLI exited 0.
         return {
-          success: true,
-          content: result.summary || 'Processing completed',
+          success: result.success,
+          ...(result.success ? {} : { error: 'Workflow execution failed' }),
+          content: result.summary || (result.success ? 'Processing completed' : 'Processing failed'),
           files_processed: processedFiles.map(f => f.path),
           processing_time: totalDuration,
           workflow_used: validatedArgs.workflow,
@@ -107,13 +107,15 @@ export class MultimodalProcess {
     options?: ProcessingOptions
   ): Promise<MultimodalProcessResult> {
     const file = await this.createFileReference(filePath);
-    
-    return this.processMultimodal({
-      prompt: instructions,
-      files: [file],
-      workflow: this.detectWorkflowType([file], instructions),
-      options: options || {},
-    });
+
+    return this.processMultimodal(
+      {
+        prompt: instructions,
+        files: [file],
+        workflow: this.detectWorkflowType([file], instructions),
+        options: options ?? {},
+      }
+    );
   }
 
   /**
@@ -372,7 +374,8 @@ export class MultimodalProcess {
       let authResult;
       
       switch (service) {
-        case 'gemini':
+        case 'antigravity':
+        case 'gemini': // deprecated alias
           authResult = await this.authVerifier.verifyGeminiAuth();
           break;
         case 'aistudio':
@@ -447,13 +450,13 @@ export class MultimodalProcess {
           workflowType: args.workflow,
           files,
           instructions: args.prompt,
-          options: args.options || {},
+          options: args.options ?? {},
         };
 
         logger.info('Executing multimodal workflow', {
           workflowType: args.workflow,
           fileCount: files.length,
-          optionsSet: Object.keys(args.options || {}).length,
+          optionsSet: Object.keys(args.options ?? {}).length,
         });
 
         // Execute through layer manager with intelligent routing
@@ -470,13 +473,10 @@ export class MultimodalProcess {
   /**
    * Detect optimal workflow type based on files and instructions
    */
-  private detectWorkflowType(files: FileReference[], instructions: string): WorkflowType {
-    const fileTypes = files.map(f => this.determineFileType(f.path));
-    const hasImages = fileTypes.includes('image');
-    const hasDocuments = fileTypes.includes('document');
-    const hasAudio = fileTypes.includes('audio');
-    const hasVideo = fileTypes.includes('video');
-    
+  private detectWorkflowType(_files: FileReference[], instructions: string): WorkflowType {
+    // Decided purely from the instruction keywords below. The file types were
+    // being computed into hasImages/hasDocuments/hasAudio/hasVideo and then
+    // never consulted, so every branch already ignored them.
     const lowerInstructions = instructions.toLowerCase();
     
     // Specific workflow detection
@@ -558,13 +558,13 @@ export class MultimodalProcess {
   /**
    * Extract layers used from workflow result
    */
-  private extractLayersFromWorkflowResult(result: WorkflowResult): ('claude' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
-    const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
+  private extractLayersFromWorkflowResult(result: WorkflowResult): ('claude' | 'antigravity' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
+    const validLayers = ['claude', 'antigravity', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
     const layers = new Set<typeof validLayers[number]>();
     
     Object.values(result.results).forEach(layerResult => {
-      if (layerResult.metadata?.layer && validLayers.includes(layerResult.metadata.layer as any)) {
-        layers.add(layerResult.metadata.layer as any);
+      if (isOneOf(validLayers, layerResult.metadata?.layer)) {
+        layers.add(layerResult.metadata.layer);
       }
     });
     
@@ -583,12 +583,12 @@ export class MultimodalProcess {
   /**
    * Extract layers used from result
    */
-  private extractLayersUsed(result: LayerResult): ('claude' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
-    const validLayers = ['claude', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
+  private extractLayersUsed(result: LayerResult): ('claude' | 'antigravity' | 'gemini' | 'aistudio' | 'workflow' | 'tool' | 'orchestrator')[] {
+    const validLayers = ['claude', 'antigravity', 'gemini', 'aistudio', 'workflow', 'tool', 'orchestrator'] as const;
     const layers = new Set<typeof validLayers[number]>();
     
-    if (result.metadata?.layer && validLayers.includes(result.metadata.layer as any)) {
-      layers.add(result.metadata.layer as any);
+    if (isOneOf(validLayers, result.metadata?.layer)) {
+      layers.add(result.metadata.layer);
     }
     
     // Check for nested results indicating multiple layers

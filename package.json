@@ -1,16 +1,17 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.1.0",
-  "description": "Enterprise-grade AI integration bridge connecting Claude Code, Gemini CLI, and Google AI Studio with intelligent routing and advanced multimodal processing capabilities",
+  "version": "1.2.0",
+  "description": "MCP bridge connecting Claude Code, Antigravity CLI and Google AI Studio, routing each request to the layer that can answer it: web search, complex reasoning, or image/audio/document processing",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "cgmb": "dist/cli.js"
   },
   "mcp": {
     "name": "cgmb",
-    "description": "CGMB MCP Server v1.1.0 - Enterprise-grade 3-layer AI integration (Claude/Gemini/AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
-    "version": "1.1.0",
+    "description": "CGMB MCP Server v1.2.0 - 3-layer AI integration (Claude Code / Antigravity CLI / AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
+    "version": "1.2.0",
     "command": "cgmb",
     "args": [
       "serve"
@@ -39,11 +40,12 @@
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "typecheck": "tsc --noEmit",
-    "test:unit": "echo \"Unit tests not yet implemented\" && exit 0",
+    "test": "npm run build && node --test \"tests/**/*.test.mjs\"",
+    "test:unit": "node --test \"tests/**/*.test.mjs\"",
     "test:integration": "npm run verify && cgmb test",
     "benchmark": "node scripts/benchmark.js",
     "clean": "rimraf dist",
-    "prepublish": "npm run clean && npm run build",
+    "prepack": "npm run clean && npm run build",
     "postinstall": "node scripts/postinstall.cjs",
     "mcp:aistudio": "node dist/mcp-servers/ai-studio-mcp-server.js",
     "mcp:test": "AI_STUDIO_API_KEY=test node dist/mcp-servers/ai-studio-mcp-server.js"
@@ -59,13 +61,12 @@
     "performance-optimization",
     "intelligent-caching",
     "claude-code",
-    "gemini-cli",
+    "antigravity-cli",
     "google-ai-studio",
     "ai-cli",
     "multimodal-ai",
     "model-context-protocol",
     "ai-orchestration",
-    "production-ready",
     "parallel-processing",
     "authentication-caching",
     "mcp-integration",
@@ -74,9 +75,8 @@
     "natural-interface",
     "user-friendly",
     "oauth-authentication",
-    "enterprise-grade",
     "intelligent-routing",
-    "mcp-gemini-cli",
+    "mcp-antigravity-cli",
     "authentication-cache",
     "fallback-strategies",
     "multi-language-support",
@@ -119,15 +119,13 @@
     "tsx": "^4.6.0",
     "typescript": "^5.9.3"
   },
-  "optionalDependencies": {
-    "@google/gemini-cli": "*"
-  },
   "engines": {
     "node": ">=22.0.0",
     "npm": ">=8.0.0"
   },
   "files": [
     "dist",
+    ".claude",
     "scripts/postinstall.cjs",
     "scripts/setup.sh",
     "scripts/verify-dependencies.sh",

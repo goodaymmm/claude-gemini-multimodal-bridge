@@ -1,8 +1,10 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { buildSpawnTarget, resolveWindowsCommand } from '../utils/processUtils.js';
 import { AvailableCapabilities, EnhancementPlan } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
+import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
  * CapabilityDetector automatically detects available services on the system
@@ -184,7 +186,8 @@ export class CapabilityDetector {
     switch (layer) {
       case 'claude':
         return capabilities.claudeCode.available && capabilities.claudeCode.authenticated;
-      case 'gemini':
+      case 'antigravity':
+      case 'gemini': // deprecated alias
         return capabilities.geminiCLI.available && capabilities.geminiCLI.authenticated;
       case 'aistudio':
         return capabilities.aiStudio.available && capabilities.aiStudio.authenticated && capabilities.aiStudio.mcpServerAvailable;
@@ -207,13 +210,17 @@ export class CapabilityDetector {
         };
       }
 
-      // Get version
+      // Probe the resolved path with an argv array -- never a shell string,
+      // and never a bare name that would be resolved a second time.
       let version: string | undefined;
       try {
-        const output = execSync('claude --version', { 
-          encoding: 'utf8', 
+        const target = buildSpawnTarget(claudePath, ['--version']);
+        const output = execFileSync(target.file, target.args, {
+          encoding: 'utf8',
           timeout: 5000,
-          stdio: 'pipe'
+          stdio: 'pipe',
+          windowsHide: true,
+          ...target.spawnOptions,
         });
         version = output.trim();
       } catch {
@@ -244,40 +251,42 @@ export class CapabilityDetector {
    */
   private async detectGeminiCLI(): Promise<AvailableCapabilities['geminiCLI']> {
     try {
-      // Check if Gemini CLI is installed
-      const geminiPath = await this.findExecutablePath('gemini');
-      if (!geminiPath) {
+      // The search layer runs on the Antigravity CLI (`agy`) since Gemini CLI was
+      // discontinued for individual accounts on 2026-06-18. Detecting the old
+      // binary here would report the layer as missing on a correctly migrated
+      // machine, and ClaudeProxy gates enhancement on this result.
+      const binary = await findAntigravityBinary();
+      if (!binary) {
         return {
           available: false,
           authenticated: false,
         };
       }
 
-      // Get version
-      let version: string | undefined;
-      try {
-        const output = execSync('gemini --version', { 
-          encoding: 'utf8', 
-          timeout: 5000,
-          stdio: 'pipe'
+      if (!binary.versionSupported) {
+        logger.warn('Antigravity CLI is older than the supported minimum', {
+          version: binary.version,
+          minimum: MIN_AGY_VERSION,
         });
-        version = output.trim();
-      } catch {
-        // Version command might not be available
+        return {
+          available: false,
+          authenticated: false,
+          ...(binary.version === undefined ? {} : { version: binary.version }),
+          path: binary.path,
+        };
       }
 
-      // Check authentication status
-      const authResult = await this.authVerifier.verifyGeminiAuth();
-      
+      const auth = await probeAntigravityAuth(binary.path);
+
       return {
         available: true,
-        version,
-        authenticated: authResult.success,
-        path: geminiPath,
+        ...(binary.version === undefined ? {} : { version: binary.version }),
+        authenticated: auth.authenticated,
+        path: binary.path,
       };
-      
+
     } catch (error) {
-      logger.debug('Gemini CLI detection failed', { error: (error as Error).message });
+      logger.debug('Antigravity CLI detection failed', { error: (error as Error).message });
       return {
         available: false,
         authenticated: false,
@@ -314,25 +323,17 @@ export class CapabilityDetector {
    * Find executable path for a command
    */
   private async findExecutablePath(command: string): Promise<string | undefined> {
+    // Delegates to the shared resolver rather than shelling out.
+    //
+    // This used to run `which`/`where` through a shell and return result[0]
+    // unmodified, bypassing the trust check entirely -- so a claude.cmd or
+    // claude.exe in the working tree was discovered here and then executed by
+    // the version probe below, during capability detection. Fixing
+    // processUtils alone would not have closed this path.
     try {
-      const output = execSync(`which ${command}`, { 
-        encoding: 'utf8',
-        timeout: 5000,
-        stdio: 'pipe'
-      });
-      return output.trim();
+      return resolveWindowsCommand(command);
     } catch {
-      try {
-        // Try alternative method for Windows
-        const output = execSync(`where ${command}`, { 
-          encoding: 'utf8',
-          timeout: 5000,
-          stdio: 'pipe'
-        });
-        return output.split('\n')[0]?.trim();
-      } catch {
-        return undefined;
-      }
+      return undefined;
     }
   }
 
@@ -349,9 +350,9 @@ export class CapabilityDetector {
     }
     
     if (services.gemini === 'missing') {
-      recommendations.push('Install Gemini CLI: npm install -g @google/gemini-cli');
+      recommendations.push(`Install Antigravity CLI: ${AGY_INSTALL_HINT}`);
     } else if (services.gemini === 'available') {
-      recommendations.push('Authenticate Gemini: gemini auth or set GEMINI_API_KEY');
+      recommendations.push('Authenticate Antigravity: run `agy` once and complete the Google sign-in');
     }
     
     if (services.aistudio === 'available') {
@@ -381,7 +382,10 @@ export class CapabilityDetector {
    * Clear capabilities cache
    */
   clearCache(): void {
-    this.capabilitiesCache = undefined as any;
+    // delete, not `= undefined`: exactOptionalPropertyTypes forbids assigning
+    // undefined to an optional property, which is what `undefined as any` was
+    // asserting past.
+    delete this.capabilitiesCache;
     logger.debug('Capabilities cache cleared');
   }
 

@@ -1,5 +1,6 @@
-import { execSync, spawn } from 'child_process';
-import { join } from 'path';
+import { execFileSync, spawn } from 'child_process';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
 
 // Task interface for better type safety
@@ -17,7 +18,20 @@ interface ClaudeCodeTask {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { isPlatformWindows } from '../utils/platformUtils.js';
+import { buildSpawnTarget, resolveTrustedCommand } from '../utils/processUtils.js';
+
+/**
+ * Said by whichever initialisation path fails first.
+ *
+ * Both paths locate the executable themselves, so both can be the one that
+ * reports it missing -- and the guidance has to name CLAUDE_CODE_PATH, since a
+ * user whose install is simply somewhere unusual needs to be told the setting
+ * exists rather than to reinstall.
+ */
+const CLAUDE_NOT_FOUND_MESSAGE =
+  'Claude Code executable not found. Install Claude Code: ' +
+  'npm install -g @anthropic-ai/claude-code, or set CLAUDE_CODE_PATH ' +
+  'to an existing installation.';
 
 /**
  * ClaudeCodeLayer handles direct Claude Code execution with enhanced authentication support
@@ -26,6 +40,8 @@ import { isPlatformWindows } from '../utils/platformUtils.js';
 export class ClaudeCodeLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private claudePath?: string;
+  /** Where the caller says Claude Code is, if anywhere. Tried before the defaults. */
+  private readonly configuredPath: string | undefined;
   private isInitialized = false;
   private isLightweightInitialized = false; // Fast initialization for simple tasks
   private lastAuthCheck = 0; // Timestamp of last auth verification
@@ -33,8 +49,29 @@ export class ClaudeCodeLayer implements LayerInterface {
   private readonly DEFAULT_TIMEOUT = 300000; // 5 minutes
   private readonly MAX_RETRIES = 3;
 
-  constructor() {
+  /**
+   * @param codePath config.claude.code_path, when the caller has a config to
+   *   hand. Takes precedence over CLAUDE_CODE_PATH; both are still subject to
+   *   the trust check, so neither is a way past it.
+   */
+  constructor(codePath?: string) {
     this.authVerifier = new AuthVerifier();
+
+    // ConfigSchema defaults claude.code_path to the bare name 'claude', and
+    // LayerManager forwards that field whether or not anyone set it. So the
+    // default arrived here looking deliberate and, being the most specific
+    // candidate, outranked CLAUDE_CODE_PATH -- measured: with the variable
+    // pointing at a different install, the PATH copy was used instead. That is
+    // the main routing path, so the setting was defeated exactly where it
+    // matters. A value equal to the schema default carries no information, so
+    // it is treated as unset; 'claude' heads the default list anyway, leaving
+    // the search unchanged.
+    //
+    // zod's .default() erases whether the caller omitted the field or wrote
+    // the default value on purpose, so someone who means "use the PATH copy,
+    // ignore the variable" cannot say so here. The variable wins in that case.
+    const trimmed = codePath?.trim();
+    this.configuredPath = trimmed && trimmed !== 'claude' ? trimmed : undefined;
   }
 
   /**
@@ -51,14 +88,19 @@ export class ClaudeCodeLayer implements LayerInterface {
     if (!this.claudePath) {
       this.claudePath = await this.findClaudeCodePath() || '';
       if (!this.claudePath) {
-        throw new Error('Claude Code executable not found');
+        throw new Error(CLAUDE_NOT_FOUND_MESSAGE);
       }
     }
 
     // Skip auth verification if recent check exists
     const now = Date.now();
     if (now - this.lastAuthCheck > this.AUTH_CACHE_TTL) {
-      const authResult = await this.authVerifier.verifyClaudeCodeAuth();
+      // The resolved path, not the bare name. This is the path execute() takes
+      // for ordinary prompts -- anything without a workflow, a depth or
+      // complex_reasoning -- so leaving it probing `claude` meant the whole
+      // CLAUDE_CODE_PATH fix missed the common case, and the "not installed"
+      // verdict it produced was then cached for 12 hours.
+      const authResult = await this.authVerifier.verifyClaudeCodeAuth(this.claudePath);
       if (!authResult.success) {
         throw new Error(`Claude Code authentication failed: ${authResult.error}`);
       }
@@ -81,16 +123,24 @@ export class ClaudeCodeLayer implements LayerInterface {
 
         logger.info('Initializing Claude Code layer...');
 
-        // Verify Claude Code installation and authentication
-        const authResult = await this.authVerifier.verifyClaudeCodeAuth();
-        if (!authResult.success) {
-          throw new Error(`Claude Code authentication failed: ${authResult.error}`);
-        }
-
-        // Find Claude Code executable path
+        // Locate the executable BEFORE asking whether it is installed.
+        //
+        // The auth check probes the literal name `claude`, so on a machine
+        // where the only install is the one CLAUDE_CODE_PATH points at -- the
+        // case that setting exists for -- it reported "not installed" and threw
+        // here, before the configured path was ever tried. Finding it first
+        // both answers the installation question and gives the auth probe a
+        // path that exists. The install hint the auth failure used to carry has
+        // to be reproduced here, since this is now the check that fails first.
         this.claudePath = await this.findClaudeCodePath() || '';
         if (!this.claudePath) {
-          throw new Error('Claude Code executable not found');
+          throw new Error(CLAUDE_NOT_FOUND_MESSAGE);
+        }
+
+        // Verify authentication using the executable we just resolved
+        const authResult = await this.authVerifier.verifyClaudeCodeAuth(this.claudePath);
+        if (!authResult.success) {
+          throw new Error(`Claude Code authentication failed: ${authResult.error}`);
         }
 
         // Test basic functionality
@@ -191,7 +241,7 @@ export class ClaudeCodeLayer implements LayerInterface {
             result = await this.synthesizeResponse(task);
             break;
           case 'workflow':
-            const workflowResult = await this.orchestrateWorkflow(task.workflow || task);
+            const workflowResult = await this.orchestrateWorkflow(task.workflow ?? task);
             result = workflowResult.summary || 'Workflow completed';
             break;
           default:
@@ -228,7 +278,7 @@ export class ClaudeCodeLayer implements LayerInterface {
       async () => {
         logger.debug('Executing complex reasoning task', {
           promptLength: task.prompt?.length || 0,
-          depth: task.depth || 'medium',
+          depth: task.depth ?? 'medium',
           domain: task.domain,
         });
 
@@ -332,7 +382,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get cost estimation for a task
    */
-  getCost(task: ClaudeCodeTask): number {
+  getCost(_task: ClaudeCodeTask): number {
     // Claude Code is typically free for personal use
     return 0;
   }
@@ -391,18 +441,58 @@ export class ClaudeCodeLayer implements LayerInterface {
         options,
       });
 
-      const child = spawn(this.claudePath!, [prompt], {
-        stdio: 'pipe',
-        cwd: process.cwd(),
-        env: process.env,
-        shell: isPlatformWindows()
+      // The prompt is delivered on stdin, never on the command line.
+      //
+      // Prompt text is caller-controlled and reaches this layer from MCP input.
+      // Putting it in argv meant that on Windows, where an npm-installed
+      // `claude.cmd` shim has to be invoked through cmd.exe, it became part of a
+      // shell command line. MSVCRT-style `\"` escaping does not protect it:
+      // cmd.exe has no concept of backslash escapes, so it reads the backslash
+      // as a literal, treats the quote as closing, and executes anything after
+      // an unquoted `&`. Verified with a .cmd shim -- the payload
+      // `x" & echo ... & rem "` ran an extra command.
+      //
+      // With the prompt on stdin the command line carries only static flags, so
+      // there is nothing left to escape and the class of bug cannot recur.
+      // `--print` makes the headless single-answer mode explicit rather than
+      // depending on a CLI default.
+      // Checked rather than asserted: claudePath is optional and set during
+      // initialize(), so an execution path that skipped it would otherwise
+      // reach buildSpawnTarget with undefined and fail obscurely.
+      if (!this.claudePath) {
+        throw new Error('Claude Code path has not been resolved; call initialize() first.');
+      }
+      const target = buildSpawnTarget(this.claudePath, ['--print']);
+
+      const child = spawn(target.file, target.args, {
+        // stdin is a pipe we write and immediately close. It must not be left
+        // idle: Claude Code waits ~3s for piped input before giving up and
+        // logging "no stdin data received in 3s", taxing every call.
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: this.packageRoot,
+        env: this.buildChildEnv(),
+        windowsHide: true,
+        ...target.spawnOptions,
       });
+
+      child.stdin.on('error', () => {
+        // A child that exits before reading stdin gives us EPIPE; the close
+        // handler below already reports the real failure.
+      });
+      child.stdin.end(prompt);
 
       let output = '';
       let errorOutput = '';
 
       const timeoutId = setTimeout(() => {
-        isPlatformWindows() ? child.kill() : child.kill('SIGKILL');
+        child.kill('SIGTERM');
+        // Escalate only if the process is genuinely still alive: `child.killed`
+        // only reports that a signal was delivered.
+        setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill('SIGKILL');
+          }
+        }, 2000).unref();
         reject(new Error(`Claude Code execution timeout after ${timeout}ms`));
       }, timeout);
 
@@ -417,12 +507,20 @@ export class ClaudeCodeLayer implements LayerInterface {
       child.on('close', (code) => {
         clearTimeout(timeoutId);
         
-        if (code === 0) {
+        if (code === 0 && output.trim() !== '') {
           logger.debug('Claude command completed successfully', {
             outputLength: output.length,
             code,
           });
           resolve(output);
+        } else if (code === 0) {
+          // Exit 0 with no output is not an answer. It was resolved as one, so
+          // upper layers reported success and substituted placeholders like
+          // "Reasoning completed" -- and no fallback to another layer occurred.
+          reject(new Error(
+            'Claude Code exited successfully but produced no output' +
+            (errorOutput.trim() ? `: ${errorOutput.trim()}` : '. Check the CLI version and permissions.')
+          ));
         } else {
           const error = `Claude Code exited with code ${code}: ${errorOutput}`;
           logger.error('Claude command failed', { code, error: errorOutput });
@@ -439,52 +537,136 @@ export class ClaudeCodeLayer implements LayerInterface {
   }
 
   /**
-   * Find Claude Code executable path
+   * Directory the spawned Claude Code process runs in.
+   *
+   * Claude Code loads CLAUDE.md, .claude/settings.json and any skills from its
+   * working directory, so cwd decides what governs CGMB's internal reasoning
+   * calls. It used to be process.cwd() -- whatever directory the MCP server
+   * happened to be launched from, i.e. the end user's project. That made the
+   * layer's behaviour depend on an unrelated repository's instructions and
+   * permissions, and meant CGMB's own .claude/ configuration was never read.
+   * Verified empirically: a CLAUDE.md in the cwd is picked up, one outside it
+   * is not.
+   *
+   * Pinned to the package root so the layer behaves identically wherever CGMB
+   * is invoked from. Callers pass absolute paths, so nothing depends on the
+   * user's cwd.
    */
-  private async findClaudeCodePath(): Promise<string | undefined> {
-    // Platform-specific path candidates
-    const isWindows = process.platform === 'win32';
-    const appDataPath = process.env.APPDATA || '';
+  private get packageRoot(): string {
+    // dist/layers/ClaudeCodeLayer.js -> package root
+    return join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  }
 
-    const possiblePaths = [
+  /**
+   * Build the environment for a spawned Claude Code process.
+   *
+   * CGMB may itself be running inside a Claude Code session whose environment
+   * remaps the model aliases (ANTHROPIC_DEFAULT_OPUS_MODEL and friends) or
+   * pins a model outright. Inheriting those would silently answer CGMB's
+   * internal reasoning calls with whatever model the host developer happened
+   * to configure, so they are stripped and the child picks its own defaults.
+   */
+  private buildChildEnv(): NodeJS.ProcessEnv {
+    const env = { ...process.env };
+
+    delete env.ANTHROPIC_MODEL;
+    delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
+    delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
+    delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+    delete env.CLAUDE_CODE_SUBAGENT_MODEL;
+
+    return env;
+  }
+
+  /**
+   * Where Claude Code is likely to be installed.
+   *
+   * Platform and environment are parameters with defaults, so the macOS branch
+   * can be exercised from a Windows or Linux test run. There is no darwin
+   * branch: macOS follows the same list as Linux, which makes /opt/homebrew the
+   * only Mac-specific entry and the only one another OS can check.
+   *
+   * An explicitly configured path goes first, then CLAUDE_CODE_PATH. Both were
+   * previously ignored: .env.example advertises CLAUDE_CODE_PATH and
+   * ConfigSchema carries claude.code_path, but this list was a fixed literal,
+   * so an install outside these locations was simply unreachable however it
+   * was declared. Order is the whole mechanism -- each candidate still has to
+   * survive resolveTrustedCommand, so naming one cannot reach a binary the
+   * defaults would have refused.
+   */
+  static claudeCandidatePaths(
+    platform: NodeJS.Platform = process.platform,
+    env: NodeJS.ProcessEnv = process.env,
+    configured?: string
+  ): string[] {
+    const appDataPath = env.APPDATA ?? '';
+    // Blank or whitespace-only means "unset", not "look for a file named ''".
+    const preferred = [configured, env.CLAUDE_CODE_PATH]
+      .map(value => value?.trim())
+      .filter((value): value is string => value !== undefined && value !== '');
+
+    return [...new Set([
+      ...preferred,
       'claude',
       'claude-original',
       // Windows paths (npm global install location)
-      ...(isWindows && appDataPath ? [
+      ...(platform === 'win32' && appDataPath ? [
         join(appDataPath, 'npm', 'claude.cmd'),
         join(appDataPath, 'npm', 'claude'),
       ] : []),
-      // Unix paths
+      // Unix paths. /opt/homebrew is Homebrew's prefix on Apple Silicon;
+      // Intel Macs and Linux use /usr/local.
+      '/usr/local/bin/claude',
       '/usr/local/bin/claude-original',
       '/opt/homebrew/bin/claude',
       '/opt/homebrew/bin/claude-original',
-    ];
+    ])];
+  }
+
+  /**
+   * Find Claude Code executable path
+   */
+  private async findClaudeCodePath(): Promise<string | undefined> {
+    const possiblePaths = ClaudeCodeLayer.claudeCandidatePaths(
+      process.platform,
+      process.env,
+      this.configuredPath
+    );
 
     for (const path of possiblePaths) {
       try {
-        execSync(`${path} --version`, { stdio: 'ignore', timeout: 5000 });
-        logger.debug('Found Claude Code at', { path });
-        return path;
+        // execFileSync, not a shell string: an interpolated path containing
+        // spaces (C:\Program Files\...) would otherwise be split into
+        // arguments, and any shell metacharacter in it would be interpreted.
+        const target = buildSpawnTarget(path, ['--version']);
+        execFileSync(target.file, target.args, {
+          stdio: 'ignore',
+          timeout: 5000,
+          windowsHide: true,
+          ...target.spawnOptions,
+        });
+        // Return the resolved absolute path, not the candidate name. Returning
+        // a bare name meant every later use resolved it again, outside the
+        // trust check that had just approved a specific file.
+        const verified = resolveTrustedCommand(path);
+        if (verified === undefined) {
+          continue;
+        }
+        logger.debug('Found Claude Code at', { path: verified });
+        return verified;
       } catch {
         continue;
       }
     }
 
-    // Try system PATH
-    try {
-      const cmd = isWindows ? 'where claude' : 'which claude 2>/dev/null';
-      const output = execSync(cmd, {
-        encoding: 'utf8',
-        stdio: 'pipe',
-        timeout: 5000,
-      });
-      
-      const paths = output.trim().split('\n').filter(p => p && !p.includes('cgmb'));
-      if (paths.length > 0) {
-        return paths[0];
-      }
-    } catch {
-      // System PATH lookup failed
+    // System PATH, through the shared trusted resolver.
+    //
+    // This ran `where claude` / `which claude` through a shell and returned the
+    // first line unchecked, so a claude.cmd in the working tree was adopted
+    // here even after the loop above had refused it.
+    const resolved = resolveTrustedCommand('claude');
+    if (resolved !== undefined && !resolved.includes('cgmb')) {
+      return resolved;
     }
 
     return undefined;
@@ -494,66 +676,56 @@ export class ClaudeCodeLayer implements LayerInterface {
    * Test Claude Code connection
    */
   private async testClaudeCodeConnection(): Promise<void> {
+    // Probe the already-verified path with an argv array.
+    //
+    // These were shell strings interpolating this.claudePath, which resolved
+    // the name a second time -- so a candidate the trust check had rejected
+    // could be selected here instead, during initialization.
+    const probe = (args: string[], timeout: number): string => {
+      if (!this.claudePath) {
+        throw new Error('Claude Code path has not been resolved; call initialize() first.');
+      }
+      const target = buildSpawnTarget(this.claudePath, args);
+      return execFileSync(target.file, target.args, {
+        timeout,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        windowsHide: true,
+        ...target.spawnOptions,
+      });
+    };
+
     try {
-      // Use lightweight version check instead of full command execution
-      const { execSync } = await import('child_process');
-      
-      try {
-        // First try --version
-        const output = execSync(`${this.claudePath} --version`, { 
-          timeout: 30000,
-          encoding: 'utf8',
-          stdio: 'pipe'
+      const output = probe(['--version'], 30000);
+      if (output?.trim()) {
+        logger.debug('Claude Code connection test successful via --version', {
+          version: output.trim().substring(0, 100),
         });
-        
-        // Accept any non-empty output as success (Claude Code might have different version output format)
-        if (output && output.trim()) {
-          logger.debug('Claude Code connection test successful via --version', {
-            version: output.trim().substring(0, 100)
+        return;
+      }
+    } catch (versionError) {
+      logger.debug('Claude --version failed, trying --help', {
+        error: (versionError as Error).message,
+      });
+
+      try {
+        const helpOutput = probe(['--help'], 15000);
+        if (helpOutput && (helpOutput.includes('Claude') || helpOutput.includes('Usage:') || helpOutput.length > 20)) {
+          logger.debug('Claude Code connection test successful via --help', {
+            helpLength: helpOutput.length,
           });
           return;
         }
-      } catch (versionError) {
-        // --version failed, try --help as fallback
-        logger.debug('Claude --version failed, trying --help', {
-          error: (versionError as Error).message
+      } catch (helpError) {
+        logger.warn('Both --version and --help failed for Claude Code', {
+          versionError: (versionError as Error).message,
+          helpError: (helpError as Error).message,
         });
-        
-        try {
-          const helpOutput = execSync(`${this.claudePath} --help`, { 
-            timeout: 15000,
-            encoding: 'utf8',
-            stdio: 'pipe'
-          });
-          
-          // If --help works and contains "Claude" or shows help text, consider it working
-          if (helpOutput && (helpOutput.includes('Claude') || helpOutput.includes('Usage:') || helpOutput.length > 20)) {
-            logger.debug('Claude Code connection test successful via --help', {
-              helpLength: helpOutput.length
-            });
-            return;
-          }
-        } catch (helpError) {
-          logger.warn('Both --version and --help failed for Claude Code', {
-            versionError: (versionError as Error).message,
-            helpError: (helpError as Error).message
-          });
-        }
+        throw new Error(`Claude Code connection test failed: ${(helpError as Error).message}`);
       }
-      
-      // Final fallback: just check if the binary exists and is executable
-      try {
-        const { access, constants } = await import('fs/promises');
-        await access(this.claudePath!, constants.F_OK | constants.X_OK);
-        logger.debug('Claude Code binary exists and is executable, considering it available');
-        return;
-      } catch (accessError) {
-        throw new Error(`Claude Code binary not accessible: ${(accessError as Error).message}`);
-      }
-      
-    } catch (error) {
-      throw new Error(`Claude Code connection test failed: ${(error as Error).message}`);
     }
+
+    throw new Error('Claude Code produced no usable output for --version or --help');
   }
 
   /**
@@ -629,7 +801,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Parse reasoning result
    */
-  private parseReasoningResult(output: string, task: ReasoningTask): ReasoningResult {
+  private parseReasoningResult(output: string, _task: ReasoningTask): ReasoningResult {
     // Try to extract structured reasoning from output
     const lines = output.trim().split('\n');
     const steps: string[] = [];
@@ -718,7 +890,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Calculate cost
    */
-  private calculateCost(task: ClaudeCodeTask, result: string): number {
+  private calculateCost(_task: ClaudeCodeTask, _result: string): number {
     // Claude Code is typically free
     return 0;
   }

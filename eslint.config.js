@@ -18,11 +18,32 @@ export default [
     },
     rules: {
       // TypeScript specific rules
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      // varsIgnorePattern matches argsIgnorePattern: a leading underscore is
+      // how this codebase already marks a binding it keeps deliberately
+      // (destructuring a shape it does not consume, a value held for a
+      // debugger). Without it, _timestamp and _priority were errors despite
+      // being written that way on purpose.
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+      }],
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-non-null-assertion': 'warn',
-      '@typescript-eslint/prefer-nullish-coalescing': 'error',
+
+      // Primitives are exempt because `||` is the correct operator there.
+      //
+      // This is a CLI that prints a lot of fallbacks: `email || 'N/A'`,
+      // `error || 'Unknown error'`. An empty string is exactly the case those
+      // want to replace, and `??` would print the blank instead -- a
+      // regression, not a fix. 111 of the 157 reports were that shape.
+      //
+      // Objects, arrays and unions stay covered, which is where the rule earns
+      // its keep. `boolean` is deliberately NOT exempt: swallowing an explicit
+      // `false` is a real bug, so those few sites get read individually.
+      '@typescript-eslint/prefer-nullish-coalescing': ['error', {
+        ignorePrimitives: { string: true, number: true },
+      }],
       '@typescript-eslint/prefer-optional-chain': 'error',
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/await-thenable': 'error',

@@ -1,10 +1,15 @@
 import { commandExists } from '../utils/platformUtils.js';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
+import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
+import { buildSpawnTarget, commandAvailable } from '../utils/processUtils.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { OAuthManager } from './OAuthManager.js';
 import { AuthCache } from './AuthCache.js';
+
+/** Why an AI Studio credential probe failed. */
+type AIStudioProbeFailure = 'invalid_credential' | 'permanent_configuration' | 'transient_service';
 
 /**
  * AuthVerifier handles authentication verification for all services
@@ -19,23 +24,48 @@ export class AuthVerifier {
     this.oauthManager = new OAuthManager();
     this.authCache = AuthCache.getInstance();
     
-    // Setup periodic cache cleanup (every 30 minutes)
-    setInterval(() => {
+    // Setup periodic cache cleanup (every 30 minutes).
+    //
+    // unref'd so it never by itself keeps the process alive: the long-running
+    // MCP server has plenty of other handles, but a one-shot `cgmb` command
+    // that merely constructs an AuthVerifier would otherwise hang for 30
+    // minutes at exit. That is why the CLI has to call process.exit()
+    // explicitly, and why a test importing LayerManager never terminates.
+    const cleanupTimer = setInterval(() => {
       this.authCache.cleanup();
     }, 30 * 60 * 1000);
+    cleanupTimer.unref();
   }
 
   /**
-   * Verify all service authentications
+   * Verify all service authentications.
+   *
+   * @param options.live Re-probe every service instead of trusting the cache.
+   *
+   * Successful results are cached for hours, which is right for hot internal
+   * paths but wrong for a user who explicitly asks "am I authenticated?".
+   * After a sign-out, a revoked credential, an uninstalled binary or a network
+   * failure, the cache would keep answering "authenticated" for up to 6 hours
+   * and the user would only discover otherwise on their next real request --
+   * the same delayed-failure pattern this migration set out to remove.
+   * `cgmb auth-status` and `cgmb verify` therefore pass live: true.
    */
-  async verifyAllAuthentications(): Promise<VerificationResult> {
+  async verifyAllAuthentications(options: { live?: boolean } = {}): Promise<VerificationResult> {
+    if (options.live) {
+      // Drop cached verdicts and failure backoff so every service is re-probed.
+      // This is an explicit user action, so the extra latency is warranted.
+      for (const service of ['antigravity', 'gemini', 'aistudio', 'claude'] as const) {
+        this.authCache.forceRefresh(service);
+      }
+    }
+
     return safeExecute(
       async () => {
         logger.info('Starting comprehensive authentication verification...');
 
         const services = {
           gemini: await this.verifyGeminiAuth(),
-          aistudio: await this.verifyAIStudioAuth(),
+          aistudio: await this.verifyAIStudioAuth(options),
           claude: await this.verifyClaudeCodeAuth(),
         };
 
@@ -93,32 +123,16 @@ export class AuthVerifier {
             return result;
           }
 
-          // Priority 2: API Key fallback
-          const apiKey = process.env.GEMINI_API_KEY;
-          if (apiKey) {
-            logger.debug('OAuth failed, trying API Key fallback for Gemini');
-            
-            // Test API key validity with a simple request
-            try {
-              await this.testGeminiApiKey(apiKey);
-              
-              const result: AuthResult = {
-                success: true,
-                status: {
-                  isAuthenticated: true,
-                  method: 'api_key',
-                  userInfo: undefined,
-                },
-                requiresAction: false,
-              };
-              
-              // Cache successful API key authentication
-              this.authCache.set('gemini', result);
-              return result;
-            } catch (apiError) {
-              logger.warn('Gemini API key validation failed', { error: (apiError as Error).message });
-            }
-          }
+          // There is deliberately no API-key fallback here.
+          //
+          // This used to validate GEMINI_API_KEY against the Gemini API and, on
+          // success, report the search layer as authenticated for 6 hours. But
+          // Antigravity authenticates solely through OAuth tokens in the OS
+          // keyring and never consumes that key, so the check proved nothing
+          // about the layer. On a machine with a leftover key but no agy -- or
+          // no sign-in, or a network fault -- the layer was reported healthy and
+          // only failed on the first real request. A successful `agy models`
+          // above is the only evidence that counts.
 
           // No valid authentication found
           const result: AuthResult = {
@@ -130,7 +144,7 @@ export class AuthVerifier {
             },
             error: 'Gemini not authenticated',
             requiresAction: true,
-            actionInstructions: 'Run "gemini auth" for OAuth (recommended) or set GEMINI_API_KEY environment variable',
+            actionInstructions: 'Run `agy` once interactively and complete the Google sign-in (tokens are stored in the OS keyring)',
           };
           
           // Cache failed authentication with exponential backoff
@@ -156,7 +170,7 @@ export class AuthVerifier {
             },
             error: `Gemini verification failed: ${(error as Error).message}`,
             requiresAction: true,
-            actionInstructions: 'Install Gemini CLI: npm install -g @google/gemini-cli && gemini auth',
+            actionInstructions: `Install the Antigravity CLI (${AGY_INSTALL_HINT}), then run \`agy\` once to sign in`,
           };
           
           return result;
@@ -164,7 +178,7 @@ export class AuthVerifier {
       },
       {
         operationName: 'verify-gemini-auth',
-        layer: 'gemini',
+        layer: 'antigravity',
         timeout: 10000,
       }
     );
@@ -174,7 +188,7 @@ export class AuthVerifier {
    * Verify AI Studio authentication with intelligent caching
    * Enhanced to address authentication issues from Error.md with 24-hour cache
    */
-  async verifyAIStudioAuth(): Promise<AuthResult> {
+  async verifyAIStudioAuth(options: { live?: boolean } = {}): Promise<AuthResult> {
     // Check cache first (24-hour TTL for API keys)
     const cachedResult = this.authCache.get('aistudio');
     if (cachedResult) {
@@ -275,6 +289,55 @@ export class AuthVerifier {
           };
         }
 
+        // A well-formed key is not a working key.
+        //
+        // The format check only asserts "starts with AI, at least 20 chars", so
+        // a revoked, deleted or entirely fabricated key of the right shape was
+        // reported as authenticated. That defeated the point of the live
+        // verification added for the setup wizard and `cgmb auth-status`, which
+        // exist precisely to answer "does this actually work right now?".
+        // The probe is skipped for cached//routine checks to avoid a network
+        // round trip on every call.
+        if (options.live) {
+          const probe = await this.probeAIStudioKey(apiKey);
+
+          if (!probe.ok) {
+            const transient = probe.kind === 'transient_service';
+
+            const guidance = probe.kind === 'invalid_credential'
+              ? 'Reissue the key at https://aistudio.google.com/app/apikey and update AI_STUDIO_API_KEY'
+              : probe.kind === 'permanent_configuration'
+                ? 'Check that the Generative Language API is enabled for this project and that the account may use the model'
+                : 'Check network connectivity and retry';
+
+            const summary = probe.kind === 'invalid_credential'
+              ? `AI Studio rejected the API key: ${probe.error}`
+              : probe.kind === 'permanent_configuration'
+                ? `AI Studio refused the request for a configuration reason (not the key itself): ${probe.error}`
+                : `Could not reach the Gemini API to verify the key: ${probe.error}`;
+
+            const result: AuthResult = {
+              success: false,
+              status: {
+                isAuthenticated: false,
+                method: 'api_key',
+                userInfo: undefined,
+              },
+              error: summary,
+              // A configuration problem is just as actionable as a bad key;
+              // only a genuine service/network fault is not.
+              requiresAction: !transient,
+              actionInstructions: guidance,
+            };
+
+            // Never cache a transient fault as a credential verdict.
+            if (!transient) {
+              this.authCache.set('aistudio', result);
+            }
+            return result;
+          }
+        }
+
         // MCP server check removed - using built-in MCP server (src/mcp-servers/ai-studio-mcp-server.ts)
         logger.info('AI Studio authentication verification successful', {
           method: 'api_key',
@@ -322,7 +385,16 @@ export class AuthVerifier {
    * Verify Claude Code authentication with intelligent caching
    * Uses 12-hour cache for session-based authentication
    */
-  async verifyClaudeCodeAuth(): Promise<AuthResult> {
+  /**
+   * @param codePath The executable the caller resolved, when it has one.
+   *
+   * Without it every probe here ran the literal name `claude`, so an install
+   * that is not on PATH -- the reason CLAUDE_CODE_PATH exists -- was reported
+   * missing. The cache is keyed by service rather than by path, so a process
+   * that somehow used two different Claude binaries would share one verdict
+   * between them; a single installation is the norm and that is accepted.
+   */
+  async verifyClaudeCodeAuth(codePath?: string): Promise<AuthResult> {
     // Check cache first (12-hour TTL for session auth)
     const cachedResult = this.authCache.get('claude');
     if (cachedResult) {
@@ -335,7 +407,7 @@ export class AuthVerifier {
 
         try {
           // Check if Claude Code is installed
-          const isInstalled = await this.checkClaudeCodeInstalled();
+          const isInstalled = await this.checkClaudeCodeInstalled(codePath);
           
           if (!isInstalled) {
             const result: AuthResult = {
@@ -356,7 +428,7 @@ export class AuthVerifier {
           }
 
           // Test Claude Code functionality
-          const isWorking = await this.testClaudeCodeFunctionality();
+          const isWorking = await this.testClaudeCodeFunctionality(codePath);
           
           if (!isWorking) {
             const result: AuthResult = {
@@ -419,9 +491,10 @@ export class AuthVerifier {
   /**
    * Verify authentication for a specific service
    */
-  async verifyServiceAuth(service: 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
+  async verifyServiceAuth(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
     switch (service) {
-      case 'gemini':
+      case 'antigravity':
+      case 'gemini': // deprecated alias
         return this.verifyGeminiAuth();
       case 'aistudio':
         return this.verifyAIStudioAuth();
@@ -433,39 +506,65 @@ export class AuthVerifier {
   }
 
   /**
-   * Test Gemini API key validity with a lightweight request
+   * Ask the Gemini API whether a key actually works.
+   *
+   * Uses a metadata read rather than a generation call: it is cheap, consumes
+   * no generation quota, and still requires a valid credential. Distinguishes a
+   * rejected key from a network fault so a blip is never reported as "your key
+   * is invalid".
    */
-  private async testGeminiApiKey(apiKey: string): Promise<void> {
-    // Import Google AI library dynamically to avoid loading if not needed
-    const { GoogleGenAI } = await import('@google/genai');
-    
+  private async probeAIStudioKey(
+    apiKey: string
+  ): Promise<{ ok: boolean; kind?: AIStudioProbeFailure; error?: string }> {
+    const TIMEOUT_MS = 8000;
+
     try {
-      const genAI = new GoogleGenAI({ apiKey });
-      
-      // Simple test prompt to validate API key and check quota
-      const result = await genAI.models.generateContent({
-        model: 'gemini-pro',
-        contents: [{
-          parts: [{ text: 'Test' }]
-        }]
-      });
-      
-      if (!result.candidates || result.candidates.length === 0) {
-        throw new Error('API key test failed - no response');
-      }
-      
-      logger.debug('Gemini API key validation successful');
+      const { GoogleGenAI } = await import('@google/genai');
+      const client = new GoogleGenAI({ apiKey });
+
+      const probe = client.models.get({ model: 'gemini-2.5-flash' });
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS).unref()
+      );
+
+      await Promise.race([probe, timeout]);
+      return { ok: true };
     } catch (error) {
-      const errorMessage = (error as Error).message;
-      
-      // Enhanced quota error detection during authentication
-      if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('Quota exceeded')) {
-        logger.warn('Gemini quota exceeded during authentication check', { error: errorMessage });
-        throw new Error(`Gemini API quota exceeded. Please wait before retrying or use a different model. Details: ${errorMessage}`);
+      const err = error as Error & { status?: number; code?: number; reason?: string };
+      const message = err.message ?? String(error);
+
+      const status = typeof err.status === 'number' ? err.status
+        : typeof err.code === 'number' ? err.code
+        : undefined;
+
+      // Three outcomes, not two.
+      //
+      // A boolean "transient" flag forced permanent client errors into the
+      // retry bucket: the Gemini API returns 400 API_KEY_INVALID for a bad key,
+      // and 403/404 for a disabled API or a misconfigured model. All of those
+      // were reported as "check your network and retry" with requiresAction
+      // false, so the real problem was never fixed. Google documents 400 and
+      // 403 as non-retryable client errors.
+      const reason = err.reason ?? '';
+      const looksLikeKeyProblem =
+        /API_KEY_INVALID|API key not valid|api[_ ]?key|invalid.*credential|unauthenticated/i
+          .test(`${reason} ${message}`);
+
+      if (status === 401 || (status === 400 && looksLikeKeyProblem) ||
+          (status === 403 && looksLikeKeyProblem)) {
+        return { ok: false, kind: 'invalid_credential', error: message };
       }
-      
-      logger.warn('Gemini API key validation failed', { error: errorMessage });
-      throw new Error(`Gemini API key invalid: ${errorMessage}`);
+
+      if (status === 400 || status === 403 || status === 404) {
+        return { ok: false, kind: 'permanent_configuration', error: message };
+      }
+
+      if (status === 429 || (typeof status === 'number' && status >= 500)) {
+        return { ok: false, kind: 'transient_service', error: message };
+      }
+
+      // No usable status: timeouts, DNS, offline.
+      return { ok: false, kind: 'transient_service', error: message };
     }
   }
 
@@ -479,7 +578,7 @@ export class AuthVerifier {
   /**
    * Clear authentication cache for a specific service
    */
-  clearAuthCache(service?: 'gemini' | 'aistudio' | 'claude'): void {
+  clearAuthCache(service?: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): void {
     if (service) {
       this.authCache.invalidate(service);
       logger.info('Authentication cache cleared for service', { service });
@@ -492,7 +591,7 @@ export class AuthVerifier {
   /**
    * Force refresh authentication for a service
    */
-  async forceRefreshAuth(service: 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
+  async forceRefreshAuth(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<AuthResult> {
     this.authCache.forceRefresh(service);
     return await this.verifyServiceAuth(service);
   }
@@ -500,14 +599,22 @@ export class AuthVerifier {
   /**
    * Check if Claude Code is installed
    */
-  private async checkClaudeCodeInstalled(): Promise<boolean> {
+  private async checkClaudeCodeInstalled(codePath?: string): Promise<boolean> {
+    // The path the layer resolved, so an install outside PATH is not reported
+    // as missing. Falls back to the bare name for callers without one.
+    const command = codePath?.trim() || 'claude';
+
     // Cross-platform check using platformUtils
-    if (commandExists('claude')) {
+    if (commandExists(command)) {
       return true;
     }
     // Fallback: try running claude --version
     try {
-      execSync('claude --version', { stdio: 'ignore', timeout: 5000 });
+      // Trusted resolution: a shell string here re-resolved `claude` against
+      // PATH and the working directory, outside every check.
+      if (!commandAvailable(command)) {
+        throw new Error(`${command} is not available`);
+      }
       return true;
     } catch {
       return false;
@@ -517,21 +624,34 @@ export class AuthVerifier {
   /**
    * Test Claude Code functionality
    */
-  private async testClaudeCodeFunctionality(): Promise<boolean> {
+  private async testClaudeCodeFunctionality(codePath?: string): Promise<boolean> {
+    // `claude auth status --json` reports the session directly. The previous
+    // check ran `claude --help` and scanned the help TEXT for "auth" plus
+    // "required"/"login" -- but the help lists an `auth` subcommand and
+    // includes a JSON schema example containing "required", so the condition
+    // was true on every machine. The Claude layer was therefore reported
+    // unauthenticated for everyone, cached, and never used.
     try {
-      // Try a simple claude command
-      const output = execSync('claude --help', { 
+      // Must go through the shared launcher: npm installs Claude Code as a
+      // `claude.cmd` shim on Windows, and execFileSync on a .cmd fails with
+      // EINVAL. Probing it directly reported an installed, signed-in Claude as
+      // unauthenticated and cached that, disabling the whole layer.
+      const target = buildSpawnTarget(codePath?.trim() || 'claude', ['auth', 'status', '--json']);
+      const output = execFileSync(target.file, target.args, {
         encoding: 'utf8',
-        timeout: 5000,
-        stdio: 'pipe'
+        timeout: 10000,
+        stdio: 'pipe',
+        windowsHide: true,
+        ...target.spawnOptions,
       });
-      
-      // Check if the output indicates authentication is needed
-      const needsAuth = output.toLowerCase().includes('auth') && 
-                       (output.toLowerCase().includes('required') || 
-                        output.toLowerCase().includes('login'));
-      
-      return !needsAuth;
+
+      const status = JSON.parse(output) as { loggedIn?: boolean };
+      if (status.loggedIn === true) {
+        return true;
+      }
+
+      logger.debug('Claude Code is installed but not signed in');
+      return false;
     } catch (error) {
       logger.debug('Claude Code functionality test failed', { error: (error as Error).message });
       return false;
@@ -587,7 +707,7 @@ export class AuthVerifier {
   /**
    * Get human-readable status for a service
    */
-  async getServiceStatus(service: 'gemini' | 'aistudio' | 'claude'): Promise<string> {
+  async getServiceStatus(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<string> {
     try {
       const result = await this.verifyServiceAuth(service);
       
@@ -606,7 +726,7 @@ export class AuthVerifier {
   /**
    * Check if service needs attention
    */
-  async serviceNeedsAttention(service: 'gemini' | 'aistudio' | 'claude'): Promise<boolean> {
+  async serviceNeedsAttention(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<boolean> {
     try {
       const result = await this.verifyServiceAuth(service);
       return !result.success && result.requiresAction;

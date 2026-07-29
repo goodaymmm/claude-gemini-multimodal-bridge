@@ -52,7 +52,7 @@ export class SearchCache {
   /**
    * Get search results from cache
    */
-  async get(query: string, searchEngine: string = 'gemini'): Promise<any | null> {
+  async get(query: string, searchEngine: string = 'antigravity'): Promise<any | null> {
     const key = this.generateCacheKey(query, searchEngine);
     const entry = this.cache.get(key);
 
@@ -109,7 +109,7 @@ export class SearchCache {
   async set(
     query: string, 
     result: any, 
-    searchEngine: string = 'gemini',
+    searchEngine: string = 'antigravity',
     processingTime: number = 0
   ): Promise<void> {
     const key = this.generateCacheKey(query, searchEngine);

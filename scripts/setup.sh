@@ -35,6 +35,27 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# version_at_least ACTUAL MINIMUM -> exit 0 when ACTUAL >= MINIMUM
+#
+# Uses awk rather than `sort -V`: -V is a GNU extension that BSD sort (the
+# default on macOS, which this project supports) does not implement. There the
+# pipeline fails, the comparison yields an empty result, and a perfectly
+# current version is reported as too old. awk is required by POSIX.
+version_at_least() {
+    awk -v a="$1" -v b="$2" '
+    BEGIN {
+        gsub(/^[vV]/, "", a); gsub(/^[vV]/, "", b);
+        na = split(a, A, "."); nb = split(b, B, ".");
+        n = (na > nb) ? na : nb;
+        for (i = 1; i <= n; i++) {
+            x = (i <= na) ? A[i] + 0 : 0;
+            y = (i <= nb) ? B[i] + 0 : 0;
+            if (x != y) exit (x > y) ? 0 : 1;
+        }
+        exit 0;
+    }'
+}
+
 # Check Node.js version
 check_node_version() {
     log_info "Checking Node.js version..."
@@ -47,7 +68,7 @@ check_node_version() {
     local node_version=$(node --version | cut -d'v' -f2)
     local required_version="18.0.0"
     
-    if [ "$(printf '%s\n' "$required_version" "$node_version" | sort -V | head -n1)" != "$required_version" ]; then
+    if ! version_at_least "$node_version" "$required_version"; then
         log_error "Node.js version $node_version is too old. Required: $required_version or higher."
         exit 1
     fi
@@ -96,23 +117,47 @@ install_claude_code() {
     fi
 }
 
-# Install Gemini CLI
-install_gemini_cli() {
-    log_info "Checking Gemini CLI..."
-    
-    if command_exists gemini; then
-        log_success "Gemini CLI is already installed"
-        return 0
+# Check for the Antigravity CLI (agy)
+#
+# agy is not on npm: the only supported install is a remote shell script, and
+# sign-in is interactive. Running the installer unattended from here would
+# execute remote code the user never saw and still leave an unauthenticated
+# CLI, so print the command and let them run it.
+MIN_AGY_VERSION="1.1.7"
+
+check_antigravity_cli() {
+    log_info "Checking Antigravity CLI (agy)..."
+
+    if command_exists agy; then
+        # Presence is not enough. Builds before 1.1.7 gate stdout on isatty():
+        # they print nothing and still exit 0 when stdout is not a terminal,
+        # which turns every CGMB call into a silent wrong answer. Accepting
+        # them here reported a healthy setup that only failed at runtime.
+        local agy_version
+        agy_version=$(agy --version 2>/dev/null | head -n1 | tr -d '[:space:]')
+
+        if [ -z "$agy_version" ]; then
+            log_error "Could not determine the agy version ('agy --version' produced no output)"
+            return 1
+        fi
+
+        if version_at_least "$agy_version" "$MIN_AGY_VERSION"; then
+            log_success "Antigravity CLI (agy) $agy_version is installed"
+            return 0
+        fi
+
+        log_error "Antigravity CLI $agy_version is too old (need >= $MIN_AGY_VERSION)"
+        echo "  Older builds print nothing when stdout is not a terminal."
+        echo "  Update with: agy update"
+        return 1
     fi
-    
-    log_info "Installing Gemini CLI..."
-    
-    if npm install -g @google/gemini-cli; then
-        log_success "Gemini CLI installed successfully"
-    else
-        log_error "Failed to install Gemini CLI"
-        exit 1
-    fi
+
+    log_warning "Antigravity CLI (agy) not found - the web-search layer needs it"
+    echo "  1. curl -fsSL https://antigravity.google/cli/install.sh | bash"
+    echo "  2. Run 'agy' once and complete the Google sign-in"
+    echo "  Requires agy $MIN_AGY_VERSION or newer"
+    echo "  Docs: https://antigravity.google/docs/cli/install"
+    return 1
 }
 
 # Setup environment file
@@ -127,12 +172,14 @@ setup_environment() {
             log_warning ".env.example not found, creating basic .env file"
             cat > .env << EOF
 # Claude-Gemini Multimodal Bridge Configuration
-GEMINI_API_KEY=your_gemini_api_key_here
+AI_STUDIO_API_KEY=your_ai_studio_api_key_here
 CLAUDE_CODE_PATH=/usr/local/bin/claude
-GEMINI_CLI_PATH=/usr/local/bin/gemini
+# Path to the Antigravity CLI (agy). Leave unset to auto-detect.
+# ANTIGRAVITY_CLI_PATH=
 LOG_LEVEL=info
 ENABLE_CACHING=true
-GEMINI_MODEL=gemini-2.5-flash
+# Antigravity model for the search layer - must match \`agy models\`
+ANTIGRAVITY_MODEL=gemini-3.6-flash-low
 EOF
             log_success "Created basic .env file"
         fi
@@ -141,8 +188,8 @@ EOF
     fi
     
     log_warning "Please edit the .env file and add your API keys:"
-    echo "  - GEMINI_API_KEY: Get from https://aistudio.google.com/"
-    echo "  - Update paths if Claude Code or Gemini CLI are installed in non-standard locations"
+    echo "  - AI_STUDIO_API_KEY: Get from https://aistudio.google.com/app/apikey"
+    echo "  - Update paths if Claude Code or the Antigravity CLI are installed in non-standard locations"
 }
 
 # Create necessary directories
@@ -207,21 +254,21 @@ verify_installation() {
     
     if command_exists claude; then
         log_success "✓ Claude Code CLI"
-        ((checks_passed++))
+        checks_passed=$((checks_passed + 1))
     else
         log_error "✗ Claude Code CLI"
     fi
     
-    if command_exists gemini; then
-        log_success "✓ Gemini CLI" 
-        ((checks_passed++))
+    if check_antigravity_cli >/dev/null 2>&1; then
+        log_success "✓ Antigravity CLI (agy) >= $MIN_AGY_VERSION"
+        checks_passed=$((checks_passed + 1))
     else
-        log_error "✗ Gemini CLI"
+        log_error "✗ Antigravity CLI (agy) missing or older than $MIN_AGY_VERSION"
     fi
     
     if [ -f .env ]; then
         log_success "✓ Environment configuration"
-        ((checks_passed++))
+        checks_passed=$((checks_passed + 1))
     else
         log_error "✗ Environment configuration"
     fi
@@ -241,9 +288,9 @@ show_next_steps() {
     echo
     log_info "Next steps:"
     echo "1. Edit .env file and add your API keys:"
-    echo "   - Get Gemini API key from: https://aistudio.google.com/"
-    echo "2. Authenticate Gemini CLI:"
-    echo "   gemini auth"
+    echo "   - Get an AI Studio API key from: https://aistudio.google.com/app/apikey"
+    echo "2. Sign in to the Antigravity CLI:"
+    echo "   agy          # run once, then complete the Google sign-in"
     echo "3. Verify your installation:"
     echo "   cgmb verify"
     echo "4. Start the CGMB server:"
@@ -264,7 +311,13 @@ main() {
     check_node_version
     check_npm
     install_claude_code
-    install_gemini_cli
+
+    # Record the result rather than discarding it. `|| true` kept the script
+    # running (which is right -- the remaining steps are still useful), but the
+    # summary then declared success and exited 0 with no working search layer.
+    antigravity_ok=0
+    check_antigravity_cli || antigravity_ok=1
+
     install_dependencies
     setup_environment
     create_directories
@@ -273,6 +326,12 @@ main() {
     show_next_steps
     
     echo
+    if [ "$antigravity_ok" -ne 0 ]; then
+        log_error "CGMB setup incomplete: the Antigravity CLI is missing or older than $MIN_AGY_VERSION."
+        log_info "Install or update it, then re-run: npm run setup"
+        exit 1
+    fi
+
     log_success "CGMB setup completed!"
 }
 

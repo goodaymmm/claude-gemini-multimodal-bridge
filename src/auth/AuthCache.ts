@@ -26,9 +26,13 @@ export class AuthCache {
   
   // Optimized TTL settings based on service characteristics
   private readonly TTL_SETTINGS = {
-    // Gemini CLI: OAuth tokens with refresh capability - 6 hours
+    // Antigravity CLI: OAuth tokens held in the OS keyring - 6 hours
+    antigravity: 6 * 60 * 60 * 1000,
+
+    // Deprecated alias for 'antigravity'; kept so callers still compiling
+    // against the old service name get the same TTL.
     gemini: 6 * 60 * 60 * 1000,
-    
+
     // AI Studio: API keys are long-lived but need periodic validation - 24 hours  
     aistudio: 24 * 60 * 60 * 1000,
     

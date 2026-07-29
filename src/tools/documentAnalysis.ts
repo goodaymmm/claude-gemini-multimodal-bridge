@@ -1,14 +1,12 @@
 import {
-  AnalysisType,
   DocumentAnalysisArgs,
   DocumentAnalysisResult,
   FileReference,
-  LayerResult,
-  ReasoningTask,
 } from '../core/types.js';
+import { defaultLayerConfig } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
-import { GeminiCLILayer } from '../layers/GeminiCLILayer.js';
+import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
 import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
@@ -24,7 +22,7 @@ import fs from 'fs/promises';
 export class DocumentAnalysis {
   private layerManager: LayerManager;
   private claudeLayer: ClaudeCodeLayer;
-  private geminiLayer: GeminiCLILayer;
+  private antigravityLayer: AntigravityCLILayer;
   private aiStudioLayer: AIStudioLayer;
   private authVerifier: AuthVerifier;
   
@@ -37,16 +35,10 @@ export class DocumentAnalysis {
 
   constructor() {
     // Create default config for LayerManager
-    const defaultConfig = {
-      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-      claude: { code_path: 'claude', timeout: 300000 },
-      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
-      cache: { enabled: true, ttl: 3600 },
-      logging: { level: 'info' as const },
-    };
+    const defaultConfig = defaultLayerConfig();
     this.layerManager = new LayerManager(defaultConfig);
     this.claudeLayer = new ClaudeCodeLayer();
-    this.geminiLayer = new GeminiCLILayer();
+    this.antigravityLayer = new AntigravityCLILayer();
     this.aiStudioLayer = new AIStudioLayer();
     this.authVerifier = new AuthVerifier();
   }
@@ -81,16 +73,24 @@ export class DocumentAnalysis {
         const analysisResult = await this.executeAnalysis(args, processedDocs);
         
         // Generate comprehensive summary if multiple documents
-        const summary = args.documents.length > 1 
+        const summary = args.documents.length > 1
           ? await this.generateSummary(analysisResult, args)
           : null;
-        
+
         const totalDuration = Date.now() - startTime;
-        
+
+        const analysisText = typeof analysisResult === 'string'
+          ? analysisResult
+          : JSON.stringify(analysisResult);
+
         return {
           success: true,
           analysis_type: args.analysis_type,
-          content: typeof analysisResult === 'string' ? analysisResult : JSON.stringify(analysisResult),
+          // The summary was generated -- at the cost of a real model call --
+          // and then dropped on the floor, so multi-document analysis paid for
+          // it and returned without it. DocumentAnalysisResult has no field of
+          // its own for a summary, so it leads the content it summarises.
+          content: summary ? `${summary}\n\n---\n\n${analysisText}` : analysisText,
           documents_processed: args.documents,
           processing_time: totalDuration,
           insights: await this.generateInsights(analysisResult, args),
@@ -113,17 +113,23 @@ export class DocumentAnalysis {
   /**
    * Analyze single document with detailed examination
    */
+  /**
+   * @param analysisType Narrowed to the values analyzeDocuments actually
+   * accepts. It used to be the much wider `AnalysisType` and was then ignored,
+   * so `analyzeSingleDocument(p, 'extraction')` typechecked and quietly
+   * returned a summary.
+   */
   async analyzeSingleDocument(
     documentPath: string,
-    analysisType: AnalysisType = 'comprehensive',
+    analysisType: DocumentAnalysisArgs['analysis_type'] = 'summary',
     options?: { depth?: 'shallow' | 'medium' | 'deep'; extractImages?: boolean }
   ): Promise<DocumentAnalysisResult> {
     return this.analyzeDocuments({
       documents: [documentPath],
-      analysis_type: 'summary',
+      analysis_type: analysisType,
       options: {
-        depth: options?.depth || 'medium',
-        extractMetadata: options?.extractImages || false,
+        depth: options?.depth ?? 'medium',
+        extractMetadata: options?.extractImages ?? false,
       },
     });
   }
@@ -142,6 +148,10 @@ export class DocumentAnalysis {
     return this.analyzeDocuments({
       documents: documentPaths,
       analysis_type: 'comparison',
+      // comparisonType was accepted and then discarded, so asking for
+      // 'differences' produced the same request as 'similarity'. It reaches the
+      // model through output_requirements, which is what that field is for.
+      output_requirements: `Comparison focus: ${comparisonType}`,
       options: {
         depth: 'deep',
         detailed: true,
@@ -480,7 +490,7 @@ Please extract the complete text content while maintaining readability and struc
     }
     
     if (requiredLayers.includes('gemini')) {
-      initPromises.push(this.geminiLayer.initialize());
+      initPromises.push(this.antigravityLayer.initialize());
     }
     
     if (requiredLayers.includes('aistudio')) {
@@ -506,7 +516,11 @@ Please extract the complete text content while maintaining readability and struc
       path.extname(doc).toLowerCase() === '.pdf'
     );
     
-    if (hasPDFs || (args.options?.extractMetadata) || (args.options?.structured)) {
+    // Explicit `=== true` rather than `??`: this is a condition, not a default.
+    // Both flags are optional booleans, so `||` is what the logic wants -- a
+    // `false` must fall through to the next check, which `??` would stop.
+    // Comparing keeps the meaning and takes the rule out of the picture.
+    if (hasPDFs || args.options?.extractMetadata === true || args.options?.structured === true) {
       layers.add('aistudio');
     }
     
@@ -524,7 +538,8 @@ Please extract the complete text content while maintaining readability and struc
   private convertPathsToFileRefs(documentPaths: string[]): FileReference[] {
     return documentPaths.map(path => ({
       path,
-      type: 'document' as any,
+      // 'document' is a member of FileType, so the cast was never needed.
+      type: 'document' as const,
       encoding: 'utf-8',
     }));
   }
@@ -539,15 +554,16 @@ Please extract the complete text content while maintaining readability and struc
 
         for (const doc of documents) {
           const stats = await fs.stat(doc.path);
-          const fileType = this.determineDocumentType(doc.path);
-          
+          // determineDocumentType() was called here and discarded: the
+          // FileReference below hardcodes type 'document' regardless.
+
           // Preprocess document (handles PDF text extraction)
           const preprocessed = await this.preprocessDocument(doc.path);
           
           const processedDoc: FileReference = {
             ...doc,
             size: stats.size,
-            type: 'document' as any,
+            type: 'document' as const,
             encoding: doc.encoding || 'utf-8',
             // Add extracted content for PDFs
             content: preprocessed.content,
@@ -750,7 +766,7 @@ Please extract the complete text content while maintaining readability and struc
       request: 'Organize and structure the extracted data into a comprehensive format',
       inputs: {
         extractions: extractions,
-        dataTypes: args.options?.extractionType?.split(',') || [],
+        dataTypes: args.options?.extractionType?.split(',') ?? [],
       },
     });
     
@@ -766,7 +782,7 @@ Please extract the complete text content while maintaining readability and struc
    */
   private async executeComparativeAnalysis(
     documents: FileReference[],
-    args: DocumentAnalysisArgs
+    _args: DocumentAnalysisArgs
   ): Promise<any> {
     if (documents.length < 2) {
       throw new Error('Comparative analysis requires at least 2 documents');
@@ -807,7 +823,7 @@ Please extract the complete text content while maintaining readability and struc
    */
   private async executeContextualAnalysis(
     documents: FileReference[],
-    args: DocumentAnalysisArgs
+    _args: DocumentAnalysisArgs
   ): Promise<any> {
     // First, extract document content
     const documentData = [];
@@ -826,7 +842,7 @@ Please extract the complete text content while maintaining readability and struc
     }
     
     // Use Gemini for contextual grounding
-    const contextualResult = await this.geminiLayer.execute({
+    const contextualResult = await this.antigravityLayer.execute({
       action: 'contextual_analysis',
       prompt: `Analyze these documents in current context and provide relevant background information: ${JSON.stringify(documentData)}`,
       useSearch: true,
@@ -854,7 +870,7 @@ Please extract the complete text content while maintaining readability and struc
    */
   private async executeTranslationAnalysis(
     documents: FileReference[],
-    args: DocumentAnalysisArgs
+    _args: DocumentAnalysisArgs
   ): Promise<any> {
     const translations = [];
     
@@ -882,7 +898,7 @@ Please extract the complete text content while maintaining readability and struc
    */
   private async executeGeneralAnalysis(
     documents: FileReference[],
-    args: DocumentAnalysisArgs
+    _args: DocumentAnalysisArgs
   ): Promise<any> {
     const results = [];
     
@@ -935,7 +951,7 @@ Please extract the complete text content while maintaining readability and struc
   /**
    * Generate insights from analysis
    */
-  private async generateInsights(analysisResult: any, args: DocumentAnalysisArgs): Promise<string[]> {
+  private async generateInsights(analysisResult: any, _args: DocumentAnalysisArgs): Promise<string[]> {
     try {
       const insightsResult = await this.claudeLayer.execute({
         action: 'complex_reasoning',

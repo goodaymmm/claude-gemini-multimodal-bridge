@@ -1,7 +1,9 @@
 import { spawn } from 'child_process';
-import { ClaudeRequest, ClaudeResponse, EnhancementPlan, RequestAnalysis } from '../core/types.js';
+import { ClaudeRequest, defaultLayerConfig, EnhancementPlan, RequestAnalysis } from '../core/types.js';
+import { resolveTrustedCommand } from '../utils/processUtils.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
+import { pickFinalResultText } from '../utils/workflowUtils.js';
 import { RequestAnalyzer } from './RequestAnalyzer.js';
 import { CapabilityDetector } from '../intelligence/CapabilityDetector.js';
 import { LayerManager } from '../core/LayerManager.js';
@@ -25,13 +27,7 @@ export class ClaudeProxy {
     this.capabilityDetector = new CapabilityDetector();
     
     // Create default config for LayerManager
-    const defaultConfig = {
-      gemini: { api_key: '', model: 'gemini-2.5-pro', timeout: 60000, max_tokens: 16384, temperature: 0.2 },
-      claude: { code_path: 'claude', timeout: 300000 },
-      aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
-      cache: { enabled: true, ttl: 3600 },
-      logging: { level: 'info' as const },
-    };
+    const defaultConfig = defaultLayerConfig();
     this.layerManager = new LayerManager(defaultConfig);
   }
 
@@ -124,7 +120,7 @@ export class ClaudeProxy {
             id: `proxy-workflow-${Date.now()}`,
             steps: plan.layers.map((layer, index) => ({
               id: `step-${index}`,
-              layer: layer as any,
+              layer,
               action: this.getActionForLayer(layer, analysis),
               input: {
                 request: request.originalCommand,
@@ -280,21 +276,15 @@ export class ClaudeProxy {
       }
     }
     
-    // Try system PATH
-    try {
-      const { execSync } = await import('child_process');
-      const output = execSync('which claude 2>/dev/null || where claude 2>nul', { 
-        encoding: 'utf8',
-        stdio: 'pipe'
-      });
-      
-      const paths = output.trim().split('\n').filter(p => p && !p.includes('cgmb'));
-      if (paths.length > 0) {
-        logger.debug('Found Claude in PATH', { path: paths[0] });
-        return paths[0] || null;
-      }
-    } catch {
-      // System PATH lookup failed
+    // System PATH, through the shared trusted resolver.
+    //
+    // This ran `which claude || where claude` in a shell and took the first
+    // line unchecked, so a claude binary inside the working tree was adopted
+    // here regardless of any check applied elsewhere.
+    const resolved = resolveTrustedCommand('claude');
+    if (resolved !== undefined && !resolved.includes('cgmb')) {
+      logger.debug('Found Claude in PATH', { path: resolved });
+      return resolved;
     }
     
     logger.error('Original Claude Code not found');
@@ -346,7 +336,8 @@ export class ClaudeProxy {
         } else {
           return 'synthesize_response';
         }
-      case 'gemini':
+      case 'antigravity':
+      case 'gemini': // deprecated alias
         if (analysis.enhancementType === 'grounding') {
           return 'grounded_search';
         } else {
@@ -367,18 +358,14 @@ export class ClaudeProxy {
    * Output enhanced result to user
    */
   private outputEnhancedResult(result: any, plan: EnhancementPlan): void {
-    // Find the primary result (usually from the last successful layer)
-    const layerResults = Object.values(result.results) as any[];
-    const primaryResult = layerResults.find(r => r.success && r.data);
-    
-    if (primaryResult?.data) {
-      if (typeof primaryResult.data === 'string') {
-        console.log(primaryResult.data);
-      } else if (primaryResult.data.content) {
-        console.log(primaryResult.data.content);
-      } else {
-        console.log(JSON.stringify(primaryResult.data, null, 2));
-      }
+    // The comment above says "usually from the last successful layer", but the
+    // code took the *first* one, and printed an MCP content array through
+    // console.log -- which renders it as [object Object]. Shares the extraction
+    // with CGMBServer so the two cannot disagree about what the answer is.
+    const answer = pickFinalResultText(Object.values(result.results ?? {}));
+
+    if (answer !== null) {
+      console.log(answer);
     } else {
       // Fallback: show summary
       console.log('Enhanced analysis completed successfully.');
