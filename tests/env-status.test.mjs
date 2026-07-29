@@ -17,7 +17,10 @@
  */
 
 import assert from 'node:assert/strict';
-import { afterEach, describe, it } from 'node:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, afterEach, describe, it } from 'node:test';
 
 import { SmartEnvLoader } from '../dist/utils/envLoader.js';
 
@@ -109,5 +112,74 @@ describe('what the status report shows', () => {
     const status = SmartEnvLoader.getInstance().getEnvironmentStatus();
     assert.deepEqual(status.deprecatedVars, ['GEMINI_API_KEY']);
     assert.ok('GEMINI_API_KEY' in status.availableVars, 'and then it must be shown');
+  });
+});
+
+describe('finding a .env from inside a project', () => {
+  // Review finding. getDefaultSearchPaths went cwd -> findProjectRoot ->
+  // CGMB's own package directory, and findProjectRoot only answers for a
+  // package.json that is CGMB itself, so a host project's root was invisible.
+  // Measured: with .env at <proj> and cwd at <proj>/subdir, the loader reported
+  // its source as CGMB's own installed .env -- a different credential, used
+  // silently. Running a CLI from a subdirectory is ordinary; this is the walk
+  // that makes the file reachable.
+
+  const scratch = mkdtempSync(join(tmpdir(), 'cgmb-env-search-'));
+  after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const ancestors = start => SmartEnvLoader.getInstance().ancestorsUpToProjectRoot(start);
+
+  /** <root>/a/b, with a marker file at <root>. */
+  function projectWith(marker) {
+    const root = mkdtempSync(join(scratch, 'proj-'));
+    if (marker === 'package.json') {
+      writeFileSync(join(root, 'package.json'), '{}', 'utf8');
+    } else if (marker === '.git') {
+      mkdirSync(join(root, '.git'));
+    }
+    const deep = join(root, 'a', 'b');
+    mkdirSync(deep, { recursive: true });
+    return { root, deep };
+  }
+
+  it('walks up to a package.json root', () => {
+    const { root, deep } = projectWith('package.json');
+
+    const found = ancestors(deep);
+    assert.ok(found.includes(root), 'the root holding the .env must be searched');
+    assert.equal(found[found.length - 1], root, 'and the walk stops there');
+  });
+
+  it('accepts .git as the root marker too', () => {
+    // Not every project using the CLI is a Node project.
+    const { root, deep } = projectWith('.git');
+
+    assert.ok(ancestors(deep).includes(root));
+  });
+
+  it('does not climb past the root into $HOME or /', () => {
+    const { root, deep } = projectWith('package.json');
+
+    for (const found of ancestors(deep)) {
+      assert.ok(
+        found.startsWith(root),
+        `${found} is above the project root; a stray .env up there is not this project's`
+      );
+    }
+  });
+
+  it('returns nothing when no project root exists', () => {
+    // Nothing establishes where a project would even be, so there is no
+    // defensible place to stop -- better to search nothing than everything.
+    const orphan = join(mkdtempSync(join(scratch, 'orphan-')), 'x', 'y');
+    mkdirSync(orphan, { recursive: true });
+
+    assert.deepEqual(ancestors(orphan), []);
+  });
+
+  it('leaves the working directory to the caller', () => {
+    const { deep } = projectWith('package.json');
+
+    assert.ok(!ancestors(deep).includes(deep), 'cwd is already search path #1');
   });
 });

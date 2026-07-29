@@ -261,16 +261,23 @@ function localInstallRoot(env = process.env) {
 }
 
 /**
- * Whether the user still has to build this package before it will run.
+ * Whether this copy of CGMB is a source checkout rather than a published one.
  *
- * "Not a global install" is not the same as "a source checkout": installing
- * CGMB as a dependency is a local install of a published tarball, which ships
- * dist/ already, and telling those users to run `npm run build` sends them at
- * their own project's build script. The honest test is whether the entry point
- * exists -- absent only in a checkout that has not been built yet.
+ * "Not a global install" was the first attempt and it recommended `npm run
+ * build` to anyone installing CGMB as a dependency. The second attempt asked
+ * whether dist/cli.js existed, which is wrong in the other direction: dist/ is
+ * gitignored, so a checkout that was built and then pulled, or had its branch
+ * switched, keeps a stale entry point and reads as up to date. Nothing on disk
+ * can distinguish a stale build from a current one.
+ *
+ * src/ and .git are the reliable signal instead -- `files` ships neither, so a
+ * published copy has neither. In a checkout the build step is always offered,
+ * regardless of what dist/ holds: rebuilding is cheap and harmless, while
+ * running a stale build is neither.
  */
-function needsBuildStep(packageRoot = path.join(__dirname, '..')) {
-  return !fs.existsSync(path.join(packageRoot, 'dist', 'cli.js'));
+function isSourceCheckout(packageRoot = path.join(__dirname, '..')) {
+  return fs.existsSync(path.join(packageRoot, 'src'))
+    || fs.existsSync(path.join(packageRoot, '.git'));
 }
 
 // Setup environment file
@@ -471,7 +478,7 @@ function showCompletionSummary(results) {
         '   Get a key: https://aistudio.google.com/app/apikey'
       : 'Edit .env and add your AI Studio API key:\n' +
         '   Get a key: https://aistudio.google.com/app/apikey',
-    ...(needsBuildStep() ? ['Build the project:\n   npm run build'] : []),
+    ...(isSourceCheckout() ? ['Build the project:\n   npm run build'] : []),
     'Verify installation:\n   cgmb verify',
     'Set up authentication:\n   cgmb auth --interactive',
     ...(results['MCP Integration'] ? [] : ['Set up Claude Code MCP integration:\n   cgmb setup-mcp']),
@@ -527,7 +534,7 @@ module.exports = {
   requiredNodeMajor,
   isGlobalInstall,
   localInstallRoot,
-  needsBuildStep,
+  isSourceCheckout,
   setupEnvironment,
 };
 
@@ -611,17 +618,26 @@ process.on('SIGTERM', () => {
   process.exit(1);
 });
 
-// Skip postinstall in CI environments
-if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
-  log('🔄 CI environment detected, skipping interactive setup', 'info');
-  process.exit(0);
-}
-
 // Only run the installer when executed as a script.
 //
 // Without this guard, `require()`ing the file to test its version check ran the
 // whole setup -- npm installs and all.
 if (require.main === module) {
+  // Skip postinstall in CI environments.
+  //
+  // This used to sit above the guard, at module scope, so merely requiring this
+  // file under CI called process.exit(0) before any test could run. Measured on
+  // this repository: `CI=true npm test` reported 152 tests where a local run
+  // reported 165 -- the thirteen missing ones were every case in the two files
+  // that import this module, including the entire regression guard for the
+  // install-kind detection. Exit code 0, so CI stayed green while proving
+  // nothing. Inside the guard the skip still applies to the only situation it
+  // was for: npm running this as a script.
+  if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
+    log('🔄 CI environment detected, skipping interactive setup', 'info');
+    process.exit(0);
+  }
+
   // Skip postinstall during npm publish
   if (process.env.npm_lifecycle_event === 'prepublish' || process.env.npm_lifecycle_event === 'prepare') {
     log('📦 Publish process detected, skipping setup', 'info');

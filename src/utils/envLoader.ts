@@ -157,7 +157,24 @@ export class SmartEnvLoader {
     // 1. Current working directory
     paths.push(process.cwd());
 
-    // 2. Look for package.json to find project root
+    // 2. Ancestors of the working directory, up to the project root.
+    //
+    // Running a CLI from a subdirectory of your project is ordinary, and the
+    // .env belongs at the root. Without this, a run from <proj>/subdir skipped
+    // straight past <proj>/.env and -- measured -- landed on step 3, CGMB's own
+    // package directory, quietly using whatever credential lived there. Not
+    // finding the file would have been better than finding a different one.
+    //
+    // findProjectRoot below cannot serve here: it only returns a directory
+    // whose package.json is CGMB itself, so a host project's root is invisible
+    // to it. Different question, different answer.
+    for (const ancestor of this.ancestorsUpToProjectRoot(process.cwd())) {
+      if (!paths.includes(ancestor)) {
+        paths.push(ancestor);
+      }
+    }
+
+    // 3. Look for package.json to find project root
     const projectRoot = await this.findProjectRoot();
     if (projectRoot && projectRoot !== process.cwd()) {
       paths.push(projectRoot);
@@ -197,6 +214,40 @@ export class SmartEnvLoader {
     }
 
     return paths;
+  }
+
+  /**
+   * Directories between `start` and the project root that contains it.
+   *
+   * A project root is a directory holding package.json or .git -- the same
+   * markers every other tool uses. The walk stops there rather than continuing
+   * to the filesystem root, so a stray $HOME/.env or /.env is never picked up
+   * by a run that happens to be deep in a tree. When no marker is found the
+   * result is empty: nothing establishes where a "project" would even be.
+   *
+   * `start` itself is excluded; the caller already searched the working
+   * directory.
+   */
+  ancestorsUpToProjectRoot(start: string): string[] {
+    const ancestors: string[] = [];
+    let current = start;
+
+    while (current !== dirname(current)) {
+      const isProjectRoot = existsSync(join(current, 'package.json'))
+        || existsSync(join(current, '.git'));
+
+      if (current !== start) {
+        ancestors.push(current);
+      }
+
+      if (isProjectRoot) {
+        return ancestors;
+      }
+
+      current = dirname(current);
+    }
+
+    return [];
   }
 
   /**

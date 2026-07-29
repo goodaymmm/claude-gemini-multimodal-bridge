@@ -35,7 +35,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const {
   isGlobalInstall,
   localInstallRoot,
-  needsBuildStep,
+  isSourceCheckout,
   setupEnvironment,
 } = require(join(HERE, '..', 'scripts', 'postinstall.cjs'));
 
@@ -138,19 +138,38 @@ describe('recognising the kind of install, against real npm', () => {
 });
 
 describe('whether to tell the user to build', () => {
-  it('stays silent when the entry point is already there', () => {
-    // Every published copy: `files` ships dist, so a dependency install never
-    // needs building. Recommending it there sends the user at their own
-    // project's build script.
-    const dir = mkdtempSync(join(scratch, 'built-'));
-    mkdirSync(join(dir, 'dist'));
-    writeFileSync(join(dir, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
+  /** A directory shaped like one of the ways CGMB can arrive on disk. */
+  function copyShapedLike({ src = false, git = false, dist = false }) {
+    const dir = mkdtempSync(join(scratch, 'shape-'));
+    if (src) { mkdirSync(join(dir, 'src')); }
+    if (git) { mkdirSync(join(dir, '.git')); }
+    if (dist) {
+      mkdirSync(join(dir, 'dist'));
+      writeFileSync(join(dir, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
+    }
+    return dir;
+  }
 
-    assert.equal(needsBuildStep(dir), false);
+  it('stays silent for a published copy', () => {
+    // `files` ships dist but neither src nor .git, so this is what every
+    // install from the registry looks like. Recommending a build here sends
+    // the user at their own project's build script.
+    assert.equal(isSourceCheckout(copyShapedLike({ dist: true })), false);
   });
 
-  it('asks for a build only when there is nothing to run', () => {
-    assert.equal(needsBuildStep(mkdtempSync(join(scratch, 'checkout-'))), true);
+  it('recognises a checkout by src or by .git', () => {
+    assert.equal(isSourceCheckout(copyShapedLike({ src: true })), true);
+    assert.equal(isSourceCheckout(copyShapedLike({ git: true })), true);
+  });
+
+  it('still offers the build when a checkout already has a dist', () => {
+    // Review finding. dist/ is gitignored, so a checkout that was built and
+    // then pulled, or had its branch switched, keeps an entry point that is
+    // there but out of date -- and asking whether dist/cli.js exists called
+    // that up to date. Nothing on disk separates a stale build from a current
+    // one, so the offer stands: rebuilding is cheap, running a stale build is
+    // not.
+    assert.equal(isSourceCheckout(copyShapedLike({ src: true, git: true, dist: true })), true);
   });
 });
 
@@ -192,7 +211,12 @@ describe('the .env file postinstall creates', () => {
     const ok = withEnv({ npm_config_local_prefix: proj, INIT_CWD: sub }, () => setupEnvironment());
 
     assert.equal(ok, true);
-    assert.ok(existsSync(join(proj, '.env')), 'the project root is where CGMB reads it from');
+    // SmartEnvLoader searches the working directory and then its ancestors up
+    // to this root, so a file here is reachable from anywhere inside the
+    // project. That ancestor walk was added for exactly this: without it, a run
+    // from a subdirectory skipped the file and fell through to CGMB's own
+    // package directory.
+    assert.ok(existsSync(join(proj, '.env')), 'postinstall must put it at the project root');
     assert.ok(!existsSync(join(sub, '.env')), 'not the directory npm happened to be invoked from');
   });
 

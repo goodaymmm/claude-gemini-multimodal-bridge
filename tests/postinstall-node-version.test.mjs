@@ -13,6 +13,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -75,5 +76,57 @@ describe('postinstall node version gate', () => {
     // If this fails, the suite is running on a Node the package says it does
     // not support -- worth knowing either way.
     assert.equal(checkNodeVersion(process.versions.node, requiredNodeMajor()).ok, true);
+  });
+});
+
+describe('importing this module must not end the process', () => {
+  // Review finding, high. The CI skip sat at module scope, above the
+  // `require.main === module` guard, and called process.exit(0). So requiring
+  // the file under CI killed whatever was requiring it -- which is every test
+  // in this file and in postinstall-env-file. Measured before the fix:
+  // `CI=true npm test` reported 152 tests against 165 locally, and exited 0.
+  // Thirteen cases silently absent, CI green, nothing proven.
+
+  it('loads with CI set, the way GitHub Actions runs it', () => {
+    const scriptPath = join(HERE, '..', 'scripts', 'postinstall.cjs');
+    const saved = { ci: process.env.CI, continuous: process.env.CONTINUOUS_INTEGRATION };
+
+    process.env.CI = 'true';
+    delete require.cache[require.resolve(scriptPath)];
+
+    try {
+      const reloaded = require(scriptPath);
+
+      // Reaching this line is the assertion: before the fix the process was
+      // gone by now. The callable check keeps it from passing vacuously.
+      assert.equal(typeof reloaded.checkNodeVersion, 'function');
+      assert.equal(reloaded.checkNodeVersion(process.versions.node, requiredNodeMajor()).ok, true);
+    } finally {
+      if (saved.ci === undefined) { delete process.env.CI; } else { process.env.CI = saved.ci; }
+      if (saved.continuous === undefined) {
+        delete process.env.CONTINUOUS_INTEGRATION;
+      } else {
+        process.env.CONTINUOUS_INTEGRATION = saved.continuous;
+      }
+      delete require.cache[require.resolve(scriptPath)];
+    }
+  });
+
+  it('still skips the setup when npm runs it as a script under CI', () => {
+    // The other half: moving the check must not disable it where it belongs.
+    // npm runs postinstall as a script, and an unattended CI install should not
+    // go through interactive setup.
+    const result = spawnSync(process.execPath, [join(HERE, '..', 'scripts', 'postinstall.cjs')], {
+      env: { ...process.env, CI: 'true' },
+      encoding: 'utf8',
+      timeout: 60000,
+      windowsHide: true,
+    });
+
+    assert.equal(result.status, 0, 'a CI install must not fail');
+    assert.match(
+      `${result.stdout}${result.stderr}`, /CI environment detected/,
+      'and it must say it skipped rather than quietly running the setup'
+    );
   });
 });
