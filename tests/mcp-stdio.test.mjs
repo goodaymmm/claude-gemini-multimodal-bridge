@@ -60,12 +60,13 @@ function runServe({
   dropNodeEnv = false,
   args = [],
   until = stdout => sawInitializeResponse(stdout),
+  cli = CLI,
 } = {}) {
   return new Promise(resolve => {
     const env = { ...process.env, ...overrides };
     if (dropNodeEnv) { delete env.NODE_ENV; }
 
-    const child = spawn(process.execPath, [CLI, 'serve', ...args], {
+    const child = spawn(process.execPath, [cli, 'serve', ...args], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env,
       windowsHide: true,
@@ -73,6 +74,8 @@ function runServe({
 
     let stdout = '';
     let stderr = '';
+    let exit;
+    let spawnError;
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', d => { stdout += d; });
@@ -92,15 +95,44 @@ function runServe({
 
     const startedAt = Date.now();
     let ready = false;
+    let poll;
+    let done = false;
+
+    // One way out, idempotent, and it always stops the poll.
+    //
+    // Both the exit handlers below and the post-kill fallback can reach this,
+    // and after a milestone the child may exit on its own during the settle
+    // window -- so it has to be safe to call more than once.
+    const finish = () => {
+      if (done) { return; }
+      done = true;
+      clearInterval(poll);
+      resolve({ stdout, stderr, ready, exit, spawnError });
+    };
+
+    // Subscribed from the start, not from inside stop().
+    //
+    // A `serve` that dies before answering -- a bad build, a missing
+    // dependency -- would otherwise go unnoticed: `until` never turns true, so
+    // the poll ran the full timeout. Five runs in this file, so a broken start
+    // cost minutes and the real reason was buried under a CI timeout instead of
+    // being reported as "exited with code 1".
+    child.on('close', (code, signal) => {
+      exit = { code, signal };
+      finish();
+    });
+    child.on('error', error => {
+      spawnError = error;
+      finish();
+    });
 
     const stop = () => {
       child.kill('SIGKILL');
-      child.on('close', () => resolve({ stdout, stderr, ready }));
       // close may not fire promptly on Windows after SIGKILL.
-      setTimeout(() => resolve({ stdout, stderr, ready }), 1500).unref();
+      setTimeout(finish, 1500).unref();
     };
 
-    const poll = setInterval(() => {
+    poll = setInterval(() => {
       if (until(stdout, stderr)) {
         ready = true;
         clearInterval(poll);
@@ -111,6 +143,14 @@ function runServe({
       }
     }, 50);
   });
+}
+
+/** Why a run ended, for an assertion message that names the cause. */
+function whyItEnded({ exit, spawnError }) {
+  if (spawnError) { return `spawn failed: ${spawnError.message}`; }
+  if (exit?.signal) { return `killed by ${exit.signal}`; }
+  if (exit?.code != null) { return `exited with code ${exit.code}`; }
+  return 'still running at the deadline';
 }
 
 /** Lines on stdout that are not parseable JSON. */
@@ -133,11 +173,12 @@ describe('MCP stdio channel', () => {
   it('writes nothing but JSON to stdout, with NODE_ENV unset', async () => {
     // The configuration that used to break it. A registration that omits
     // NODE_ENV is perfectly legal, and this is what it produced.
-    const { stdout, ready } = await runServe({ dropNodeEnv: true });
+    const run = await runServe({ dropNodeEnv: true });
+    const { stdout, ready } = run;
 
     // Insisted on first: a server that never answered has a clean stdout too,
     // and this case would then pass without having tested anything.
-    assert.ok(ready, 'the server must have answered initialize');
+    assert.ok(ready, `the server must have answered initialize (${whyItEnded(run)})`);
     assert.deepEqual(
       nonProtocolLines(stdout), [],
       'stdout is the JSON-RPC channel; log output there is a parse error for the host'
@@ -145,22 +186,23 @@ describe('MCP stdio channel', () => {
   });
 
   it('writes nothing but JSON to stdout under NODE_ENV=production', async () => {
-    const { stdout, ready } = await runServe({ env: { NODE_ENV: 'production' } });
+    const run = await runServe({ env: { NODE_ENV: 'production' } });
 
-    assert.ok(ready, 'the server must have answered initialize');
-    assert.deepEqual(nonProtocolLines(stdout), []);
+    assert.ok(run.ready, `the server must have answered initialize (${whyItEnded(run)})`);
+    assert.deepEqual(nonProtocolLines(run.stdout), []);
   });
 
   it('still reports diagnostics, on stderr', async () => {
     // Suppressing the console transport kept stdout clean but left a
     // misbehaving server silent. Diagnostics belong on stderr, which is where
     // MCP hosts look for them.
-    const { stderr, ready } = await runServe({
+    const run = await runServe({
       env: { NODE_ENV: 'production' },
       until: (stdout, err) => sawInitializeResponse(stdout) && err.trim().length > 0,
     });
+    const { stderr } = run;
 
-    assert.ok(ready, 'no diagnostics appeared on stderr before the timeout');
+    assert.ok(run.ready, `no diagnostics appeared on stderr (${whyItEnded(run)})`);
     assert.ok(
       stderr.trim().length > 0,
       'a server that says nothing anywhere cannot be diagnosed'
@@ -179,11 +221,47 @@ describe('MCP stdio channel', () => {
     const plain = await runServe({ env: { NODE_ENV: 'production' } });
     const debug = await runServe({ env: { NODE_ENV: 'production' }, args: ['--debug'] });
 
-    assert.ok(plain.ready && debug.ready, 'both runs must have reached the same point');
+    assert.ok(
+      plain.ready && debug.ready,
+      `both runs must have reached the same point (plain: ${whyItEnded(plain)}, ` +
+      `debug: ${whyItEnded(debug)})`
+    );
     assert.ok(
       debug.stderr.length > plain.stderr.length,
       '--debug must produce more output than a plain run'
     );
     assert.deepEqual(nonProtocolLines(debug.stdout), [], '--debug must not reach stdout either');
+  });
+});
+
+describe('a server that never starts', () => {
+  // Codex review, P2. The poll waits for a milestone that a dead process will
+  // never reach, and `close` was only subscribed inside stop() -- which the
+  // poll alone decides to call. So a `serve` that died on startup went
+  // unnoticed until the full timeout, five times over in this file. What made
+  // that worse than slow is that the reason was then a CI timeout rather than
+  // "exited with code 1".
+
+  it('is noticed when it exits, not when the deadline passes', async () => {
+    const startedAt = Date.now();
+    // A script that does not exist: node exits with MODULE_NOT_FOUND in well
+    // under a second, which is a faithful stand-in for a build that cannot run.
+    const run = await runServe({ cli: join(HERE, '..', 'dist', 'no-such-entry.js') });
+    const elapsed = Date.now() - startedAt;
+
+    assert.equal(run.ready, false, 'it cannot have reached the milestone');
+    assert.ok(run.exit || run.spawnError, 'the exit must have been observed');
+    // The assertion that would fail without the fix: waiting out the timeout
+    // still ends with ready === false, just minutes later.
+    assert.ok(
+      elapsed < READY_TIMEOUT_MS / 2,
+      `must resolve on exit, not on the deadline -- took ${elapsed}ms`
+    );
+  });
+
+  it('says why, so the failure is not just a timeout', () => {
+    assert.match(whyItEnded({ exit: { code: 1, signal: null } }), /code 1/);
+    assert.match(whyItEnded({ spawnError: new Error('ENOENT') }), /spawn failed: ENOENT/);
+    assert.match(whyItEnded({}), /still running/);
   });
 });
