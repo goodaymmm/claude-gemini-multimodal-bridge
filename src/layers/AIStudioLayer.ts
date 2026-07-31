@@ -100,6 +100,15 @@ export class AIStudioLayer implements LayerInterface {
   private antigravityLayer: AntigravityCLILayer | undefined;
   private mcpServerProcess?: any;
   private persistentMCPProcess?: any; // Persistent MCP process for better performance
+  /**
+   * Children currently doing billed work, so a timeout can actually end it.
+   *
+   * The CLI wraps image, audio, document and multimodal runs in a timeout that
+   * used to end only the waiting: the request kept running in the child, was
+   * still billed, and a retry on top of it paid twice. Cancellation has to
+   * reach a process, and this is the set of processes it has to reach.
+   */
+  private activeChildren = new Set<any>();
   private mcpProcessStartTime = 0; // Track when MCP process was started
   private readonly MCP_PROCESS_TTL = 10 * 60 * 1000; // 10 minutes MCP process lifetime
   private isInitialized = false;
@@ -1608,6 +1617,66 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Execute MCP command
    */
+  /**
+   * End a child immediately, by whatever means the platform requires.
+   *
+   * SIGKILL rather than SIGTERM because the point is to stop paying: a server
+   * that installed a SIGTERM handler, or is blocked inside an HTTP call, would
+   * otherwise keep going. Windows has no signals, so taskkill /T /F is the
+   * equivalent -- and /T matters, since the child may itself have spawned one.
+   */
+  static terminateChild(child: { pid?: number; kill: (signal?: string) => boolean }): void {
+    if (child.pid === undefined) {
+      return;
+    }
+
+    if (isPlatformWindows()) {
+      try {
+        execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
+        return;
+      } catch {
+        // fall through to the signal attempt below
+      }
+    }
+
+    try {
+      child.kill('SIGKILL');
+    } catch (error) {
+      logger.debug('Could not terminate MCP child', { error: (error as Error).message });
+    }
+  }
+
+  /**
+   * Stop everything this layer currently has running.
+   *
+   * Called when a CLI timeout fires. Returns how many children were ended, so a
+   * caller -- or a test -- can tell the difference between cancelling work and
+   * cancelling nothing. The persistent process is included: killing it costs a
+   * respawn on the next call, which the existing check for a killed process
+   * already handles, and leaving it running costs money.
+   */
+  abortActiveOperations(reason: string = 'cancelled'): number {
+    const children = [...this.activeChildren];
+    if (this.persistentMCPProcess && !this.persistentMCPProcess.killed) {
+      children.push(this.persistentMCPProcess);
+    }
+
+    for (const child of children) {
+      AIStudioLayer.terminateChild(child);
+    }
+
+    this.activeChildren.clear();
+    if (this.persistentMCPProcess) {
+      this.persistentMCPProcess = undefined;
+    }
+
+    if (children.length > 0) {
+      logger.info('Ended in-flight AI Studio work', { reason, processes: children.length });
+    }
+
+    return children.length;
+  }
+
   private async executeMCPCommand(command: string, params: any): Promise<any> {
     // Normalize file paths in params for cross-platform compatibility
     // This ensures Windows backslashes are converted to forward slashes before MCP transmission
@@ -1708,6 +1777,9 @@ export class AIStudioLayer implements LayerInterface {
           GOOGLE_AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
         },
       });
+
+      this.activeChildren.add(child);
+      child.once('close', () => this.activeChildren.delete(child));
 
       // Diagnostic log after successful spawn
       logger.info(`[${this.instanceId}] MCP process spawned`, {

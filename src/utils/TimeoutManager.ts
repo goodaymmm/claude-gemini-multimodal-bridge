@@ -200,17 +200,20 @@ export class TimeoutManager {
    * Create a timeout-aware promise wrapper for CLI commands
    */
   public static wrapCLICommand<T>(
-    command: () => Promise<T>,
+    command: (signal: AbortSignal) => Promise<T>,
     commandName: string,
     baseTimeout: number = 120000
   ): Promise<T> {
     const environment = this.detectEnvironment();
-    
+
     return this.executeWithTimeout(
-      async (_signal) => {
-        // Pass abort signal to command if it supports it
-        return await command();
-      },
+      // The signal reaches the command now. It used to be discarded here under
+      // a comment saying it was passed on, so a timeout only ever ended the
+      // waiting: the work carried on. Every caller of this wrapper is a billed
+      // AI Studio operation -- image, audio, document, multimodal -- so the CLI
+      // reported failure while the request kept running, and a retry on top of
+      // it paid twice for output nobody would see.
+      async (signal) => command(signal),
       {
         name: `CLI-${commandName}`,
         timeout: baseTimeout,
@@ -282,7 +285,7 @@ export async function withTimeout<T>(
  * Convenience function for CLI commands with environment detection
  */
 export async function withCLITimeout<T>(
-  operation: () => Promise<T>,
+  operation: (signal: AbortSignal) => Promise<T>,
   commandName: string,
   baseTimeout: number = 120000
 ): Promise<T> {

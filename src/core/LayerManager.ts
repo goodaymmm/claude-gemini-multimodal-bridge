@@ -116,6 +116,17 @@ export class LayerManager {
   }
 
   /**
+   * Stop in-flight work in whichever layers have been created.
+   *
+   * Deliberately does not go through the lazy getters: creating a layer in
+   * order to cancel it would start the very thing being cancelled. A layer that
+   * was never built has nothing running.
+   */
+  public abortActiveOperations(reason: string = 'cancelled'): number {
+    return this.aiStudioLayer ? this.aiStudioLayer.abortActiveOperations(reason) : 0;
+  }
+
+  /**
    * Get Claude layer with lazy initialization
    */
   public getClaudeLayer(): ClaudeCodeLayer {

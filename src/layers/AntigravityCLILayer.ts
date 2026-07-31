@@ -221,7 +221,11 @@ export class AntigravityCLILayer implements LayerInterface {
 
         // Check cache for search-enabled tasks (CGMB unique feature)
         if (task.useSearch !== false) {
-          const cachedResult = await this.searchCache.get(prompt, 'antigravity');
+          const cachedResult = await this.searchCache.get(
+            prompt,
+            'antigravity',
+            this.normalizeModel(task.model, this.DEFAULT_MODEL)
+          );
           if (cachedResult) {
             logger.debug('Cache hit for Antigravity search', {
               promptLength: prompt.length,
@@ -255,7 +259,7 @@ export class AntigravityCLILayer implements LayerInterface {
             grounded: true,
             search_used: true,
             timestamp: Date.now()
-          }, 'antigravity', duration);
+          }, 'antigravity', duration, this.normalizeModel(task.model, this.DEFAULT_MODEL));
         }
 
         return {
