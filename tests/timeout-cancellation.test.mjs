@@ -47,10 +47,16 @@ const settle = (ms = 700) => new Promise(resolve => setTimeout(resolve, ms));
 function stubbornChild() {
   const marks = join(scratch, `marks-${Math.random().toString(36).slice(2)}.txt`);
   const script = join(scratch, `stubborn-${Math.random().toString(36).slice(2)}.cjs`);
+  // Every literal in the generated file comes from JSON.stringify rather than
+  // hand-escaping. Writing '\n' inside a template literal puts a real newline
+  // into the generated source, which is a syntax error inside a quoted string --
+  // that is what broke the stub in the end-to-end case below, and it broke
+  // silently, because a fixture that dies on startup looks exactly like a
+  // fixture that was cancelled. Building the literal removes the choice.
   writeFileSync(script, [
     "process.on('SIGTERM', () => {});",
-    `const fs = require('fs');`,
-    `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, 'tick\\n'), 40);`,
+    "const fs = require('fs');",
+    `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, ${JSON.stringify('tick\n')}), 40);`,
   ].join('\n'), 'utf8');
 
   const child = spawn(process.execPath, [script], { stdio: 'ignore' });
@@ -188,9 +194,9 @@ describe('the production spawn path, end to end', () => {
     writeFileSync(script, [
       "process.on('SIGTERM', () => {});",
       "const fs = require('fs');",
-      `fs.appendFileSync(${JSON.stringify(starts)}, process.pid + '\n');`,
+      `fs.appendFileSync(${JSON.stringify(starts)}, process.pid + ${JSON.stringify('\n')});`,
       "process.stdin.resume();",
-      `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, 'work\n'), 40);`,
+      `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, ${JSON.stringify('work\n')}), 40);`,
     ].join('\n'), 'utf8');
 
     const count = file => {
@@ -225,8 +231,21 @@ describe('the production spawn path, end to end', () => {
         await settle(100);
       }
       spawned = [...layer.activeChildren][0];
-      assert.ok(spawned?.pid, 'the production path must have spawned something to cancel');
       await settle(300); // let it do some billable work before we give up on it
+
+      // Everything this case concludes rests on the stub having actually run,
+      // so that is asserted rather than assumed. Without these the final
+      // "dead, and no further work" held just as well for a process that died
+      // on startup -- which is what happened: the generated script had a syntax
+      // error and the case passed anyway, even with cancellation removed.
+      assert.equal(stub.starts(), 1, 'the stand-in server must have started exactly once');
+      assert.ok(stub.ticks() > 0, 'and it must have been doing work to be worth cancelling');
+      assert.ok(spawned?.pid, 'the production path must have spawned something to cancel');
+      assert.equal(isAlive(spawned.pid), true, 'it must still be running when we give up on it');
+      assert.ok(
+        layer.activeChildren.has(spawned),
+        'and the production path -- not the test -- must be what registered it'
+      );
 
       // The inner budget expiring long before the CLI one, as it does for
       // document and multimodal work.
