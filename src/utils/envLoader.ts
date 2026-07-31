@@ -158,6 +158,26 @@ export class SmartEnvLoader {
     // 1. Current working directory
     paths.push(process.cwd());
 
+    // Without a home directory, stop here.
+    //
+    // Everything below this line is CGMB going looking on the user's behalf --
+    // up the tree, into its own package, into the global install prefix. The
+    // home directory is what bounds the first of those, and returning an empty
+    // ancestor list while letting the rest proceed was a half-measure: in a
+    // container running as an arbitrary UID with no passwd entry and no HOME,
+    // the host project's .env was correctly excluded and the .env sitting in
+    // CGMB's own install directory was read instead. Same class of mistake,
+    // different directory. If the boundary cannot be established, the only
+    // directory CGMB may read a credential from is the one it was pointed at.
+    //
+    // Explicit configuration is unaffected: variables already in the
+    // environment are checked by the caller regardless of what this returns.
+    const homes = this.homeDirectories();
+    if (homes.length === 0) {
+      logger.debug('No home directory could be resolved; limiting the .env search to the working directory');
+      return paths;
+    }
+
     // 2. Ancestors of the working directory, up to the project root.
     //
     // Running a CLI from a subdirectory of your project is ordinary, and the
@@ -264,14 +284,35 @@ export class SmartEnvLoader {
       return false;
     }
 
+    const left = SmartEnvLoader.statIdentity(a);
+    const right = SmartEnvLoader.statIdentity(b);
+    return left !== undefined && right !== undefined
+      && SmartEnvLoader.sameFileIdentity(left, right);
+  }
+
+  /**
+   * A directory's filesystem identity, or undefined if it is not on disk.
+   *
+   * Read as BigInt. The default statSync hands dev and ino back as JavaScript
+   * numbers, which cannot hold every 64-bit inode: this machine already reports
+   * inodes around 6.2e15 against a safe-integer ceiling of 9.0e15, so two
+   * distinct inodes on a filesystem that numbers them higher would round to the
+   * same value. That failure is the dangerous direction -- it would declare an
+   * ordinary ancestor to be the home directory and drop the project root from
+   * the search entirely.
+   */
+  private static statIdentity(path: string): { dev: bigint; ino: bigint } | undefined {
     try {
-      const left = statSync(a);
-      const right = statSync(b);
-      return left.dev === right.dev && left.ino === right.ino;
+      const stats = statSync(path, { bigint: true });
+      return { dev: stats.dev, ino: stats.ino };
     } catch {
-      // One of them is not on disk, so it is not the home directory.
-      return false;
+      return undefined;
     }
+  }
+
+  /** Whether two filesystem identities are the same one. Split out to be tested exactly. */
+  static sameFileIdentity(a: { dev: bigint; ino: bigint }, b: { dev: bigint; ino: bigint }): boolean {
+    return a.dev === b.dev && a.ino === b.ino;
   }
 
   /**
@@ -286,32 +327,45 @@ export class SmartEnvLoader {
    * environment load before it could even look at the variables already set.
    *
    * Anything relative or blank is rejected for the same reason: it would
-   * resolve against cwd. When nothing usable turns up the caller gets
-   * undefined and does not walk at all -- without a ceiling there is no safe
-   * place to stop, and the working directory is still searched regardless.
+   * resolve against cwd.
+   *
+   * Every usable candidate is kept, not just the first. $HOME and the effective
+   * user's home are different facts and both are ceilings: under sudo, a
+   * service manager or a container, HOME=/root while the real home is
+   * /home/u -- measured, taking only the first left /home/u on the search list,
+   * which is precisely what a ceiling is for.
+   *
+   * An empty result means no ceiling could be established at all, and the
+   * caller must not walk anywhere on its own.
    */
-  private resolveHomeDirectory(explicit?: string): string | undefined {
-    const candidates = [
-      () => explicit,
-      () => homedir(),
-      () => userInfo().homedir,
-    ];
+  homeDirectories(
+    explicit?: string,
+    sources: Array<() => string | undefined> = [() => homedir(), () => userInfo().homedir]
+  ): string[] {
+    const found: string[] = [];
+    const seen = new Set<string>();
 
-    for (const candidate of candidates) {
+    for (const source of [() => explicit, ...sources]) {
       let value: string | undefined;
       try {
-        value = candidate();
+        value = source();
       } catch {
         continue; // no passwd entry, or no HOME to fall back on
       }
 
       const trimmed = value?.trim();
-      if (trimmed && isAbsolute(trimmed)) {
-        return trimmed;
+      if (!trimmed || !isAbsolute(trimmed)) {
+        continue; // blank or relative would resolve against the working directory
+      }
+
+      const key = SmartEnvLoader.canonical(trimmed);
+      if (!seen.has(key)) {
+        seen.add(key);
+        found.push(trimmed);
       }
     }
 
-    return undefined;
+    return found;
   }
 
   /**
@@ -336,8 +390,8 @@ export class SmartEnvLoader {
    * `start` itself is excluded; the caller already searched it.
    */
   ancestorsUpToProjectRoot(start: string, home?: string): string[] {
-    const ceiling = this.resolveHomeDirectory(home);
-    if (ceiling === undefined) {
+    const ceilings = this.homeDirectories(home);
+    if (ceilings.length === 0) {
       return [];
     }
 
@@ -346,7 +400,7 @@ export class SmartEnvLoader {
     let current = from;
 
     while (current !== dirname(current)) {
-      if (SmartEnvLoader.sameDirectory(current, ceiling)) {
+      if (ceilings.some(ceiling => SmartEnvLoader.sameDirectory(current, ceiling))) {
         return [];
       }
 

@@ -421,3 +421,122 @@ describe('the ceiling holds against aliases and a broken home', () => {
     assert.deepEqual(loader().ancestorsUpToProjectRoot(deep, home), []);
   });
 });
+
+describe('every home the process has, and what happens with none', () => {
+  // Three review findings, all on the same boundary, all in conditions the
+  // previous tests did not enter.
+  //
+  // Taking the first usable home meant HOME=/root under sudo or a service
+  // manager hid the effective user's own home: measured, a walk from
+  // /home/u/proj/sub returned ["/home/u/proj", "/home/u"].
+  //
+  // And "no home could be resolved" returned an empty ancestor list while
+  // getDefaultSearchPaths carried on into CGMB's own package directory and the
+  // global prefix -- so the host project's .env was excluded and an unrelated
+  // installed one was read. The test I wrote for that branch never entered it:
+  // os.userInfo() still answers after HOME is unset, and the assertion was only
+  // that an array came back. These reach the branch and say so.
+
+  const scratch = mkdtempSync(join(tmpdir(), 'cgmb-homes-'));
+  after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const loader = () => SmartEnvLoader.getInstance();
+  const failing = () => { throw new Error('no passwd entry for this uid'); };
+
+  it('keeps both the environment home and the effective user home', () => {
+    const fromEnv = mkdtempSync(join(scratch, 'env-home-'));
+    const fromUid = mkdtempSync(join(scratch, 'uid-home-'));
+
+    const homes = loader().homeDirectories(undefined, [() => fromEnv, () => fromUid]);
+
+    assert.deepEqual(homes, [fromEnv, fromUid], 'HOME and the real home are separate facts');
+  });
+
+  it('stops at the effective user home even when HOME points elsewhere', () => {
+    // The measured failure. Both directories exist, so neither is discarded for
+    // being absent -- the old code simply stopped looking after the first.
+    const stale = mkdtempSync(join(scratch, 'stale-'));
+    const real = mkdtempSync(join(scratch, 'real-'));
+    const deep = join(real, 'proj', 'sub');
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(real, 'proj', 'package.json'), '{}', 'utf8');
+    mkdirSync(join(real, '.git'));
+
+    const ceilings = loader().homeDirectories(undefined, [() => stale, () => real]);
+    assert.ok(ceilings.includes(real), 'the real home must be among the ceilings');
+
+    // And the project below it is still reachable -- the ceiling must not cost
+    // us the case the walk exists for.
+    assert.deepEqual(loader().ancestorsUpToProjectRoot(deep, stale), [join(real, 'proj')]);
+  });
+
+  it('drops blank and relative candidates without dropping the rest', () => {
+    const real = mkdtempSync(join(scratch, 'usable-'));
+
+    assert.deepEqual(
+      loader().homeDirectories('', [() => '   ', () => '../relative', () => real]),
+      [real],
+      'each of those would resolve against the working directory'
+    );
+  });
+
+  it('reports no home at all when every source fails', () => {
+    // The branch the earlier test claimed to cover and did not.
+    assert.deepEqual(
+      loader().homeDirectories(undefined, [failing, () => undefined, () => '']), []
+    );
+  });
+
+  it('searches only the working directory when there is no home', async () => {
+    // What the empty list must actually cause. Before this, the walk was
+    // skipped but the search went on into CGMB's own install -- excluding the
+    // user's project while reading a stranger's credential.
+    const instance = loader();
+    const realHomes = instance.homeDirectories;
+    instance.homeDirectories = () => [];
+
+    try {
+      const paths = await instance.getDefaultSearchPaths();
+
+      assert.deepEqual(
+        paths, [process.cwd()],
+        'no package directory, no global prefix, no ~/.cgmb -- only where we were pointed'
+      );
+    } finally {
+      instance.homeDirectories = realHomes;
+    }
+  });
+
+  it('still searches beyond the working directory when a home is known', async () => {
+    // The other half: the restriction must be the exception, not the rule.
+    const instance = loader();
+    const paths = await instance.getDefaultSearchPaths();
+
+    assert.ok(paths.length > 1, 'a normal environment must keep its wider search');
+    assert.equal(paths[0], process.cwd());
+  });
+});
+
+describe('filesystem identity is compared exactly', () => {
+  it('does not confuse inodes that differ beyond 2^53', () => {
+    // statSync without the bigint option hands these back as JavaScript
+    // numbers. Measured on this machine: inodes around 6.2e15 against a safe
+    // integer ceiling of 9.0e15, so a filesystem numbering them higher would
+    // round two distinct inodes together -- declaring an ordinary ancestor to
+    // be the home directory and dropping the project root from the search.
+    const dev = 2n ** 40n;
+
+    assert.equal(
+      SmartEnvLoader.sameFileIdentity({ dev, ino: 2n ** 53n }, { dev, ino: 2n ** 53n + 1n }),
+      false,
+      'these are two inodes, and as JavaScript numbers they are one'
+    );
+    assert.equal(Number(2n ** 53n) === Number(2n ** 53n + 1n), true, 'which is the trap');
+  });
+
+  it('separates a difference in device from a difference in inode', () => {
+    assert.equal(SmartEnvLoader.sameFileIdentity({ dev: 1n, ino: 9n }, { dev: 2n, ino: 9n }), false);
+    assert.equal(SmartEnvLoader.sameFileIdentity({ dev: 1n, ino: 9n }, { dev: 1n, ino: 8n }), false);
+    assert.equal(SmartEnvLoader.sameFileIdentity({ dev: 1n, ino: 9n }, { dev: 1n, ino: 9n }), true);
+  });
+});
