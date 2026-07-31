@@ -15,7 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -175,8 +175,30 @@ describe('claude layer: running the CLI', () => {
   it('does not let shell metacharacters in a prompt run anything', async () => {
     // The prompt is caller-controlled and arrives from MCP input. Whatever the
     // platform, it must reach the CLI as text -- never as a command line.
+    //
+    // Two things are asked. First, that the stub saw the payload *exactly*: the
+    // previous version deleted everything from STUB_SAW: to the end of output
+    // with a greedy dot-all replace before looking for INJECTED, so anything an
+    // injected command printed after the stub was erased along with it. Second,
+    // that nothing on disk changed -- a payload that spawns a shell would leave
+    // the sentinel behind, and no amount of output filtering can hide a file.
     const dir = makeStubDir('metachars', ECHO_STUB);
-    const payload = 'x" & echo INJECTED & rem "; echo INJECTED; $(echo INJECTED); `echo INJECTED`';
+    const sentinel = join(scratch, `injected-${Math.random().toString(36).slice(2)}.txt`);
+    // The raw path, not JSON.stringify: that escapes backslashes, and
+    // C:\Users\... is not a path cmd.exe can redirect to -- the injection
+    // would fail for the wrong reason and the case would pass without proving
+    // anything. Found by mutation: with the prompt deliberately put back on the
+    // command line through a shell, the escaped version still passed.
+    // Both shapes, because they defeat different placements. A payload that
+    // lands inside an existing quoted argument needs the leading quote to close
+    // it; one that is joined raw onto a command line needs no quote at all --
+    // and a leading quote there would *open* a string and neutralise the rest,
+    // which is how an earlier version of this payload managed to look safe.
+    const posix = `; touch '${sentinel}' ; $(touch '${sentinel}')`;
+    const windowsRaw = `& echo pwned > "${sentinel}" &`;
+    const windowsQuoted = `" & echo pwned > "${sentinel}" & rem "`;
+    const payload =
+      `benign-text ${posix} ${windowsRaw} ${windowsQuoted} \`touch '${sentinel}'\``;
 
     const result = await withStub(dir, async () => {
       const layer = new ClaudeCodeLayer();
@@ -184,11 +206,13 @@ describe('claude layer: running the CLI', () => {
     });
 
     assert.equal(result.success, true);
-    const output = String(result.data);
-    assert.match(output, /STUB_SAW:/, 'the stub must have been the thing that ran');
-    assert.doesNotMatch(
-      output.replace(/STUB_SAW:.*/s, ''), /INJECTED/,
-      'nothing outside the stub may have executed'
+    assert.equal(
+      String(result.data).trim(), `STUB_SAW:${payload}`,
+      'the prompt must arrive as one argument-free string, byte for byte'
+    );
+    assert.equal(
+      existsSync(sentinel), false,
+      'a shell ran the payload: the sentinel it was told to create exists'
     );
   });
 });
