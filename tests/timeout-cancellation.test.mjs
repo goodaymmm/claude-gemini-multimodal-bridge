@@ -105,11 +105,37 @@ describe('a timeout reaches the work', () => {
     assert.equal(ticks(), atTimeout, 'nothing may be done after the caller was told it failed');
   });
 
+  it('fires when the inner layer fails first, not only on its own timer', async () => {
+    // The measured hole in the previous fix. abort() lived inside the outer
+    // timer, so it only ran for the case that is not the common one: a document
+    // or multimodal run has an inner budget near 105s against a CLI timeout of
+    // 240 or 300, so the inner layer rejects first. Measured before this fix,
+    // the signal stayed unaborted and the listeners never ran, leaving the MCP
+    // child billing until its own ceiling.
+    let abortedBeforeCallerSaw = false;
+
+    await assert.rejects(() => withCLITimeout(async (signal) => {
+      signal.addEventListener('abort', () => { abortedBeforeCallerSaw = true; }, { once: true });
+      // Far inside the outer budget: this is the inner timeout, not ours.
+      await new Promise((_, reject) => setTimeout(() => reject(new Error('inner timeout')), 300));
+    }, 'inner-fails-first', 30000), /inner timeout/);
+
+    assert.equal(
+      abortedBeforeCallerSaw, true,
+      'the caller has been told it failed, so nothing may still be running for it'
+    );
+  });
+
   it('returns the result untouched when the command finishes in time', async () => {
     // Cancellation must not have cost the normal path anything.
-    const result = await withCLITimeout(async () => 'finished', 'quick', 5000);
+    let aborted = false;
+    const result = await withCLITimeout(async (signal) => {
+      signal.addEventListener('abort', () => { aborted = true; }, { once: true });
+      return 'finished';
+    }, 'quick', 5000);
 
     assert.equal(result, 'finished');
+    assert.equal(aborted, false, 'finished work has nothing to cancel');
   });
 });
 
@@ -138,5 +164,81 @@ describe('the layer can be told to stop', () => {
     assert.equal(isAlive(first.child.pid), false);
     assert.equal(isAlive(second.child.pid), false);
     assert.equal(layer.activeChildren.size, 0, 'and it must not keep pointing at dead processes');
+  });
+});
+
+describe('the production spawn path, end to end', () => {
+  // Everything above drives the wrapper. This drives what the wrapper is for:
+  // executeMCPCommand spawning a server, the layer registering it, and the
+  // cancellation reaching that process. The earlier cases wired terminateChild
+  // straight onto the listener, which is why they could pass while the real
+  // route stayed broken -- the same shape of gap the review keeps finding.
+  //
+  // resolveMCPServerPath is monkey-patched rather than given a test-only
+  // parameter or environment variable: the production surface should not grow a
+  // seam that exists only for tests.
+
+  /** A stand-in MCP server: ignores SIGTERM, records that it started, keeps working. */
+  function stubServer() {
+    const id = Math.random().toString(36).slice(2);
+    const marks = join(scratch, `mcp-marks-${id}.txt`);
+    const starts = join(scratch, `mcp-starts-${id}.txt`);
+    const script = join(scratch, `mcp-stub-${id}.cjs`);
+
+    writeFileSync(script, [
+      "process.on('SIGTERM', () => {});",
+      "const fs = require('fs');",
+      `fs.appendFileSync(${JSON.stringify(starts)}, process.pid + '\n');`,
+      "process.stdin.resume();",
+      `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, 'work\n'), 40);`,
+    ].join('\n'), 'utf8');
+
+    const count = file => {
+      try {
+        return readFileSync(file, 'utf8').split('\n').filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    return { script, ticks: () => count(marks), starts: () => count(starts) };
+  }
+
+  it('ends the spawned server when the inner layer fails first', async () => {
+    const stub = stubServer();
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => stub.script;
+
+    let spawned;
+
+    await assert.rejects(() => withCLITimeout(async (signal) => {
+      signal.addEventListener('abort', () => layer.abortActiveOperations('inner failure'), { once: true });
+
+      // The real path: this spawns the server and registers the child.
+      const inFlight = layer.executeMCPCommand('generate_image', { prompt: 'anything' });
+      inFlight.catch(() => {}); // it will end when we kill the server
+
+      // Wait for the spawn rather than guessing at it: the layer resolves the
+      // path and starts the process asynchronously, and a fixed sleep that is
+      // slightly too short would make this case pass for the wrong reason.
+      for (let waited = 0; waited < 8000 && layer.activeChildren.size === 0; waited += 100) {
+        await settle(100);
+      }
+      spawned = [...layer.activeChildren][0];
+      assert.ok(spawned?.pid, 'the production path must have spawned something to cancel');
+      await settle(300); // let it do some billable work before we give up on it
+
+      // The inner budget expiring long before the CLI one, as it does for
+      // document and multimodal work.
+      throw new Error('inner timeout');
+    }, 'production-path', 30000), /inner timeout/);
+
+    const atFailure = stub.ticks();
+    const startsAtFailure = stub.starts();
+    await settle();
+
+    assert.equal(isAlive(spawned.pid), false, 'the server was still billing when the caller gave up');
+    assert.equal(stub.ticks(), atFailure, 'no work may happen after the caller was told it failed');
+    assert.equal(stub.starts(), startsAtFailure, 'and nothing may be respawned in its place');
   });
 });

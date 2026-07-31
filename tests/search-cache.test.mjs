@@ -119,3 +119,40 @@ describe('the parts of the contract nothing was checking', () => {
     assert.equal(stats.hitCount, 0);
   });
 });
+
+describe('a time range is part of the question too', () => {
+  // Second review finding on the same file. 最近の and 最新の were folded into
+  // one token by the phrasing normalisation: measured, "最近の台風を一覧にして"
+  // and "最新の台風を一覧にして" shared a key, so a question about a span was
+  // answered from one about whatever is newest. Same class as the year, and the
+  // phrasing rewrites are where it hid.
+
+  it('keeps 最近の and 最新の apart', async () => {
+    const store = cache();
+    await store.set('最近の台風を一覧にして', { content: 'a span of storms' }, 'antigravity', 0, MODEL);
+
+    assert.equal(
+      await store.get('最新の台風を一覧にして', 'antigravity', MODEL), null,
+      'one asks about a period, the other about the newest thing'
+    );
+  });
+
+  it('keeps 新しい apart from both', async () => {
+    const store = cache();
+    await store.set('新しい仕様を教えて', { content: 'new spec' }, 'antigravity', 0, MODEL);
+
+    assert.equal(await store.get('最新の仕様を教えて', 'antigravity', MODEL), null);
+  });
+
+  it('still folds the phrasings that are only phrasings', async () => {
+    // Deliberately kept: these change how the question is asked, not what is
+    // being asked. Pinned so the line between the two stays where it was put.
+    const store = cache();
+    await store.set('AIについて教えて', { content: 'about AI' }, 'antigravity', 0, MODEL);
+
+    assert.deepEqual(
+      await store.get('AIを説明して', 'antigravity', MODEL), { content: 'about AI' },
+      'wording may be normalised'
+    );
+  });
+});

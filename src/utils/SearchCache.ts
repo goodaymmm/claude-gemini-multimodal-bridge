@@ -188,7 +188,11 @@ export class SearchCache {
       .replace(/\s+/g, ' ')
       // Normalize similar expressions
       .replace(/について教えて|を説明して|について知りたい/g, 'について')
-      .replace(/最新の|最近の|新しい/g, '最新')
+      // 最近の / 最新の are not spellings of one another: the first asks about a
+      // span, the second about whatever is newest. Folding them together served
+      // "最近の台風を一覧にして" from a cached answer to "最新の台風を一覧にして" --
+      // measured, and the same mistake as the year rewrite above. Wording may be
+      // normalised here; a time range may not.
       .replace(/具体的に|詳しく|詳細に/g, '詳細');
   }
 

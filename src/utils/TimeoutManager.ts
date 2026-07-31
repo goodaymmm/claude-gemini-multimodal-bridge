@@ -105,6 +105,25 @@ export class TimeoutManager {
       return result;
 
     } catch (error) {
+      // Whatever ended the wait, the caller is about to be told this failed --
+      // so anything still running on its behalf has to stop.
+      //
+      // abort() used to live only inside the timer above, which meant it fired
+      // for the one case that is not the common one. A document or multimodal
+      // run has an inner budget of about 105 seconds against a CLI timeout of
+      // 240 or 300, so the inner layer rejects first: measured, the signal
+      // stayed unaborted and the listeners in cli.ts never ran, leaving the MCP
+      // child billing away until its own ceiling. Failure is failure, and the
+      // boundary contract is that nothing continues past a terminal result.
+      //
+      // What this does not do: retries *inside* the operation still spawn,
+      // because the abort happens as the operation settles. Cancelling those
+      // needs the signal threaded through ErrorHandler and LayerManager, which
+      // is a separate piece of work.
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+
       // Ensure cleanup on any error
       if (timeoutId) {
         clearTimeout(timeoutId);
