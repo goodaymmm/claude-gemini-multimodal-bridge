@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -461,6 +461,10 @@ describe('subprocess output decoding', () => {
   });
 });
 
+// Read once, at load, so the scan below can tell this run's leaks from debris
+// that was already in a shared tmpdir.
+const SUITE_STARTED = Date.now();
+
 describe('workspace isolation', () => {
   it('leaves no shared, predictably-named scratch directory behind', () => {
     // Regression: every run shared <tmp>/cgmb-agy-workspace and never cleaned
@@ -472,8 +476,25 @@ describe('workspace isolation', () => {
       'the fixed shared workspace must no longer be created'
     );
 
-    // Any surviving per-run directories would mean cleanup regressed.
-    const leftovers = readdirSync(tmpdir()).filter(name => /^cgmb-agy-/.test(name));
+    // Any per-run directory created since this file loaded would mean cleanup
+    // regressed. Scoped by time on purpose: tmpdir is shared, so an unscoped
+    // scan fails on debris left by an unrelated process, by a run of an older
+    // build, or by the very defect a later case in this suite is proving is
+    // fixed -- which is what it did, reporting a leak that this run had not
+    // caused and could not clean up.
+    const leftovers = readdirSync(tmpdir())
+      .filter(name => /^cgmb-agy-/.test(name))
+      .filter(name => {
+        try {
+          const at = statSync(join(tmpdir(), name));
+          // birthtime is not recorded on every filesystem and reads as 0
+          // where it is not; mtime is, and nothing writes to a workspace
+          // after its run, so the later of the two dates the directory.
+          return Math.max(at.birthtimeMs, at.mtimeMs) >= SUITE_STARTED;
+        } catch {
+          return false; // removed while being listed: cleanup working
+        }
+      });
     assert.deepEqual(leftovers, [], `stale agy workspaces: ${leftovers.join(', ')}`);
   });
 });
@@ -830,5 +851,225 @@ describe('files are refused, not silently dropped', () => {
         /AI Studio quota exceeded/.test(error.message),
       'the fallback must fail loudly and preserve the original cause'
     );
+  });
+});
+
+describe('the real invocation, recorded by a stand-in agy', {
+  // The layer spawns the binary directly, with no shell -- which is the
+  // behaviour being protected. On Windows that means a .cmd stand-in raises
+  // EINVAL before the layer is even exercised, and the real agy there is an
+  // .exe we cannot forge. So these run on POSIX, including the WSL leg and the
+  // ubuntu CI job; on Windows nothing below is verified.
+  skip: isWindows && 'the layer spawns without a shell, so a .cmd stand-in cannot stand in for agy.exe',
+}, () => {
+  // The three suites above prove things about Node and about the test's own
+  // setup: that a pipe left open blocks, that a decoder the test builds joins
+  // chunks, that a directory the test never created is absent. None of them
+  // enters AntigravityCLILayer, so the production path could stop closing
+  // stdin, decode per chunk, inherit secrets or leave its workspace behind and
+  // they would all still pass.
+  //
+  // This drives the layer itself. The stand-in is installed through
+  // ANTIGRAVITY_CLI_PATH, which is how a user points CGMB at a non-standard
+  // install -- no test-only seam.
+
+  const RECORDER = join(HERE, 'fixtures', 'agy-recorder.cjs');
+  const layerUrl = new URL('../dist/layers/AntigravityCLILayer.js', import.meta.url).href;
+  // Built, not typed. Line endings written by hand into generated scripts is
+  // how the cancellation fixture came to be invalid JavaScript that died on
+  // startup while its case still passed.
+  const NEWLINE = String.fromCharCode(10);
+  const CRLF = String.fromCharCode(13, 10);
+  const recorderScratch = mkdtempSync(join(tmpdir(), 'cgmb-recorder-'));
+  after(() => rmSync(recorderScratch, { recursive: true, force: true }));
+
+  /**
+   * Run one execute() against the stand-in, in a child process.
+   *
+   * A child because binary discovery memoises its answer for the lifetime of a
+   * process, so a second scenario in this one would reuse the first one's
+   * decision and quietly test nothing. It also keeps the environment edits from
+   * leaking into other suites.
+   *
+   * The stand-in is a real executable -- a .cmd on Windows, a shell script with
+   * the execute bit elsewhere -- because that is what the layer spawns. A .cjs
+   * file cannot be exec'd on either platform, which is why the first attempt
+   * recorded nothing at all.
+   */
+  function installStandIn({ out, mode }) {
+    const dir = mkdtempSync(join(recorderScratch, 'bin-'));
+    const node = process.execPath;
+
+    // The recording path and mode ride in on argv, baked into this wrapper.
+    // The layer strips the environment before spawning -- deliberately, since
+    // agy is a coding agent handling caller text -- so anything passed that way
+    // never arrives.
+    const agy = join(dir, 'agy');
+    writeFileSync(agy, [
+      '#!/bin/sh',
+      `exec ${JSON.stringify(node)} ${JSON.stringify(RECORDER)}`
+        + ` --cgmb-out ${JSON.stringify(out)} --cgmb-mode ${JSON.stringify(mode)} "$@"`,
+      '',
+    ].join(NEWLINE), {
+      encoding: 'utf8',
+      mode: 0o755,
+    });
+    return agy;
+  }
+
+  async function runRecorded({ mode = 'reply', linger = false, prompt = '東京の天気' } = {}) {
+    const out = join(recorderScratch, `rec-${Math.random().toString(36).slice(2)}.json`);
+    const agy = installStandIn({ out, mode });
+
+    const script = `
+      import { AntigravityCLILayer } from ${JSON.stringify(layerUrl)};
+      const layer = new AntigravityCLILayer();
+      try {
+        const result = await layer.execute({
+          type: 'text_processing',
+          prompt: process.env.CGMB_TEST_PROMPT,
+          useSearch: false,
+        });
+        console.log('VERDICT ' + JSON.stringify({ ok: true, data: String(result?.data ?? ''), success: result?.success }));
+      } catch (error) {
+        console.log('VERDICT ' + JSON.stringify({ ok: false, message: String(error.message) }));
+      }
+      ${linger ? `
+      // Stay alive past the escalation the layer scheduled, then report what it
+      // achieved -- while this process is still running, so the answer is about
+      // the layer and not about the exit sweep that would clean up anyway.
+      await new Promise(resolve => setTimeout(resolve, 6000));
+      const { existsSync, readFileSync } = await import('node:fs');
+      const rec = JSON.parse(readFileSync(process.env.CGMB_TEST_REC, 'utf8'));
+      let alive = false;
+      try { process.kill(rec.pid, 0); alive = true; } catch {}
+      console.log('AFTER ' + JSON.stringify({ alive, workspace: existsSync(rec.cwd), pid: rec.pid }));
+      ` : ''}
+      process.exit(0);
+    `;
+
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: dirname(RECORDER),
+      env: {
+        ...process.env,
+        ANTIGRAVITY_CLI_PATH: agy,
+        ANTIGRAVITY_TIMEOUT: mode === 'slow' || mode === 'stubborn' ? '1500' : '30000',
+        CGMB_TEST_PROMPT: prompt,
+        // Handed over rather than spliced into the generated source: escaping a
+        // path into a string literal is what made the cancellation fixture
+        // invalid JavaScript that died on startup while its case still passed.
+        CGMB_TEST_REC: out,
+        // A secret the child must not pass on to agy.
+        CGMB_SECRET_PROBE: 'a-secret-the-child-must-not-see',
+        AI_STUDIO_API_KEY: 'key-that-must-not-reach-agy',
+      },
+      encoding: 'utf8',
+      timeout: 120000,
+      windowsHide: true,
+    });
+
+    const lines = (child.stdout || '').split(NEWLINE);
+    const pick = (tag) => {
+      const line = lines.find(l => l.startsWith(`${tag} `));
+      return line ? JSON.parse(line.slice(tag.length + 1)) : undefined;
+    };
+    const recorded = existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : undefined;
+    return { verdict: pick('VERDICT'), after: pick('AFTER'), recorded, stderr: child.stderr };
+  }
+
+  it('closes stdin, so a child that drains it can finish', async () => {
+    const { verdict, recorded, stderr } = await runRecorded();
+
+    assert.ok(recorded, `the stand-in never reached end-of-stdin:
+${stderr}`);
+    assert.equal(verdict?.ok, true, verdict?.message);
+  });
+
+  it('delivers the prompt on stdin, not on the command line', async () => {
+    const prompt = 'weather "quoted" & chained; text';
+    const { recorded } = await runRecorded({ prompt });
+
+    assert.ok(recorded, 'no recording');
+    assert.equal(recorded.stdin.trim(), prompt, 'the prompt must arrive whole');
+    assert.ok(
+      !recorded.args.some(arg => arg.includes('weather')),
+      `the prompt must not appear in argv: ${JSON.stringify(recorded.args)}`
+    );
+  });
+
+  it('joins output split mid-character instead of corrupting it', async () => {
+    const { verdict } = await runRecorded();
+
+    // The stand-in cuts a multi-byte character across two writes. Decoding
+    // each chunk on its own turns that one character into two U+FFFD.
+    assert.equal(verdict?.ok, true, verdict?.message);
+
+    assert.match(String(verdict.data), /東京の天気は晴れ/, 'the answer came back mangled');
+    assert.doesNotMatch(String(verdict.data), /\uFFFD/, 'a replacement character means per-chunk decoding');
+  });
+
+  it('does not hand the child CGMB secrets', async () => {
+    const { recorded } = await runRecorded();
+
+    assert.ok(recorded, 'no recording');
+    assert.deepEqual(
+      recorded.sawSecrets, [],
+      `agy is a coding agent running caller-supplied text; it received ${recorded.sawSecrets.join(', ')}`
+    );
+  });
+
+  it('runs it in a private empty directory', async () => {
+    const { recorded } = await runRecorded();
+
+    assert.ok(recorded, 'no recording');
+    assert.notEqual(recorded.cwd, process.cwd(), 'it must not run in the caller repository');
+    assert.deepEqual(recorded.workspaceEntries, [], 'the workspace must start empty');
+  });
+
+  it('escalates to SIGKILL for a child that ignores SIGTERM', async () => {
+    // The layer sends SIGTERM on timeout and, two seconds later, SIGKILL if the
+    // process is still there. The previous version of this check sent the
+    // signals itself and re-implemented the condition the layer uses, so it
+    // held whether or not the layer did any of it.
+    //
+    // Here the stand-in refuses SIGTERM and the layer is left to deal with it.
+    // The verdict is read while the CGMB process is still running, six seconds
+    // after the timeout: past the escalation, and before the exit sweep -- which
+    // would also have killed the child and so would have hidden a missing
+    // escalation behind a pass.
+    const { verdict, after, recorded } = await runRecorded({ mode: 'stubborn', linger: true });
+
+    assert.ok(recorded, 'the stand-in never ran');
+    assert.equal(verdict?.ok, false, 'the run was supposed to time out');
+    assert.match(String(verdict.message), /timeout/i);
+    assert.ok(after, 'the probe did not report');
+    assert.ok(after.pid > 0, 'nothing to escalate against');
+
+    assert.equal(
+      after.alive, false,
+      `agy ignored SIGTERM and survived: pid ${after.pid} still running six seconds after the timeout`
+    );
+    assert.equal(after.workspace, false, 'and its scratch directory outlived it');
+  });
+
+  it('removes that directory after success, failure and timeout', async () => {
+    for (const mode of ['reply', 'fail', 'slow']) {
+      const { recorded } = await runRecorded({ mode });
+      assert.ok(recorded, `no recording for ${mode}`);
+
+      // Checked after the CGMB process has exited, which is the case that was
+      // broken. Cleanup is wired to the child closing; a timeout closes nothing,
+      // so on the one-shot CLI path -- `cgmb search`, which returns to the shell
+      // as soon as the request settles -- neither the cleanup nor the SIGKILL
+      // scheduled two seconds out ever ran. Measured before the fix: the
+      // directory still present and two stand-ins still running.
+      //
+      // An in-process poll would have missed it. Waiting around for the child
+      // is exactly what the real caller does not do.
+      assert.equal(
+        existsSync(recorded.cwd), false,
+        `the workspace survived a ${mode} run and its process exiting: ${recorded.cwd}`
+      );
+    }
   });
 });

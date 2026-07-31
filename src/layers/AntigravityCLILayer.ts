@@ -10,6 +10,52 @@ import { SearchCache } from '../utils/SearchCache.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLeast, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
+ * Workspaces and children that still exist, swept if the process ends first.
+ *
+ * Both are normally released when the child closes. A timeout does not close
+ * anything: the layer signals the child and rejects, and the child's exit --
+ * and with it the cleanup and the SIGKILL escalation two seconds later -- only
+ * happens if this process is still around to see it. The MCP server is, so the
+ * defect stayed invisible there; the one-shot CLI is not. `cgmb search` that
+ * times out returned to the shell leaving a live agy and its scratch directory
+ * behind, once per timed-out search, and nothing ever collected them. Measured
+ * with a stand-in agy that outlives its budget: workspace present, two strays.
+ *
+ * 'exit' handlers may only do synchronous work, which both of these are.
+ */
+const isWindows = process.platform === 'win32';
+const liveWorkspaces = new Set<string>();
+const liveChildren = new Set<{ kill: (signal?: NodeJS.Signals) => boolean; exitCode: number | null; signalCode: NodeJS.Signals | null }>();
+let sweepInstalled = false;
+
+function installExitSweep(): void {
+  if (sweepInstalled) {
+    return;
+  }
+  sweepInstalled = true;
+
+  process.once('exit', () => {
+    for (const child of liveChildren) {
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          child.kill(isWindows ? undefined : 'SIGKILL');
+        } catch {
+          // Already gone between the check and the signal.
+        }
+      }
+    }
+    for (const dir of liveWorkspaces) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Nothing useful can be logged at exit; a leftover directory in tmp is
+        // the lesser failure than throwing out of an exit handler.
+      }
+    }
+  });
+}
+
+/**
  * Task interface for better type safety
  */
 
@@ -391,7 +437,6 @@ export class AntigravityCLILayer implements LayerInterface {
       );
     }
 
-    const isWindows = process.platform === 'win32';
     const printTimeoutSec = Math.ceil(this.DEFAULT_TIMEOUT / 1000);
 
     return new Promise<string>((resolve, reject) => {
@@ -430,6 +475,8 @@ export class AntigravityCLILayer implements LayerInterface {
       // directory with only the variables it needs to find its own config and
       // credentials.
       const workspaceDir = this.createWorkspaceDir();
+      installExitSweep();
+      liveWorkspaces.add(workspaceDir);
 
       const child = spawn(this.agyPath, args, {
         // stdin carries the prompt and is closed immediately: agy drains it to
@@ -439,6 +486,8 @@ export class AntigravityCLILayer implements LayerInterface {
         env: this.buildChildEnv(),
         ...(isWindows ? { windowsHide: true } : {}),
       });
+
+      liveChildren.add(child);
 
       child.stdin.on('error', () => {
         // The child may exit before reading stdin; the close handler reports
@@ -453,6 +502,8 @@ export class AntigravityCLILayer implements LayerInterface {
       // Remove the scratch directory once the child is gone, whatever the
       // outcome. Anything agy wrote there belongs to this request alone.
       const cleanupWorkspace = (): void => {
+        liveWorkspaces.delete(workspaceDir);
+        liveChildren.delete(child);
         try {
           rmSync(workspaceDir, { recursive: true, force: true });
         } catch (error) {
