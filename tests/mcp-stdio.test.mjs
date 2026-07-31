@@ -26,16 +26,43 @@ const READY_TIMEOUT_MS = 60000;
 /** Grace after the milestone for trailing writes on both streams to arrive. */
 const SETTLE_MS = 400;
 
-/** Has the server answered the initialize request? */
+/** The JSON value on a line, or undefined if it is not JSON at all. */
+function parseLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Is this a JSON-RPC 2.0 frame?
+ *
+ * Being parseable is not the same as being protocol. The logger emits JSON --
+ * `{"level":"info","message":"..."}` is a perfectly good JSON document -- so a
+ * check that only asked whether a line parsed accepted exactly the output it
+ * exists to reject. Every frame carries jsonrpc "2.0" and is either a request
+ * or notification (method) or a response (result or error against an id).
+ */
+function isProtocolFrame(value) {
+  const has = (key) => Object.prototype.hasOwnProperty.call(value, key);
+
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) { return false; }
+  if (value.jsonrpc !== '2.0') { return false; }
+  if (typeof value.method === 'string') { return true; }
+
+  return has('id') && (has('result') || has('error'));
+}
+
+/** Has the server answered the initialize request -- with a response, not just JSON? */
 function sawInitializeResponse(stdout) {
   return stdout.split('\n').some(line => {
     const trimmed = line.trim();
     if (trimmed === '') { return false; }
-    try {
-      return JSON.parse(trimmed).id === 1;
-    } catch {
-      return false;
-    }
+    const frame = parseLine(trimmed);
+    return isProtocolFrame(frame)
+      && frame.id === 1
+      && Object.prototype.hasOwnProperty.call(frame, 'result');
   });
 }
 
@@ -153,21 +180,52 @@ function whyItEnded({ exit, spawnError }) {
   return 'still running at the deadline';
 }
 
-/** Lines on stdout that are not parseable JSON. */
+/** Lines on stdout that are not JSON-RPC frames. */
 function nonProtocolLines(stdout) {
   return stdout
     .split('\n')
     .map(line => line.trim())
     .filter(line => line !== '')
-    .filter(line => {
-      try {
-        JSON.parse(line);
-        return false;
-      } catch {
-        return true;
-      }
-    });
+    .filter(line => !isProtocolFrame(parseLine(line)));
 }
+
+describe('what counts as protocol on stdout', () => {
+  it('rejects a JSON log line as firmly as a plain one', () => {
+    // The check these cases depend on. It used to ask only whether a line
+    // parsed as JSON, and the logger emits JSON: a Winston line on stdout --
+    // the exact failure the suite exists to catch -- would have been counted as
+    // protocol and the run would have gone green.
+    const logLine = JSON.stringify({ level: 'info', message: 'CGMB server started' });
+    const noVersion = JSON.stringify({ id: 1, result: {} });
+    const wrongVersion = JSON.stringify({ jsonrpc: '1.0', id: 1, result: {} });
+    const bare = 'CGMB server started';
+
+    assert.deepEqual(nonProtocolLines([logLine, noVersion, wrongVersion, bare].join('\n')),
+      [logLine, noVersion, wrongVersion, bare],
+      'only JSON-RPC frames may pass');
+
+    const response = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { capabilities: {} } });
+    const failure = JSON.stringify({ jsonrpc: '2.0', id: 2, error: { code: -32601, message: 'x' } });
+    const notification = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+
+    assert.deepEqual(nonProtocolLines([response, failure, notification, ''].join('\n')), [],
+      'and real frames must not be reported');
+  });
+
+  it('accepts only a real initialize response as the milestone', () => {
+    // `ready` gates the other cases: if anything with id 1 satisfies it, a run
+    // that logged its way to an id can be read as a server that answered.
+    const good = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05' } });
+
+    assert.equal(sawInitializeResponse(good), true);
+    assert.equal(sawInitializeResponse(JSON.stringify({ id: 1, result: {} })), false, 'no jsonrpc field');
+    assert.equal(sawInitializeResponse(JSON.stringify({ jsonrpc: '2.0', id: 2, result: {} })), false, 'wrong id');
+    assert.equal(
+      sawInitializeResponse(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'x' })), false,
+      'a request carrying id 1 is not an answer to one'
+    );
+  });
+});
 
 describe('MCP stdio channel', () => {
   it('writes nothing but JSON to stdout, with NODE_ENV unset', async () => {

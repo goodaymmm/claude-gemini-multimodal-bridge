@@ -17,7 +17,7 @@ import { describe, it } from 'node:test';
 import { CGMBServer } from '../dist/core/CGMBServer.js';
 import { LayerManager } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
-import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName, taskFileRefs } from '../dist/core/types.js';
+import { CGMBError, LayerTypeSchema, TargetLayerSchema, normalizeLayerName, taskFileRefs } from '../dist/core/types.js';
 import { extractResultText, pickFinalResultText } from '../dist/utils/workflowUtils.js';
 
 /**
@@ -72,25 +72,48 @@ function payloadOf(result) {
 }
 
 /**
- * Assert a handler call did not succeed.
+ * Assert a handler call did not succeed, and did so for the stated reason.
  *
- * There are two legitimate failure shapes and both are correct: schema
- * rejection throws a CGMBError out of safeExecute, while a request that parses
- * and then fails downstream comes back as `success: false` with `isError` set.
- * What must never happen is a plain success, so that is what this checks.
+ * There are two legitimate failure shapes: schema rejection throws a CGMBError
+ * out of safeExecute, while a request that parses and then fails downstream
+ * comes back as `success: false` with `isError` set.
+ *
+ * Both used to be accepted without looking. A bare `catch { return; }` treats
+ * every throw as a pass, so a typo in the test -- calling a method that does
+ * not exist, passing the wrong shape -- reads as the validation working, and
+ * the case would keep passing after the validation was deleted. So the throw
+ * has to be a CGMBError carrying a code, and rejected input must not have
+ * reached a layer: `stubCalls` records every layer call the server made.
  */
-async function assertNotSuccessful(call, label) {
+async function assertNotSuccessful(call, label, server) {
+  const before = server ? server.stubCalls.length : 0;
   let result;
+
   try {
     result = await call();
-  } catch {
-    return; // threw before producing a result -- a valid rejection
+  } catch (error) {
+    assert.ok(
+      error instanceof CGMBError,
+      `rejection must be a CGMBError, not ${error?.constructor?.name}: ${error?.message} (${label})`
+    );
+    assert.equal(typeof error.code, 'string', `a CGMBError must carry a code: ${label}`);
+    assert.notEqual(error.code, '', `a CGMBError must carry a code: ${label}`);
+    if (server) {
+      assert.equal(
+        server.stubCalls.length, before,
+        `nothing may reach a layer for input that was rejected: ${label}`
+      );
+    }
+    return;
   }
+
   const payload = payloadOf(result);
   assert.notEqual(payload.success, true, `must not succeed: ${label}`);
-  if (payload.success === false) {
-    assert.equal(result.isError, true, `a failed payload must set isError: ${label}`);
-  }
+  assert.equal(
+    payload.success, false,
+    `a rejection must say so rather than answering with no verdict: ${label}`
+  );
+  assert.equal(result.isError, true, `a failed payload must set isError: ${label}`);
 }
 
 describe('server construction', () => {
@@ -118,7 +141,8 @@ describe('argument validation', () => {
     ]) {
       await assertNotSuccessful(
         () => server.handleDocumentAnalysis(bad),
-        JSON.stringify(bad)
+        JSON.stringify(bad),
+        server
       );
     }
   });
@@ -136,7 +160,8 @@ describe('argument validation', () => {
     ]) {
       await assertNotSuccessful(
         () => server.handleMultimodalProcess(bad),
-        JSON.stringify(bad)
+        JSON.stringify(bad),
+        server
       );
     }
   });
@@ -147,7 +172,8 @@ describe('argument validation', () => {
     for (const bad of [{}, { steps: 'nope' }, { name: 'x' }]) {
       await assertNotSuccessful(
         () => server.handleWorkflowOrchestration(bad),
-        JSON.stringify(bad)
+        JSON.stringify(bad),
+        server
       );
     }
   });
@@ -221,7 +247,8 @@ describe('credential files are refused through the MCP path too', () => {
         documents: [join(process.cwd(), '.env')],
         analysis_type: 'summary',
       }),
-      'a .env must never be analysed'
+      'a .env must never be analysed',
+      server
     );
 
     assert.deepEqual(calls, [], 'no layer may be invoked for a credential file');
@@ -237,7 +264,8 @@ describe('credential files are refused through the MCP path too', () => {
         workflow: 'analysis',
         files: [{ path: join(process.cwd(), 'id_rsa'), type: 'text' }],
       }),
-      'a private key must never be sent'
+      'a private key must never be sent',
+      server
     );
 
     assert.deepEqual(calls, [], 'no layer may be invoked for a private key');

@@ -601,7 +601,10 @@ describe('workflow execution modes', () => {
         initialize: async () => {},
         isAvailable: async () => true,
         execute: async task => {
-          const entry = { layer: name, action: task.action, startedAt: Date.now() };
+          // The task itself is kept, not just its name: what a step was given
+          // is the only way to tell a resolved @step.output reference from the
+          // literal string.
+          const entry = { layer: name, action: task.action, task, startedAt: Date.now() };
           calls.push(entry);
           await new Promise(resolve => setTimeout(resolve, 40));
           entry.endedAt = Date.now();
@@ -688,7 +691,22 @@ describe('workflow execution modes', () => {
   });
 
   it('completes a mixed workflow under hybrid', async () => {
+    // Reaching executeHybrid is a narrow target: adaptive goes sequential when
+    // the work "requires complex reasoning" (a prompt over 1000 characters, or
+    // more than three steps) and parallel when the estimated complexity is
+    // low, and only otherwise hybrid. This case used to pass {} as the input,
+    // which lands on low complexity -- so it ran the parallel branch and every
+    // assertion in it held, hybrid untouched. A generation-shaped prompt with
+    // three steps is medium complexity without requiring reasoning, which is
+    // the combination hybrid is for.
     const manager = managerWithTimedStubs();
+
+    let hybridRan = 0;
+    const realHybrid = manager.executeHybrid.bind(manager);
+    manager.executeHybrid = (...args) => {
+      hybridRan += 1;
+      return realHybrid(...args);
+    };
 
     const mixed = {
       steps: [
@@ -698,16 +716,112 @@ describe('workflow execution modes', () => {
       ],
     };
 
-    const result = await manager.executeWorkflow(mixed, {}, { executionMode: 'adaptive' });
+    const result = await manager.executeWorkflow(
+      mixed,
+      { prompt: 'generate a summary poster' },
+      { executionMode: 'adaptive' }
+    );
 
+    assert.equal(hybridRan, 1, 'adaptive must have chosen hybrid, not another branch');
     assert.equal(result.success, true, JSON.stringify(result.results));
     assert.deepEqual(Object.keys(result.results).sort(), ['reason', 'search', 'wrap']);
 
     const wrap = manager.stubCalls.find(c => c.action === 'synthesize_response');
     const others = manager.stubCalls.filter(c => c.action !== 'synthesize_response');
+    assert.equal(others.length, 2, 'both independent steps must have run');
     for (const earlier of others) {
       assert.ok(earlier.endedAt <= wrap.startedAt, 'the dependent step must run last');
     }
+  });
+
+  it('runs the steps that share a priority group concurrently', async () => {
+    // What hybrid is for: within one dependency level, steps on the same layer
+    // form a group and run together. A hybrid run that quietly degraded to
+    // one-at-a-time would look identical from its results alone.
+    const manager = managerWithTimedStubs();
+
+    const sameLayer = {
+      steps: [
+        { id: 'searchA', layer: 'antigravity', action: 'search', input: { prompt: 'a' } },
+        { id: 'searchB', layer: 'antigravity', action: 'search', input: { prompt: 'b' } },
+        { id: 'wrap', layer: 'claude', action: 'synthesize_response', input: { prompt: 'c' }, dependsOn: ['searchA', 'searchB'] },
+      ],
+    };
+
+    await manager.executeWorkflow(sameLayer, { prompt: 'generate a summary poster' }, { executionMode: 'adaptive' });
+
+    const [a, b] = manager.stubCalls.filter(c => c.action === 'search');
+    assert.ok(a && b, 'both searches must have run');
+    assert.ok(
+      a.startedAt < b.endedAt && b.startedAt < a.endedAt,
+      'steps sharing a group must overlap, not merely be labelled a group'
+    );
+  });
+
+  it('gives a hybrid step the output of the step it depends on', async () => {
+    // `@step.output` is the only way a step reads an earlier answer. Hybrid ran
+    // its layer groups in priority order regardless of dependsOn, so a
+    // synthesis step could start before the steps it named had begun -- and
+    // resolve its reference against an empty map.
+    const manager = managerWithTimedStubs();
+
+    const chained = {
+      steps: [
+        { id: 'search', layer: 'antigravity', action: 'search', input: { prompt: 'a' } },
+        { id: 'wrap', layer: 'claude', action: 'synthesize_response', input: { prompt: '@search.output' }, dependsOn: ['search'] },
+      ],
+    };
+
+    const result = await manager.executeWorkflow(chained, { prompt: 'generate a summary poster' }, { executionMode: 'adaptive' });
+
+    assert.equal(result.success, true, JSON.stringify(result.results));
+    const wrap = manager.stubCalls.find(c => c.action === 'synthesize_response');
+    assert.equal(
+      wrap.task.prompt, 'did:search',
+      'the reference must carry the upstream answer, not the literal @search.output'
+    );
+  });
+
+  it('gives a parallel step the output of the step it depends on', async () => {
+    // The same contract, in the mode that never honoured it: parallel handed
+    // resolveStepInput the raw LayerResults, which have no `output`, so the
+    // reference resolved to undefined and the step ran with nothing.
+    const manager = managerWithTimedStubs();
+
+    const chained = {
+      steps: [
+        { id: 'search', layer: 'antigravity', action: 'search', input: { prompt: 'a' } },
+        { id: 'wrap', layer: 'claude', action: 'synthesize_response', input: { prompt: '@search.output' }, dependsOn: ['search'] },
+      ],
+    };
+
+    const result = await manager.executeWorkflow(chained, {}, { executionMode: 'parallel' });
+
+    assert.equal(result.success, true, JSON.stringify(result.results));
+    const wrap = manager.stubCalls.find(c => c.action === 'synthesize_response');
+    assert.equal(wrap.task.prompt, 'did:search', 'a parallel step must see its dependency answer');
+  });
+
+  it('fails a hybrid run whose step fails, rather than reporting the rest', async () => {
+    const manager = managerWithTimedStubs({ failStep: 'complex_reasoning' });
+
+    const mixed = {
+      steps: [
+        { id: 'search', layer: 'antigravity', action: 'search', input: { prompt: 'a' } },
+        { id: 'reason', layer: 'claude', action: 'complex_reasoning', input: { prompt: 'b' } },
+        { id: 'wrap', layer: 'claude', action: 'synthesize_response', input: { prompt: 'c' }, dependsOn: ['search', 'reason'] },
+      ],
+    };
+
+    const result = await manager.executeWorkflow(
+      mixed,
+      { prompt: 'generate a summary poster' },
+      { executionMode: 'adaptive' }
+    );
+
+    assert.equal(result.success, false, 'a failed step must fail the run');
+    assert.equal(result.results.search.success, true);
+    assert.equal(result.results.reason.success, false);
   });
 });
 
