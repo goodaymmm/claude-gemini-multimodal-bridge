@@ -279,7 +279,10 @@ describe('the home directory is a ceiling on that walk', () => {
     assert.deepEqual(ancestors(home, home), []);
   });
 
-  it('recognises home through a symlink', { skip: process.platform === 'win32' }, () => {
+  it('recognises home through a symlink', {
+    skip: process.platform === 'win32'
+      && 'POSIX symlinks; the ceiling is unverified against links on this platform',
+  }, () => {
     // Home is frequently a link -- /home/x -> /mnt/data/x and the like. Compare
     // the resolved paths or the ceiling is trivially side-stepped.
     const { home, deep } = homeWithMarker('.git');
@@ -289,7 +292,10 @@ describe('the home directory is a ceiling on that walk', () => {
     assert.deepEqual(ancestors(deep, linked), [], 'the link names the same directory');
   });
 
-  it('ignores case on Windows', { skip: process.platform !== 'win32' }, () => {
+  it('ignores case on Windows', {
+    skip: process.platform !== 'win32'
+      && 'case-insensitive paths are a Windows property; nothing here checks them elsewhere',
+  }, () => {
     // C:\Users\x and c:\users\x are one directory; a case difference must not
     // let the walk step onto home.
     const { home, deep } = homeWithMarker('.git');
