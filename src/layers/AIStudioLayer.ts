@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'async_hooks';
+import { terminateProcessTree } from '../utils/processUtils.js';
 import { execSync, spawn } from 'child_process';
 import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
@@ -101,6 +102,50 @@ function detectLanguage(text: string): string | null {
  * another caller's child. Async context is per-call and follows the awaits.
  */
 const cancellation = new AsyncLocalStorage<AbortSignal>();
+
+
+/**
+ * The persistent MCP servers this process has started.
+ *
+ * Nothing ever ended one. It is reused across requests and replaced on a TTL,
+ * so a run that used the optimized path -- general text, multi-PDF analysis --
+ * left a node server running with its stdio pipes attached, and those pipes
+ * keep the parent's event loop alive: the CLI had nothing left to do and would
+ * not exit. Measured under WSL, where a test file whose every case passed then
+ * hung until the runner's timeout.
+ */
+const livePersistentProcesses = new Set<any>();
+
+/**
+ * End every persistent MCP server this process started, and wait for them.
+ *
+ * Called before the CLI exits, and by tests that have driven the optimized
+ * path. Safe when there is nothing running.
+ */
+export async function shutdownAIStudio(timeoutMs = 5000): Promise<void> {
+  const children = [...livePersistentProcesses];
+  livePersistentProcesses.clear();
+
+  if (children.length === 0) {
+    return;
+  }
+
+  for (const child of children) {
+    terminateProcessTree(child);
+  }
+
+  await Promise.all(children.map(child => new Promise<void>(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    const done = setTimeout(resolve, timeoutMs);
+    child.once('close', () => {
+      clearTimeout(done);
+      resolve();
+    });
+  })));
+}
 
 export class AIStudioLayer implements LayerInterface {
   private readonly instanceId: string;
@@ -1482,6 +1527,7 @@ export class AIStudioLayer implements LayerInterface {
       
       this.mcpProcessStartTime = now;
       this.recentMCPStderr = '';
+      livePersistentProcesses.add(this.persistentMCPProcess);
       this.attachMCPResponseRouter(this.persistentMCPProcess);
       
       // Set up error handling
@@ -1492,6 +1538,7 @@ export class AIStudioLayer implements LayerInterface {
       
       this.persistentMCPProcess.on('exit', (code: number) => {
         logger.debug('Persistent MCP process exited', { code });
+        livePersistentProcesses.delete(this.persistentMCPProcess);
         this.persistentMCPProcess = undefined;
       });
     }

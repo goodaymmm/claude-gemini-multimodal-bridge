@@ -2304,8 +2304,11 @@ program.on('option:*', function(this: any) {
 // fall back to the hook.
 await program.parseAsync();
 
-const { shutdownAntigravity } = await import('./layers/AntigravityCLILayer.js');
-await shutdownAntigravity();
+const [{ shutdownAntigravity }, { shutdownAIStudio }] = await Promise.all([
+  import('./layers/AntigravityCLILayer.js'),
+  import('./layers/AIStudioLayer.js'),
+]);
+await Promise.all([shutdownAntigravity(), shutdownAIStudio()]);
 
 // If no command provided, show help
 if (!process.argv.slice(2).length) {

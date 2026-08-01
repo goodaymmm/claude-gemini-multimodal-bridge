@@ -20,13 +20,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
-import { AIStudioLayer } from '../dist/layers/AIStudioLayer.js';
+import { AIStudioLayer, shutdownAIStudio } from '../dist/layers/AIStudioLayer.js';
 import { safeExecute } from '../dist/utils/errorHandler.js';
 import { withCLITimeout } from '../dist/utils/TimeoutManager.js';
 
 // Not `cgmb-agy-*`: the workspace-isolation test scans tmpdir for that prefix.
 const scratch = mkdtempSync(join(tmpdir(), 'cgmb-cancel-'));
-after(() => rmSync(scratch, { recursive: true, force: true }));
+
+after(async () => {
+  // The persistent MCP server is reused across requests and nothing used to
+  // end one, so its stdio pipes kept this process alive: every case here
+  // passed and the file then hung until the runner gave up. The same pipes
+  // kept `cgmb` from exiting after any request that used that path.
+  await shutdownAIStudio();
+  rmSync(scratch, { recursive: true, force: true });
+});
 
 const isAlive = pid => {
   try {
