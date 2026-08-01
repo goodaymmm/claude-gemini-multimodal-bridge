@@ -6,6 +6,7 @@ import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } fro
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
+import { runShutdown } from './utils/shutdown.js';
 import { getEnvironmentStatus, loadEnvironmentSmart } from './utils/envLoader.js';
 import { getManualSetupInstructions, getMCPStatus, setupCGMBMCP } from './utils/mcpConfigManager.js';
 import path from 'path';
@@ -185,6 +186,12 @@ program
         } catch (error) {
           logger.error('Error during server shutdown', error as Error);
         }
+        // The children this server started while it was running. The awaited
+        // shutdown at the end of parseAsync() runs at the moment `serve`
+        // *starts*, when there is nothing yet to clean up, so without this a
+        // long-running server left its MCP child and any agy behind -- in-flight
+        // API calls included.
+        await runShutdown();
         process.exit(0);
       };
 
@@ -2304,11 +2311,7 @@ program.on('option:*', function(this: any) {
 // fall back to the hook.
 await program.parseAsync();
 
-const [{ shutdownAntigravity }, { shutdownAIStudio }] = await Promise.all([
-  import('./layers/AntigravityCLILayer.js'),
-  import('./layers/AIStudioLayer.js'),
-]);
-await Promise.all([shutdownAntigravity(), shutdownAIStudio()]);
+await runShutdown();
 
 // If no command provided, show help
 if (!process.argv.slice(2).length) {

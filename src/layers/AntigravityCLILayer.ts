@@ -9,6 +9,7 @@ import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { SearchCache } from '../utils/SearchCache.js';
 import { terminateProcessTree } from '../utils/processUtils.js';
+import { onShutdown } from '../utils/shutdown.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLeast, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
@@ -44,6 +45,8 @@ function installExitSweep(): void {
     return;
   }
   sweepInstalled = true;
+
+  onShutdown('antigravity', () => shutdownAntigravity());
 
   process.once('exit', () => {
     // The last-resort backstop, and it can only do synchronous work: there is
@@ -550,7 +553,13 @@ export class AntigravityCLILayer implements LayerInterface {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: workspaceDir,
         env: this.buildChildEnv(),
-        ...(isWindows ? { windowsHide: true } : {}),
+        // Its own process group, so a cancellation can signal the group rather
+        // than one process. agy spawns helpers of its own, and without this the
+        // negative-pid kill fails with ESRCH -- measured -- leaving descendants
+        // running and, on the timeout path, holding the workspace open. The
+        // trade is that Ctrl-C in a terminal no longer reaches it directly,
+        // which is why shutdown is explicit now.
+        ...(isWindows ? { windowsHide: true } : { detached: true }),
       });
 
       liveChildren.add(child);
@@ -941,7 +950,7 @@ export class AntigravityCLILayer implements LayerInterface {
     return text.slice(0, MAX_TRANSLATION_LENGTH).trim();
   }
 
-  async translateToEnglish(text: string, sourceLang: string): Promise<string> {
+  async translateToEnglish(text: string, sourceLang: string, signal?: AbortSignal): Promise<string> {
     const languageNames: Record<string, string> = {
       ja: 'Japanese',
       ko: 'Korean',
@@ -977,12 +986,16 @@ export class AntigravityCLILayer implements LayerInterface {
     });
 
     try {
+      // The caller's cancellation, carried through. Without it this opened a
+      // fresh, never-aborted context: a non-English image generation that was
+      // still translating when the caller's budget expired left agy running to
+      // its own ninety seconds, answering nobody.
       const result = await this.execute({
         type: 'translation',
         prompt: translationPrompt,
         useSearch: false, // No web search needed for translation
         model: this.DEFAULT_MODEL
-      });
+      }, signal);
 
       if (!result.success || !result.data) {
         throw new Error('Translation failed: No result returned');

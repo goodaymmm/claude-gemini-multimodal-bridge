@@ -4,6 +4,7 @@ import { config } from 'dotenv';
 import { createRequire } from 'module';
 import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
+import { runShutdown } from './utils/shutdown.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -51,15 +52,15 @@ async function main() {
     });
 
     // Handle graceful shutdown
-    process.on('SIGINT', async () => {
-      logger.info('Received SIGINT, shutting down MCP server...');
-      process.exit(0);
-    });
-
-    process.on('SIGTERM', async () => {
-      logger.info('Received SIGTERM, shutting down MCP server...');
-      process.exit(0);
-    });
+    // The children this server started while it was running -- the persistent
+    // AI Studio MCP process, any agy -- are ended here, and awaited. Exiting
+    // straight away left them running with whatever they had in flight.
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      process.on(signal, () => {
+        logger.info(`Received ${signal}, shutting down MCP server...`);
+        void runShutdown().finally(() => process.exit(0));
+      });
+    }
 
   } catch (error) {
     logger.error('Failed to start CGMB MCP server', error as Error);

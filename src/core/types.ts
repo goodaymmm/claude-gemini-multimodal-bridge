@@ -272,7 +272,8 @@ export interface LayerInterface {
   getCost(task: any): number;
   getEstimatedDuration(task: any): number;
   // Optional methods
-  translateToEnglish?(text: string, sourceLang: string): Promise<string>;
+  /** @param signal cancels the CLI call, not just the waiting. */
+  translateToEnglish?(text: string, sourceLang: string, signal?: AbortSignal): Promise<string>;
 }
 
 // MCP Tool Result

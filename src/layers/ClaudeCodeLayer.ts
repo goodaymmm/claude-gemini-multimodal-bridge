@@ -530,6 +530,10 @@ export class ClaudeCodeLayer implements LayerInterface {
         cwd: this.packageRoot,
         env: this.buildChildEnv(),
         windowsHide: true,
+        // Its own process group on POSIX, so cancelling signals the group.
+        // `claude` starts helpers; without this the negative-pid kill fails
+        // with ESRCH -- measured -- and only the process we hold dies.
+        ...(process.platform === 'win32' ? {} : { detached: true }),
         ...target.spawnOptions,
       });
 

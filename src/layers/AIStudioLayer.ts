@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { terminateProcessTree } from '../utils/processUtils.js';
+import { onShutdown } from '../utils/shutdown.js';
 import { execSync, spawn } from 'child_process';
 import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
@@ -116,6 +117,16 @@ const cancellation = new AsyncLocalStorage<AbortSignal>();
  */
 const livePersistentProcesses = new Set<any>();
 
+onShutdown('aistudio', () => shutdownAIStudio());
+
+// The synchronous backstop, for a process.exit() that did not await anything.
+// It cannot wait for a close, so it kills the tree and leaves it there.
+process.once('exit', () => {
+  for (const child of livePersistentProcesses) {
+    terminateProcessTree(child);
+  }
+});
+
 /**
  * End every persistent MCP server this process started, and wait for them.
  *
@@ -179,7 +190,11 @@ export class AIStudioLayer implements LayerInterface {
    */
   private pendingOptimized = new Map<
     number,
-    (response: { result?: unknown; error?: { message?: string } }) => void
+    {
+      /** Which process generation this request was sent to. */
+      child: unknown;
+      settle: (response: { result?: unknown; error?: { message?: string } }) => void;
+    }
   >();
 
   /** Monotonic, so two requests in the same millisecond cannot collide. */
@@ -722,7 +737,7 @@ export class AIStudioLayer implements LayerInterface {
               corePrompt: corePrompt.substring(0, 50)
             });
             
-            const translatedCore = await this.antigravityLayer.translateToEnglish(corePrompt, detectedLang);
+            const translatedCore = await this.antigravityLayer.translateToEnglish(corePrompt, detectedLang, cancellation.getStore());
             // Reconstruct prompt with original prefix + translated core
             const originalPrefix = prompt.substring(0, prompt.length - corePrompt.length);
             processedPrompt = originalPrefix + translatedCore;
@@ -1517,6 +1532,9 @@ export class AIStudioLayer implements LayerInterface {
         stdio: 'pipe',
         cwd: process.cwd(),
         shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
+        // Its own process group on POSIX, so terminateProcessTree can signal
+        // the group instead of one process.
+        ...(isWindowsSpawn ? {} : { detached: true }),
         env: {
           ...process.env,
           AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
@@ -1525,21 +1543,34 @@ export class AIStudioLayer implements LayerInterface {
         },
       });
       
+      // Pinned to this generation. The handlers below outlive it: when the TTL
+      // replaces the process, the old one's exit arrives after the field has
+      // already been reassigned, so reading `this.persistentMCPProcess` there
+      // deleted the *new* process from the live set and set the field to
+      // undefined -- orphaning a healthy server and forcing a third spawn. Ten
+      // minutes of uptime and one concurrent request is all it takes.
+      const child = this.persistentMCPProcess;
+
       this.mcpProcessStartTime = now;
       this.recentMCPStderr = '';
-      livePersistentProcesses.add(this.persistentMCPProcess);
-      this.attachMCPResponseRouter(this.persistentMCPProcess);
-      
-      // Set up error handling
-      this.persistentMCPProcess.on('error', (error: Error) => {
+      livePersistentProcesses.add(child);
+      this.attachMCPResponseRouter(child);
+
+      const forget = (): void => {
+        livePersistentProcesses.delete(child);
+        if (this.persistentMCPProcess === child) {
+          this.persistentMCPProcess = undefined;
+        }
+      };
+
+      child.on('error', (error: Error) => {
         logger.warn('Persistent MCP process error', { error: error.message });
-        this.persistentMCPProcess = undefined;
+        forget();
       });
-      
-      this.persistentMCPProcess.on('exit', (code: number) => {
+
+      child.on('exit', (code: number) => {
         logger.debug('Persistent MCP process exited', { code });
-        livePersistentProcesses.delete(this.persistentMCPProcess);
-        this.persistentMCPProcess = undefined;
+        forget();
       });
     }
     
@@ -1597,9 +1628,29 @@ export class AIStudioLayer implements LayerInterface {
       const onAbort = (): void => finish(() => {
         // The process is shared, so it is not killed here: another request is
         // very likely mid-answer on it, and taking the process out would fail
-        // that caller too. What this call stops is its own waiting and its own
-        // slot in the router.
+        // that caller too.
+        //
+        // Instead the server is told, by the notification the protocol has for
+        // exactly this. It aborts that request's Google call, so this process
+        // stops waiting *and* the child stops holding an abandoned request
+        // open -- without which a run of cancellations accumulated ghost work
+        // inside a server nobody could see into.
+        //
+        // What it does not do is refund anything: Google documents abortSignal
+        // as client-side only, and usage already started is billed. Ending the
+        // request stops the next one from stacking on top of it.
         logger.info(`[${this.instanceId}] Cancelling optimized MCP command`, { command, id });
+        try {
+          mcpProcess.stdin.write(JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'notifications/cancelled',
+            params: { requestId: id, reason: 'caller cancelled' },
+          }) + '\n');
+        } catch (error) {
+          logger.debug('Could not send cancellation to the MCP server', {
+            error: (error as Error).message,
+          });
+        }
         reject(new Error(`AI Studio MCP command cancelled: ${command}`));
       });
 
@@ -1622,7 +1673,7 @@ export class AIStudioLayer implements LayerInterface {
       // on whichever answer arrived first -- so a caller could be handed
       // another caller's document analysis and no error would be raised. The
       // ids were Date.now(), which two requests in the same millisecond share.
-      this.pendingOptimized.set(id, (response: { result?: unknown; error?: { message?: string } }) => finish(() => {
+      this.pendingOptimized.set(id, { child: mcpProcess, settle: (response) => finish(() => {
         logger.debug(`[${this.instanceId}] MCP response routed`, {
           instanceId: this.instanceId,
           command,
@@ -1636,7 +1687,7 @@ export class AIStudioLayer implements LayerInterface {
         } else {
           resolve(response.result);
         }
-      }));
+      }) });
 
       if (signal) {
         signal.addEventListener('abort', onAbort, { once: true });
@@ -1698,12 +1749,16 @@ export class AIStudioLayer implements LayerInterface {
           continue; // a notification, not an answer
         }
 
-        const waiting = typeof response.id === 'number'
+        const entry = typeof response.id === 'number'
           ? this.pendingOptimized.get(response.id)
           : undefined;
+        // Only from the generation it was sent to: ids restart with each
+        // process, so an answer from a dying one must not settle a request that
+        // has already been re-sent to its replacement.
+        const waiting = entry && entry.child === child ? entry : undefined;
 
         if (waiting) {
-          waiting(response);
+          waiting.settle(response);
         } else {
           logger.debug(`[${this.instanceId}] MCP response with no caller waiting`, { id: response.id });
         }
@@ -1717,10 +1772,15 @@ export class AIStudioLayer implements LayerInterface {
     });
 
     const failAllWaiting = (why: string): void => {
-      const waiting = [...this.pendingOptimized.values()];
-      this.pendingOptimized.clear();
-      for (const settle of waiting) {
-        settle({ error: { message: why } });
+      // This generation's requests only. Clearing the whole map failed
+      // everything registered against the *replacement* process too, so a TTL
+      // rollover under load rejected requests that were running perfectly well.
+      const mine = [...this.pendingOptimized.entries()].filter(([, entry]) => entry.child === child);
+      for (const [id] of mine) {
+        this.pendingOptimized.delete(id);
+      }
+      for (const [, entry] of mine) {
+        entry.settle({ error: { message: why } });
       }
     };
 
@@ -1897,6 +1957,9 @@ export class AIStudioLayer implements LayerInterface {
         stdio: 'pipe',
         cwd: process.cwd(),
         shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
+        // Its own process group on POSIX, so terminateProcessTree can signal
+        // the group instead of one process.
+        ...(isWindowsSpawn ? {} : { detached: true }),
         env: {
           ...process.env,
           // New preferred environment variable name

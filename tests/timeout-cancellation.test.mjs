@@ -15,12 +15,14 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { AIStudioLayer, shutdownAIStudio } from '../dist/layers/AIStudioLayer.js';
+import { terminateProcessTree } from '../dist/utils/processUtils.js';
+import { runShutdown } from '../dist/utils/shutdown.js';
 import { safeExecute } from '../dist/utils/errorHandler.js';
 import { withCLITimeout } from '../dist/utils/TimeoutManager.js';
 
@@ -618,5 +620,236 @@ describe('the shared MCP process answers the caller who asked', () => {
       /cancelled before it started/
     );
     assert.equal(spawned, 0, 'nothing may be spawned for work nobody is waiting for');
+  });
+});
+
+describe('ending a child ends what it started', () => {
+  // terminateProcessTree is what every cancellation path calls. Its POSIX
+  // branch signals the negative pid, which only reaches a process group -- and
+  // a child gets a group of its own only when spawned detached. Without that,
+  // measured, the call fails with ESRCH and the fallback kills the one process
+  // we hold, leaving the helpers that `claude` and `agy` start behind.
+  //
+  // Windows has no groups; taskkill /T is the equivalent and is exercised here
+  // as well, since the tree is the same shape either way.
+
+  it('kills a grandchild, not just the process it was handed', async () => {
+    const id = Math.random().toString(36).slice(2);
+    const marks = join(scratch, `grandchild-marks-${id}.txt`);
+    const pidFile = join(scratch, `grandchild-pid-${id}.txt`);
+
+    // The parent spawns a grandchild that ignores SIGTERM and keeps writing,
+    // then does nothing itself. Killing the parent alone leaves the writer.
+    const grandchild = join(scratch, `grandchild-${id}.cjs`);
+    writeFileSync(grandchild, [
+      "process.on('SIGTERM', () => {});",
+      "const fs = require('fs');",
+      `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, 'tick'), 40);`,
+    ].join(NEWLINE), 'utf8');
+
+    const parent = join(scratch, `grandparent-${id}.cjs`);
+    writeFileSync(parent, [
+      "const { spawn } = require('child_process');",
+      `spawn(process.execPath, [${JSON.stringify(grandchild)}], { stdio: 'ignore' });`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const child = spawn(process.execPath, [parent], {
+      stdio: 'ignore',
+      ...(process.platform === 'win32' ? {} : { detached: true }),
+    });
+
+    for (let waited = 0; waited < 8000 && !existsSync(pidFile); waited += 100) {
+      await settle(100);
+    }
+    const grandPid = Number(readFileSync(pidFile, 'utf8'));
+    assert.ok(grandPid > 0, 'the grandchild must have started to prove anything');
+
+    await settle(300);
+    const ticks = () => {
+      try {
+        return readFileSync(marks, 'utf8').split('tick').length - 1;
+      } catch {
+        return 0;
+      }
+    };
+    assert.ok(ticks() > 0, 'and it must be doing work worth ending');
+
+    terminateProcessTree(child);
+    await settle();
+
+    assert.equal(isAlive(grandPid), false, 'the grandchild outlived the tree it belonged to');
+    const atKill = ticks();
+    await settle();
+    assert.equal(ticks(), atKill, 'and it must not have done anything more');
+  });
+});
+
+describe('a cancelled request is cancelled inside the server too', () => {
+  // Dropping the caller's end of a shared process is only half of it. The
+  // server went on holding the abandoned request -- and its Google call -- so
+  // a run of cancellations accumulated work nobody could see, inside a process
+  // that outlives them all.
+  //
+  // What this proves is that the server is told. It cannot prove the charge
+  // stops: Google documents abortSignal as client-side only and bills work
+  // already started. Telling the server is what stops the accumulation.
+
+  it('tells the server which request to abandon', async () => {
+    const seen = join(scratch, `cancelled-${Math.random().toString(36).slice(2)}.txt`);
+    const script = join(scratch, `records-cancel-${Math.random().toString(36).slice(2)}.cjs`);
+
+    writeFileSync(script, [
+      "const fs = require('fs');",
+      "let buf = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', chunk => {",
+      "  buf += chunk;",
+      "  const lines = buf.split(/\\r?\\n/);",
+      "  buf = lines.pop() || '';",
+      "  for (const line of lines) {",
+      "    if (!line.trim()) { continue; }",
+      "    const msg = JSON.parse(line);",
+      "    if (msg.method === 'notifications/cancelled') {",
+      `      fs.appendFileSync(${JSON.stringify(seen)}, String(msg.params.requestId) + ' ');`,
+      "    }",
+      "  }",
+      "});",
+      "process.stdin.resume();",
+    ].join(NEWLINE), 'utf8');
+
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => script;
+
+    const controller = new AbortController();
+    const inFlight = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'x' }, controller.signal);
+    inFlight.catch(() => {});
+
+    await settle(400);
+    controller.abort();
+    await assert.rejects(() => inFlight, /cancelled/);
+    await settle(400);
+
+    const recorded = readFileSync(seen, 'utf8').trim().split(/\s+/).filter(Boolean);
+    assert.equal(recorded.length, 1, `the server must be told exactly once, got: ${recorded.join(',')}`);
+    assert.match(recorded[0], /^[0-9]+$/, 'and told which request, by id');
+
+    await shutdownAIStudio();
+  });
+});
+
+describe('replacing the shared process on its TTL', () => {
+  // The process is replaced every ten minutes. The old one is killed and the
+  // field reassigned without waiting, so the old process's exit arrives after
+  // the replacement is already in place -- and the handlers read the field
+  // rather than the process they belong to. The result was that a healthy new
+  // server was deleted from the live set and the field set to undefined, so the
+  // next request spawned a third one and the second was orphaned. The old
+  // router also failed every waiting request, including those already sent to
+  // the replacement.
+
+  function answeringServer() {
+    const script = join(scratch, `answering-${Math.random().toString(36).slice(2)}.cjs`);
+    writeFileSync(script, [
+      "let buf = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', chunk => {",
+      "  buf += chunk;",
+      "  const lines = buf.split(/\\r?\\n/);",
+      "  buf = lines.pop() || '';",
+      "  for (const line of lines) {",
+      "    if (!line.trim()) { continue; }",
+      "    const req = JSON.parse(line);",
+      "    const answer = { jsonrpc: '2.0', id: req.id,",
+      "      result: { content: [{ type: 'text', text: 'answered-' + req.params.arguments.marker }] } };",
+      "    process.stdout.write(JSON.stringify(answer) + '\\n');",
+      "  }",
+      "});",
+      "process.stdin.resume();",
+    ].join(NEWLINE), 'utf8');
+    return script;
+  }
+
+  it('does not let the replaced process disown its replacement', async () => {
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => answeringServer();
+
+    const first = await layer.executeMCPCommandOptimized('analyze_documents', { marker: 'one' });
+    const original = layer.persistentMCPProcess;
+    assert.ok(original?.pid, 'the first request must have started a server');
+
+    // Age it past its TTL, which is what the ten-minute boundary does.
+    layer.mcpProcessStartTime = 0;
+
+    const second = await layer.executeMCPCommandOptimized('analyze_documents', { marker: 'two' });
+    const replacement = layer.persistentMCPProcess;
+
+    const textOf = r => (r?.content ?? []).map(c => c.text ?? '').join('');
+    assert.equal(textOf(first), 'answered-one');
+    assert.equal(textOf(second), 'answered-two');
+    assert.ok(replacement?.pid, 'the replacement must exist');
+    assert.notEqual(replacement.pid, original.pid, 'and it must be a different process');
+
+    // The old process's exit lands here, after the field has been reassigned.
+    await settle();
+
+    assert.equal(
+      layer.persistentMCPProcess, replacement,
+      'the dying process disowned its replacement'
+    );
+
+    // And the replacement must still work rather than needing a third spawn.
+    const third = await layer.executeMCPCommandOptimized('analyze_documents', { marker: 'three' });
+    assert.equal(textOf(third), 'answered-three');
+    assert.equal(layer.persistentMCPProcess.pid, replacement.pid, 'no third process may be needed');
+
+    await shutdownAIStudio();
+  });
+});
+
+describe('shutdown reaches what a running server started', () => {
+  // The awaited shutdown at the end of the CLI runs when parseAsync returns --
+  // and for `serve` that is the moment the server has *started*, before any
+  // persistent child exists, so it always cleaned up nothing. The signal
+  // handlers then called process.exit() without awaiting anything, so a
+  // long-running server that had spawned an MCP child left it behind with
+  // whatever it had in flight.
+
+  it('ends a persistent child created after the process started', async () => {
+    const script = join(scratch, `late-${Math.random().toString(36).slice(2)}.cjs`);
+    writeFileSync(script, "process.stdin.resume();", 'utf8'); // outlives its caller
+
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => script;
+
+    // Started the way a long-running server starts one: mid-life, well after
+    // any startup-time cleanup would have run.
+    const inFlight = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'late' });
+    inFlight.catch(() => {});
+
+    let child;
+    for (let waited = 0; waited < 15000 && !child; waited += 100) {
+      await settle(100);
+      child = layer.persistentMCPProcess;
+    }
+
+    assert.ok(child?.pid, 'the server must have started one to prove anything');
+    assert.equal(isAlive(child.pid), true, 'and it must be running when shutdown is asked for');
+
+    await runShutdown();
+    await settle();
+
+    assert.equal(isAlive(child.pid), false, 'a running server left its child behind on shutdown');
+  });
+
+  it('can be asked twice without doing it twice', async () => {
+    // A SIGINT arriving while a command is finishing must not race the same
+    // cleanup from two directions.
+    const first = runShutdown();
+    const second = runShutdown();
+
+    assert.equal(first, second, 'concurrent callers must share one run');
+    await first;
   });
 });

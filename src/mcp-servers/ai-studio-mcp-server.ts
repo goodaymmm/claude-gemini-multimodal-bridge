@@ -6,6 +6,7 @@
  * Replaces the non-existent aistudio-mcp-server package
  */
 
+import { AsyncLocalStorage } from 'async_hooks';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -189,6 +190,41 @@ function sanitizePrompt(prompt: string): string {
     sanitized = sanitized.replace(regex, safe);
   }
   return sanitized;
+}
+
+
+/**
+ * The cancellation for the tool call currently being served.
+ *
+ * The MCP SDK gives each handler a signal that fires when the client sends
+ * notifications/cancelled for that request. Carried in async context so every
+ * generateContent below can honour it without threading a parameter through
+ * eight tool methods.
+ *
+ * What this achieves, precisely: the HTTP request is dropped and this process
+ * stops waiting, so a cancelled call cannot go on to trigger a retry, and
+ * abandoned calls stop accumulating inside a shared server. What it does not
+ * achieve is stopping the charge -- Google documents abortSignal as client-side
+ * only, and usage is billed for work already started. Ending the request is
+ * still worth doing; pretending it refunds anything would not be.
+ */
+const requestCancellation = new AsyncLocalStorage<AbortSignal>();
+
+/** The signal for the call in progress, if the client is still interested. */
+function currentSignal(): AbortSignal | undefined {
+  return requestCancellation.getStore();
+}
+
+/**
+ * The abortSignal fragment to spread into a generateContent config.
+ *
+ * Spread rather than assigned, because exactOptionalPropertyTypes will not
+ * accept an explicit `undefined` where the SDK declares `abortSignal?:
+ * AbortSignal` -- and a call made outside a tool handler has no signal.
+ */
+function cancellationConfig(): { abortSignal?: AbortSignal } {
+  const signal = currentSignal();
+  return signal ? { abortSignal: signal } : {};
 }
 
 class AIStudioMCPServer {
@@ -436,9 +472,10 @@ class AIStudioMCPServer {
     });
 
     // Handle tool calls
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: args } = request.params;
 
+      return requestCancellation.run(extra.signal, async () => {
       try {
         switch (name) {
           case 'generate_image':
@@ -469,6 +506,7 @@ class AIStudioMCPServer {
           `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+      });
     });
   }
 
@@ -568,6 +606,7 @@ class AIStudioMCPServer {
         model: params.model || AI_MODELS.IMAGE_GENERATION,
         contents: safePrompt,
         config: {
+          ...cancellationConfig(),
           responseModalities: [Modality.TEXT, Modality.IMAGE],
         },
       });
@@ -719,6 +758,7 @@ To retrieve this file, use:
         model: 'gemini-2.5-flash',
         contents: parts,
         config: {
+          ...cancellationConfig(),
           responseModalities: [Modality.TEXT],
         },
       });
@@ -826,6 +866,7 @@ To retrieve this file, use:
         model: params.model || 'gemini-2.5-flash',
         contents: parts,
         config: {
+          ...cancellationConfig(),
           responseModalities: [Modality.TEXT],
         },
       });
@@ -895,6 +936,7 @@ To retrieve this file, use:
         model: options.model || 'gemini-2.5-flash',
         contents: parts,
         config: {
+          ...cancellationConfig(),
           responseModalities: [Modality.TEXT],
         },
       });
@@ -1223,6 +1265,7 @@ To retrieve this file, use:
         model: params.model || AI_MODELS.AUDIO_GENERATION,
         contents: [{ parts: [{ text: params.text }] }],
         config: {
+          ...cancellationConfig(),
           responseModalities: ['AUDIO'],
           speechConfig: {
             voiceConfig: {
