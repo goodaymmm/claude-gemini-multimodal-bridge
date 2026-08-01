@@ -116,6 +116,17 @@ export class LayerManager {
   }
 
   /**
+   * Stop in-flight work in whichever layers have been created.
+   *
+   * Deliberately does not go through the lazy getters: creating a layer in
+   * order to cancel it would start the very thing being cancelled. A layer that
+   * was never built has nothing running.
+   */
+  public abortActiveOperations(reason: string = 'cancelled'): number {
+    return this.aiStudioLayer ? this.aiStudioLayer.abortActiveOperations(reason) : 0;
+  }
+
+  /**
    * Get Claude layer with lazy initialization
    */
   public getClaudeLayer(): ClaudeCodeLayer {
@@ -441,7 +452,8 @@ export class LayerManager {
    */
   public async executeWithLayer(
     layerType: LayerType,
-    task: any
+    task: any,
+    signal?: AbortSignal
   ): Promise<LayerResult> {
     // Checked before routing, for every layer.
     //
@@ -467,7 +479,9 @@ export class LayerManager {
 
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();
-        return await aiStudioLayer.execute(task);
+        // The one layer that spawns a billed child. Cancellation has to reach
+        // the process, not just the promise waiting on it.
+        return await aiStudioLayer.execute(task, signal);
 
       default:
         throw new Error(`Unknown layer type: ${layerType}`);
@@ -1119,14 +1133,21 @@ export class LayerManager {
     options: ExecutionOptions
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
-    
+
+    // What later steps see. Passing `results` straight in looked equivalent and
+    // was not: a LayerResult has no `output`, so every `@step.output` reference
+    // in a parallel workflow resolved to undefined and the downstream step ran
+    // with no upstream data -- then reported success, because it returned
+    // something of its own. Only sequential ever published the right shape.
+    const stepOutputs: Record<string, Record<string, unknown>> = {};
+
     // Group steps by dependency level
     const dependencyLevels = this.groupStepsByDependencies(workflow.steps);
-    
+
     for (const level of dependencyLevels) {
       const promises = level.map(async (step) => {
         try {
-          const stepInput = this.resolveStepInput(step.input, results, inputData);
+          const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
           const result = await this.executeStep(step, stepInput, options);
           return { stepId: step.id, result };
         } catch (error) {
@@ -1148,6 +1169,7 @@ export class LayerManager {
       const levelResults = await Promise.all(promises);
       levelResults.forEach(({ stepId, result }) => {
         results[stepId] = result;
+        stepOutputs[stepId] = this.publishedOutput(result);
       });
     }
 
@@ -1307,14 +1329,38 @@ export class LayerManager {
   /**
    * Execute workflow using hybrid strategy
    */
+  /**
+   * What a finished step publishes for `@step.output` references.
+   *
+   * A failed step publishes its failure rather than nothing: resolveStepInput
+   * turns `success: false` into an explicit _stepFailed marker for the
+   * downstream step, and a step that published nothing at all was
+   * indistinguishable from one that had not run, so the reference silently
+   * resolved to the literal string `@step.output`.
+   */
+  private publishedOutput(result: LayerResult): Record<string, unknown> {
+    return result.success
+      ? { output: result.data }
+      : { success: false, error: result.error };
+  }
+
   private async executeHybrid(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
     options: ExecutionOptions,
     analysis: WorkloadAnalysis
   ): Promise<Record<string, LayerResult>> {
-    // Group steps by recommended layer and execute accordingly
-    const stepGroups = this.groupStepsByRecommendedLayer(workflow.steps, analysis);
+    // Dependency order first, layer grouping second.
+    //
+    // Grouping by layer alone ignored dependsOn entirely: with a recommended
+    // layer of aistudio, two Claude steps landed in `medium` and a search step
+    // in `low`, and medium runs first -- so a synthesis step declaring
+    // dependsOn: ['search', 'reason'] started before either had begun, and its
+    // @step.output references resolved against an empty map. The run then
+    // reported success, because the step returned something of its own.
+    //
+    // Each dependency level is still grouped by layer inside itself, which is
+    // what hybrid is for.
     const results: Record<string, LayerResult> = {};
 
     // Dependency references use `@step.output`, so every execution mode has to
@@ -1324,34 +1370,34 @@ export class LayerManager {
     // reported success because it returned something of its own.
     const stepOutputs: Record<string, Record<string, unknown>> = {};
 
-    // Execute high-priority steps first
-    for (const [_priority, steps] of Object.entries(stepGroups)) {
-      const [first] = steps;
-      if (steps.length === 1 && first) {
-        // Single step - execute directly
-        const step = first;
-        const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
-        const result = await this.executeStep(step, stepInput, options);
-        results[step.id] = result;
-        if (result.success) {
-          stepOutputs[step.id] = { output: result.data };
-        }
-      } else {
-        // Multiple steps - execute in parallel if possible
-        const promises = steps.map(async (step) => {
-          const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
-          return {
-            stepId: step.id,
-            result: await this.executeStep(step, stepInput, options),
-          };
-        });
+    for (const level of this.groupStepsByDependencies(workflow.steps)) {
+      const stepGroups = this.groupStepsByRecommendedLayer(level, analysis);
 
-        const stepResults = await Promise.all(promises);
+      // Within a level, the recommended layer goes first; steps that share a
+      // priority run together.
+      for (const [_priority, steps] of Object.entries(stepGroups)) {
+        const [first] = steps;
+
+        if (steps.length === 1 && first) {
+          const stepInput = this.resolveStepInput(first.input, stepOutputs, inputData);
+          const result = await this.executeStep(first, stepInput, options);
+          results[first.id] = result;
+          stepOutputs[first.id] = this.publishedOutput(result);
+          continue;
+        }
+
+        const stepResults = await Promise.all(steps.map(async (step) => ({
+          stepId: step.id,
+          result: await this.executeStep(
+            step,
+            this.resolveStepInput(step.input, stepOutputs, inputData),
+            options
+          ),
+        })));
+
         stepResults.forEach(({ stepId, result }) => {
           results[stepId] = result;
-          if (result.success) {
-            stepOutputs[stepId] = { output: result.data };
-          }
+          stepOutputs[stepId] = this.publishedOutput(result);
         });
       }
     }
@@ -1990,7 +2036,7 @@ export class LayerManager {
       // including the Antigravity quality check in conversion workflows and the
       // fallback used when AI Studio fails.
       const result = await safeExecute(
-        () => this.executeWithLayer(step.layer, executionParams),
+        (signal) => this.executeWithLayer(step.layer, executionParams, signal),
         {
           operationName: `execute-step-${step.id}`,
           layer: step.layer,

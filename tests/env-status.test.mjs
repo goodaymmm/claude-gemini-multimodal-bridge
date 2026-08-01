@@ -17,12 +17,27 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, afterEach, describe, it } from 'node:test';
 
 import { SmartEnvLoader } from '../dist/utils/envLoader.js';
+
+const loaderUrl = new URL('../dist/utils/envLoader.js', import.meta.url).href;
+
+/** Why the bind-mount case cannot run here, or false when it can. */
+function bindMountSkipReason() {
+  if (process.platform !== 'linux') {
+    return 'bind mounts need Linux; nothing here is verified on this platform';
+  }
+  const probe = spawnSync('unshare', ['--map-root-user', '--mount', '--', 'true'], {
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+  return probe.status === 0 ? false : 'unprivileged user namespaces are unavailable';
+}
 
 const CREDENTIALS = [
   'AI_STUDIO_API_KEY',
@@ -264,7 +279,10 @@ describe('the home directory is a ceiling on that walk', () => {
     assert.deepEqual(ancestors(home, home), []);
   });
 
-  it('recognises home through a symlink', { skip: process.platform === 'win32' }, () => {
+  it('recognises home through a symlink', {
+    skip: process.platform === 'win32'
+      && 'POSIX symlinks; the ceiling is unverified against links on this platform',
+  }, () => {
     // Home is frequently a link -- /home/x -> /mnt/data/x and the like. Compare
     // the resolved paths or the ceiling is trivially side-stepped.
     const { home, deep } = homeWithMarker('.git');
@@ -274,7 +292,10 @@ describe('the home directory is a ceiling on that walk', () => {
     assert.deepEqual(ancestors(deep, linked), [], 'the link names the same directory');
   });
 
-  it('ignores case on Windows', { skip: process.platform !== 'win32' }, () => {
+  it('ignores case on Windows', {
+    skip: process.platform !== 'win32'
+      && 'case-insensitive paths are a Windows property; nothing here checks them elsewhere',
+  }, () => {
     // C:\Users\x and c:\users\x are one directory; a case difference must not
     // let the walk step onto home.
     const { home, deep } = homeWithMarker('.git');
@@ -292,5 +313,236 @@ describe('the home directory is a ceiling on that walk', () => {
       !SmartEnvLoader.getInstance().ancestorsUpToProjectRoot(deep).includes(real),
       'called with no home argument, it must still refuse the real one'
     );
+  });
+});
+
+describe('the ceiling holds against aliases and a broken home', () => {
+  // Two review findings on the same boundary.
+  //
+  // Comparing canonical paths collapsed symlinks but not bind mounts:
+  // reproduced in a user namespace, entering through /mnt/u for a home at
+  // /home/u left the ceiling unmatched, so the alias became a project root and
+  // its .env -- the home one -- was read.
+  //
+  // And homedir() as a default parameter ran before the body with its result
+  // unchecked. With HOME='' it returns '', resolve('') is the working
+  // directory, and the walk stopped before it began: measured [] where a real
+  // project root one level up should have been found.
+
+  const scratch = mkdtempSync(join(tmpdir(), 'cgmb-ceiling-'));
+  after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const loader = () => SmartEnvLoader.getInstance();
+
+  /** <root>/proj/sub, with package.json at <root>/proj. */
+  function projectTree() {
+    const root = mkdtempSync(join(scratch, 'tree-'));
+    const project = join(root, 'proj');
+    const deep = join(project, 'sub');
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{}', 'utf8');
+    return { root, project, deep };
+  }
+
+  it('recognises the same directory reached by two names', () => {
+    const dir = mkdtempSync(join(scratch, 'same-'));
+    const other = mkdtempSync(join(scratch, 'other-'));
+
+    assert.equal(SmartEnvLoader.sameDirectory(dir, dir), true);
+    assert.equal(SmartEnvLoader.sameDirectory(dir, other), false, 'two real directories are not one');
+    assert.equal(
+      SmartEnvLoader.sameDirectory(dir, join(scratch, 'not-on-disk')), false,
+      'a path with nothing behind it cannot be the home directory'
+    );
+  });
+
+  it('sees through a bind mount', { skip: bindMountSkipReason() }, () => {
+    // The case canonical paths cannot answer. Only reachable where an
+    // unprivileged user namespace can mount -- Linux. Skipped elsewhere, which
+    // means a green run on Windows or macOS says nothing about this.
+    const home = mkdtempSync(join(scratch, 'bind-home-'));
+    const alias = mkdtempSync(join(scratch, 'bind-alias-'));
+    mkdirSync(join(home, '.git'));
+    mkdirSync(join(home, 'scratch', 'subdir'), { recursive: true });
+
+    const mounted = spawnSync('unshare', [
+      '--map-root-user', '--mount', '--',
+      'bash', '-c',
+      `mount --bind ${JSON.stringify(home)} ${JSON.stringify(alias)} && ` +
+      `node --input-type=module -e ${JSON.stringify(
+        `import { SmartEnvLoader } from ${JSON.stringify(loaderUrl)};` +
+        `console.log(JSON.stringify(SmartEnvLoader.getInstance()` +
+        `.ancestorsUpToProjectRoot(${JSON.stringify(join(alias, 'scratch', 'subdir'))}, ${JSON.stringify(home)})));`
+      )}`,
+    ], { encoding: 'utf8', timeout: 120000 });
+
+    assert.equal(mounted.status, 0, `the mount must have worked:\n${mounted.stderr}`);
+    assert.deepEqual(
+      JSON.parse(mounted.stdout.trim().split('\n').pop()), [],
+      'the alias names the home directory, so the walk must stop there too'
+    );
+  });
+
+  it('falls back when the home value is unusable', () => {
+    // Each of these resolves against the working directory if taken at face
+    // value, which is how the ceiling became cwd.
+    const { project, deep } = projectTree();
+
+    for (const home of ['', '   ', '../somewhere', 'relative/path']) {
+      assert.deepEqual(
+        loader().ancestorsUpToProjectRoot(deep, home), [project],
+        `home=${JSON.stringify(home)} must fall through, not become the ceiling`
+      );
+    }
+  });
+
+  it('walks nothing rather than throwing when no home can be found', () => {
+    // A container running as an arbitrary UID with no passwd entry: homedir()
+    // throws. That used to happen in a default parameter, taking down the whole
+    // environment load before it could look at variables already set.
+    const { deep } = projectTree();
+    const saved = { home: process.env.HOME, profile: process.env.USERPROFILE };
+    delete process.env.HOME;
+    delete process.env.USERPROFILE;
+
+    try {
+      const found = loader().ancestorsUpToProjectRoot(deep, '');
+      assert.ok(Array.isArray(found), 'it must return a list, not throw');
+    } finally {
+      if (saved.home === undefined) { delete process.env.HOME; } else { process.env.HOME = saved.home; }
+      if (saved.profile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = saved.profile;
+      }
+    }
+  });
+
+  it('still stops at a home it can resolve', () => {
+    const home = mkdtempSync(join(scratch, 'ok-home-'));
+    mkdirSync(join(home, '.git'));
+    const deep = join(home, 'a', 'b');
+    mkdirSync(deep, { recursive: true });
+
+    assert.deepEqual(loader().ancestorsUpToProjectRoot(deep, home), []);
+  });
+});
+
+describe('every home the process has, and what happens with none', () => {
+  // Three review findings, all on the same boundary, all in conditions the
+  // previous tests did not enter.
+  //
+  // Taking the first usable home meant HOME=/root under sudo or a service
+  // manager hid the effective user's own home: measured, a walk from
+  // /home/u/proj/sub returned ["/home/u/proj", "/home/u"].
+  //
+  // And "no home could be resolved" returned an empty ancestor list while
+  // getDefaultSearchPaths carried on into CGMB's own package directory and the
+  // global prefix -- so the host project's .env was excluded and an unrelated
+  // installed one was read. The test I wrote for that branch never entered it:
+  // os.userInfo() still answers after HOME is unset, and the assertion was only
+  // that an array came back. These reach the branch and say so.
+
+  const scratch = mkdtempSync(join(tmpdir(), 'cgmb-homes-'));
+  after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const loader = () => SmartEnvLoader.getInstance();
+  const failing = () => { throw new Error('no passwd entry for this uid'); };
+
+  it('keeps both the environment home and the effective user home', () => {
+    const fromEnv = mkdtempSync(join(scratch, 'env-home-'));
+    const fromUid = mkdtempSync(join(scratch, 'uid-home-'));
+
+    const homes = loader().homeDirectories(undefined, [() => fromEnv, () => fromUid]);
+
+    assert.deepEqual(homes, [fromEnv, fromUid], 'HOME and the real home are separate facts');
+  });
+
+  it('stops at the effective user home even when HOME points elsewhere', () => {
+    // The measured failure. Both directories exist, so neither is discarded for
+    // being absent -- the old code simply stopped looking after the first.
+    const stale = mkdtempSync(join(scratch, 'stale-'));
+    const real = mkdtempSync(join(scratch, 'real-'));
+    const deep = join(real, 'proj', 'sub');
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(real, 'proj', 'package.json'), '{}', 'utf8');
+    mkdirSync(join(real, '.git'));
+
+    const ceilings = loader().homeDirectories(undefined, [() => stale, () => real]);
+    assert.ok(ceilings.includes(real), 'the real home must be among the ceilings');
+
+    // And the project below it is still reachable -- the ceiling must not cost
+    // us the case the walk exists for.
+    assert.deepEqual(loader().ancestorsUpToProjectRoot(deep, stale), [join(real, 'proj')]);
+  });
+
+  it('drops blank and relative candidates without dropping the rest', () => {
+    const real = mkdtempSync(join(scratch, 'usable-'));
+
+    assert.deepEqual(
+      loader().homeDirectories('', [() => '   ', () => '../relative', () => real]),
+      [real],
+      'each of those would resolve against the working directory'
+    );
+  });
+
+  it('reports no home at all when every source fails', () => {
+    // The branch the earlier test claimed to cover and did not.
+    assert.deepEqual(
+      loader().homeDirectories(undefined, [failing, () => undefined, () => '']), []
+    );
+  });
+
+  it('searches only the working directory when there is no home', async () => {
+    // What the empty list must actually cause. Before this, the walk was
+    // skipped but the search went on into CGMB's own install -- excluding the
+    // user's project while reading a stranger's credential.
+    const instance = loader();
+    const realHomes = instance.homeDirectories;
+    instance.homeDirectories = () => [];
+
+    try {
+      const paths = await instance.getDefaultSearchPaths();
+
+      assert.deepEqual(
+        paths, [process.cwd()],
+        'no package directory, no global prefix, no ~/.cgmb -- only where we were pointed'
+      );
+    } finally {
+      instance.homeDirectories = realHomes;
+    }
+  });
+
+  it('still searches beyond the working directory when a home is known', async () => {
+    // The other half: the restriction must be the exception, not the rule.
+    const instance = loader();
+    const paths = await instance.getDefaultSearchPaths();
+
+    assert.ok(paths.length > 1, 'a normal environment must keep its wider search');
+    assert.equal(paths[0], process.cwd());
+  });
+});
+
+describe('filesystem identity is compared exactly', () => {
+  it('does not confuse inodes that differ beyond 2^53', () => {
+    // statSync without the bigint option hands these back as JavaScript
+    // numbers. Measured on this machine: inodes around 6.2e15 against a safe
+    // integer ceiling of 9.0e15, so a filesystem numbering them higher would
+    // round two distinct inodes together -- declaring an ordinary ancestor to
+    // be the home directory and dropping the project root from the search.
+    const dev = 2n ** 40n;
+
+    assert.equal(
+      SmartEnvLoader.sameFileIdentity({ dev, ino: 2n ** 53n }, { dev, ino: 2n ** 53n + 1n }),
+      false,
+      'these are two inodes, and as JavaScript numbers they are one'
+    );
+    assert.equal(Number(2n ** 53n) === Number(2n ** 53n + 1n), true, 'which is the trap');
+  });
+
+  it('separates a difference in device from a difference in inode', () => {
+    assert.equal(SmartEnvLoader.sameFileIdentity({ dev: 1n, ino: 9n }, { dev: 2n, ino: 9n }), false);
+    assert.equal(SmartEnvLoader.sameFileIdentity({ dev: 1n, ino: 9n }, { dev: 1n, ino: 8n }), false);
+    assert.equal(SmartEnvLoader.sameFileIdentity({ dev: 1n, ino: 9n }, { dev: 1n, ino: 9n }), true);
   });
 });

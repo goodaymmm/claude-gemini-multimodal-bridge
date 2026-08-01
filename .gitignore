@@ -143,7 +143,13 @@ google_docs.md
 .npmignore
 
 # Additional package manager files
-package-lock.json
+#
+# package-lock.json is tracked, not ignored. Ignoring it meant CI could only run
+# `npm install`, which resolves fresh every time -- so a green run proved the
+# suite passed against whatever versions the registry served that morning, not
+# against anything anyone had tested. It also ruled out setup-node's cache,
+# which keys off the lockfile. npm does not publish a lockfile to consumers, so
+# tracking it costs them nothing.
 pnpm-lock.yaml
 .pnpm-store/
 yarn.lock

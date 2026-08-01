@@ -142,6 +142,11 @@ program
       if (options.verbose || options.debug) {
         process.env.LOG_LEVEL = 'debug';
         process.env.CGMB_DEBUG = 'true';
+        // And to the logger that already exists: it is built during module
+        // import, before argv is parsed, so setting the environment here is on
+        // its own too late. Measured before this: a --debug run emitted not one
+        // line above info.
+        logger.setLevel('debug');
       }
 
       // Load environment variables with smart discovery
@@ -1604,11 +1609,16 @@ program
       
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => aiStudioLayer.generateImage(safePrompt, {
+        (signal) => {
+          // A timeout has to reach the process doing the work, or it only ends
+          // the waiting while the billed request carries on.
+          signal.addEventListener('abort', () => aiStudioLayer.abortActiveOperations('generate-image timeout'), { once: true });
+          return aiStudioLayer.generateImage(safePrompt, {
           style: options.style,
           quality: 'high',
           aspectRatio: '1:1'
-        }),
+          });
+        },
         'generate-image',
         120000 // 2 minutes base, automatically adjusted for environment
       );
@@ -1683,13 +1693,16 @@ program
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => options.script ? 
-          aiStudioLayer.generateAudioWithScript(text) :
-          aiStudioLayer.generateAudio(text, {
-            voice: options.voice,
-            format: 'wav',
-            quality: 'hd'
-          }),
+        (signal) => {
+          signal.addEventListener('abort', () => aiStudioLayer.abortActiveOperations('generate-audio timeout'), { once: true });
+          return options.script ?
+            aiStudioLayer.generateAudioWithScript(text) :
+            aiStudioLayer.generateAudio(text, {
+              voice: options.voice,
+              format: 'wav',
+              quality: 'hd'
+            });
+        },
         'generate-audio',
         90000 // 1.5 minutes base, automatically adjusted for environment
       );
@@ -1991,7 +2004,9 @@ program
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => layerManager.executeWithOptimalLayer(
+        (signal) => {
+          signal.addEventListener('abort', () => layerManager.abortActiveOperations('cli timeout'), { once: true });
+          return layerManager.executeWithOptimalLayer(
           {
             prompt: analysisPrompt,
             files: fileReferences,
@@ -2002,7 +2017,8 @@ program
               preferredLayer: userPreferredLayer
             }
           }
-        ),
+          );
+        },
         'analyze-documents',
         240000 // 4 minutes base, automatically adjusted for environment and file count
       );
@@ -2078,7 +2094,9 @@ program
       
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => layerManager.executeWithOptimalLayer(
+        (signal) => {
+          signal.addEventListener('abort', () => layerManager.abortActiveOperations('cli timeout'), { once: true });
+          return layerManager.executeWithOptimalLayer(
           {
             prompt: options.prompt,
             files: fileRefs,
@@ -2088,7 +2106,8 @@ program
               execution_mode: 'adaptive'
             }
           }
-        ),
+          );
+        },
         'multimodal-process',
         300000 // 5 minutes base, automatically adjusted for environment and file count
       );

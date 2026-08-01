@@ -35,17 +35,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+          cache: npm
 
-      # `npm install`, not `npm ci`: package-lock.json is gitignored, and npm ci
-      # requires a lockfile. That also rules out setup-node's npm cache, which
-      # keys off the lockfile. The cost is a slower install and dependency
-      # versions that can drift between runs -- worth knowing, but not worth
-      # committing a lockfile for without asking.
+      # `npm ci`, against the tracked lockfile. With `npm install` and no
+      # lockfile, every run resolved fresh -- so green proved the suite passed
+      # against whatever the registry served that morning, and a dependency
+      # could break the build on a day nobody had changed anything.
       #
       # No API keys are provided. The suite drives stub binaries and pure
       # functions; the live layer checks that need credentials are run by hand.
       - name: Install
-        run: npm install
+        run: npm ci
 
       - name: Build
         run: npm run build

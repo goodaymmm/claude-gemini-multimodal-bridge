@@ -390,21 +390,24 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get estimated duration for a task
    */
-  getEstimatedDuration(task: ClaudeCodeTask): number {
+  getEstimatedDuration(task: ClaudeCodeTask, prompt?: string): number {
     const baseTime = 5000; // 5 seconds base
-    
+
     if (task.type === 'workflow' || task.action === 'workflow') {
       return baseTime * 3; // Workflows take longer
     }
-    
+
     if (task.action === 'complex_reasoning') {
       return baseTime * 2; // Complex reasoning takes longer
     }
-    
-    if (task.prompt && task.prompt.length > 1000) {
+
+    // The prompt that will be sent, when the caller knows it. Reading only
+    // task.prompt missed every step whose text is assembled from its fields.
+    const text = prompt ?? task.prompt;
+    if (text && text.length > 1000) {
       return baseTime * 1.5; // Longer prompts take more time
     }
-    
+
     return baseTime;
   }
 
@@ -412,11 +415,47 @@ export class ClaudeCodeLayer implements LayerInterface {
    * Execute general Claude Code task
    */
   private async executeGeneral(task: ClaudeCodeTask): Promise<string> {
-    const prompt = task.prompt || task.request || task.input || 'Please help with this task.';
-    
+    const prompt = task.prompt || task.request || task.input || this.describeTask(task);
+
+    // Sized from the prompt that is actually sent, not from task.prompt. A step
+    // whose text is built here has no task.prompt at all, so the estimate
+    // scored it as the shortest possible request.
     return await this.executeClaudeCommand(prompt, {
-      timeout: this.getTaskTimeout(task),
+      timeout: this.getTaskTimeout(task, prompt),
     });
+  }
+
+  /**
+   * A prompt built from a task that carries no prose.
+   *
+   * Workflow steps addressed to this layer often carry structure rather than a
+   * sentence: the analysis workflow's `analyze_requirements` step arrives as
+   * {documents, analysisType, outputRequirements}, and its `synthesize_analysis`
+   * step as {analysisResults, requirements}. None of those is prompt, request
+   * or input, so both fell through to the literal "Please help with this
+   * task." -- measured against a live run, Claude answered "no specific task
+   * has been described in this conversation", twice, and both answers were
+   * folded into the workflow result as though they were work.
+   */
+  private describeTask(task: ClaudeCodeTask): string {
+    const action = typeof task.action === 'string' ? task.action : task.type;
+    const skip = new Set(['action', 'type', 'files', 'options', 'workflow', 'depth']);
+
+    const fields = Object.entries(task)
+      .filter(([key, value]) => !skip.has(key) && value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+
+    if (fields.length === 0) {
+      return action
+        ? `Perform the "${action}" step of a CGMB workflow. No further input was supplied.`
+        : 'Please help with this task.';
+    }
+
+    const heading = action
+      ? `Perform the "${action}" step of a CGMB workflow, using the following input:`
+      : 'Please act on the following input:';
+
+    return `${heading}\n\n${fields.join('\n')}`;
   }
 
   /**
@@ -566,16 +605,55 @@ export class ClaudeCodeLayer implements LayerInterface {
    * internal reasoning calls with whatever model the host developer happened
    * to configure, so they are stripped and the child picks its own defaults.
    */
-  private buildChildEnv(): NodeJS.ProcessEnv {
-    const env = { ...process.env };
+  static readonly STRIPPED_CHILD_VARS = [
+    // Model overrides. A parent that has remapped the aliases would silently
+    // remap the child's model too.
+    'ANTHROPIC_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'CLAUDE_CODE_SUBAGENT_MODEL',
 
-    delete env.ANTHROPIC_MODEL;
-    delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
-    delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
-    delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-    delete env.CLAUDE_CODE_SUBAGENT_MODEL;
+    // The parent session's identity. CGMB is commonly registered as an MCP
+    // server inside Claude Code, so when it shells out to `claude` the child
+    // inherited the session it was launched from: the same session id, the same
+    // entrypoint, the same IDE socket. The child then presents itself as part
+    // of a conversation it is not in.
+    'CLAUDECODE',
+    'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_ENTRYPOINT',
+    'CLAUDE_CODE_SSE_PORT',
+    'CLAUDE_CODE_IDE_HOST',
+    'CLAUDE_CODE_IDE_PORT',
+
+    // CGMB's own Google credentials. `claude` has no use for them, and the
+    // narrower the set of processes that hold a key, the fewer places it can
+    // leak from. The Antigravity layer already builds its child environment
+    // from an allowlist for the same reason; this is the same rule stated as a
+    // denylist, because unlike agy, `claude` legitimately needs a broad
+    // environment to find its own config and credentials.
+    'AI_STUDIO_API_KEY',
+    'GOOGLE_AI_STUDIO_API_KEY',
+    'GEMINI_API_KEY',
+  ] as const;
+
+  /**
+   * The environment the `claude` child gets: this process's, minus what it
+   * must not carry over. Exposed as a static so what is stripped can be
+   * checked without spawning anything.
+   */
+  static childEnvFrom(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const env = { ...source };
+
+    for (const name of ClaudeCodeLayer.STRIPPED_CHILD_VARS) {
+      delete env[name];
+    }
 
     return env;
+  }
+
+  private buildChildEnv(): NodeJS.ProcessEnv {
+    return ClaudeCodeLayer.childEnvFrom(process.env);
   }
 
   /**
@@ -761,21 +839,36 @@ export class ClaudeCodeLayer implements LayerInterface {
    */
   private buildSynthesisPrompt(task: ClaudeCodeTask): string {
     let prompt = 'Please synthesize and respond to the following:\n\n';
-    
-    if (task.request) {
-      prompt += `Request: ${task.request}\n\n`;
+
+    // `request` is what a direct caller sends; a workflow step carries the same
+    // thing as `prompt`, and some callers as `input`. Only `request` was read,
+    // so every synthesis step of a workflow -- the last step of the analysis,
+    // conversion and orchestration flows -- reached Claude as two sentences of
+    // instructions with nothing to synthesise, and whatever came back was
+    // reported as the workflow's answer.
+    const request = task.request
+      ?? (typeof task.prompt === 'string' ? task.prompt : undefined)
+      ?? (typeof task.input === 'string' ? task.input : undefined);
+
+    if (request) {
+      prompt += `Request: ${request}\n\n`;
     }
-    
-    if (task.inputs && typeof task.inputs === 'object') {
+
+    const inputs = task.inputs as Record<string, unknown> | undefined;
+    if (inputs && typeof inputs === 'object') {
       prompt += 'Input Sources:\n';
-      Object.entries(task.inputs).forEach(([source, content], index) => {
-        prompt += `${index + 1}. ${source}: ${content}\n`;
+      Object.entries(inputs).forEach(([source, content], index) => {
+        // Upstream answers arrive as objects when a step published structured
+        // data; "[object Object]" is not something to synthesise from.
+        prompt += `${index + 1}. ${source}: ${
+          typeof content === 'string' ? content : JSON.stringify(content)
+        }\n`;
       });
       prompt += '\n';
     }
-    
+
     prompt += 'Please provide a comprehensive, well-structured response that synthesizes all the information.';
-    
+
     return prompt;
   }
 
@@ -868,12 +961,25 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get task timeout
    */
-  private getTaskTimeout(task: ClaudeCodeTask): number {
+  private getTaskTimeout(task: ClaudeCodeTask, prompt?: string): number {
     if (typeof task.timeout === 'number') {
       return task.timeout;
     }
-    
-    return this.getEstimatedDuration(task) + 30000; // Add 30s buffer
+
+    // A floor, not a guess. The estimate below is 5 seconds for anything that
+    // is not a workflow or complex reasoning, so an ordinary step got 35
+    // seconds -- for an interactive `claude` invocation that answers a real
+    // question. Measured: the analysis workflow's first step timed out at
+    // exactly 35000ms as soon as it was given something to think about, having
+    // previously come back fast because it was answering a placeholder.
+    //
+    // The floor is this layer's own budget. A step is not a different kind of
+    // call from any other `claude` invocation, and the estimate is a guess with
+    // no measurement behind it: measured, one analyze_requirements step took 85
+    // seconds to do the work properly, which 120 seconds would clear only
+    // narrowly and 35 not at all. LayerManager bounds the step at the same five
+    // minutes, so this cannot outlive its caller.
+    return Math.max(this.getEstimatedDuration(task, prompt) + 30000, this.DEFAULT_TIMEOUT);
   }
 
   /**

@@ -105,6 +105,25 @@ export class TimeoutManager {
       return result;
 
     } catch (error) {
+      // Whatever ended the wait, the caller is about to be told this failed --
+      // so anything still running on its behalf has to stop.
+      //
+      // abort() used to live only inside the timer above, which meant it fired
+      // for the one case that is not the common one. A document or multimodal
+      // run has an inner budget of about 105 seconds against a CLI timeout of
+      // 240 or 300, so the inner layer rejects first: measured, the signal
+      // stayed unaborted and the listeners in cli.ts never ran, leaving the MCP
+      // child billing away until its own ceiling. Failure is failure, and the
+      // boundary contract is that nothing continues past a terminal result.
+      //
+      // What this does not do: retries *inside* the operation still spawn,
+      // because the abort happens as the operation settles. Cancelling those
+      // needs the signal threaded through ErrorHandler and LayerManager, which
+      // is a separate piece of work.
+      if (!controller.signal.aborted) {
+        controller.abort();
+      }
+
       // Ensure cleanup on any error
       if (timeoutId) {
         clearTimeout(timeoutId);
@@ -200,17 +219,20 @@ export class TimeoutManager {
    * Create a timeout-aware promise wrapper for CLI commands
    */
   public static wrapCLICommand<T>(
-    command: () => Promise<T>,
+    command: (signal: AbortSignal) => Promise<T>,
     commandName: string,
     baseTimeout: number = 120000
   ): Promise<T> {
     const environment = this.detectEnvironment();
-    
+
     return this.executeWithTimeout(
-      async (_signal) => {
-        // Pass abort signal to command if it supports it
-        return await command();
-      },
+      // The signal reaches the command now. It used to be discarded here under
+      // a comment saying it was passed on, so a timeout only ever ended the
+      // waiting: the work carried on. Every caller of this wrapper is a billed
+      // AI Studio operation -- image, audio, document, multimodal -- so the CLI
+      // reported failure while the request kept running, and a retry on top of
+      // it paid twice for output nobody would see.
+      async (signal) => command(signal),
       {
         name: `CLI-${commandName}`,
         timeout: baseTimeout,
@@ -282,7 +304,7 @@ export async function withTimeout<T>(
  * Convenience function for CLI commands with environment detection
  */
 export async function withCLITimeout<T>(
-  operation: () => Promise<T>,
+  operation: (signal: AbortSignal) => Promise<T>,
   commandName: string,
   baseTimeout: number = 120000
 ): Promise<T> {

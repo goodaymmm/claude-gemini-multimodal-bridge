@@ -1,8 +1,8 @@
 import { config } from 'dotenv';
-import { existsSync, realpathSync } from 'fs';
+import { existsSync, realpathSync, statSync } from 'fs';
 import { findExecutable } from './platformUtils.js';
-import { homedir } from 'os';
-import { dirname, join, resolve } from 'path';
+import { homedir, userInfo } from 'os';
+import { dirname, isAbsolute, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
 import { probeCommand } from './processUtils.js';
@@ -158,6 +158,26 @@ export class SmartEnvLoader {
     // 1. Current working directory
     paths.push(process.cwd());
 
+    // Without a home directory, stop here.
+    //
+    // Everything below this line is CGMB going looking on the user's behalf --
+    // up the tree, into its own package, into the global install prefix. The
+    // home directory is what bounds the first of those, and returning an empty
+    // ancestor list while letting the rest proceed was a half-measure: in a
+    // container running as an arbitrary UID with no passwd entry and no HOME,
+    // the host project's .env was correctly excluded and the .env sitting in
+    // CGMB's own install directory was read instead. Same class of mistake,
+    // different directory. If the boundary cannot be established, the only
+    // directory CGMB may read a credential from is the one it was pointed at.
+    //
+    // Explicit configuration is unaffected: variables already in the
+    // environment are checked by the caller regardless of what this returns.
+    const homes = this.homeDirectories();
+    if (homes.length === 0) {
+      logger.debug('No home directory could be resolved; limiting the .env search to the working directory');
+      return paths;
+    }
+
     // 2. Ancestors of the working directory, up to the project root.
     //
     // Running a CLI from a subdirectory of your project is ordinary, and the
@@ -169,10 +189,16 @@ export class SmartEnvLoader {
     // findProjectRoot below cannot serve here: it only returns a directory
     // whose package.json is CGMB itself, so a host project's root is invisible
     // to it. Different question, different answer.
-    for (const ancestor of this.ancestorsUpToProjectRoot(process.cwd())) {
-      if (!paths.includes(ancestor)) {
-        paths.push(ancestor);
+    // Wrapped like steps 3-5: one leg of the search failing should narrow the
+    // search, not stop the environment from loading at all.
+    try {
+      for (const ancestor of this.ancestorsUpToProjectRoot(process.cwd())) {
+        if (!paths.includes(ancestor)) {
+          paths.push(ancestor);
+        }
       }
+    } catch (error) {
+      // Ignore errors walking up from the working directory
     }
 
     // 3. Look for package.json to find project root
@@ -236,6 +262,113 @@ export class SmartEnvLoader {
   }
 
   /**
+   * Whether two paths name the same directory on disk.
+   *
+   * Comparing canonical paths is not enough. realpath resolves symlinks but
+   * says nothing about bind mounts: mount /home/u at /mnt/u and the two paths
+   * stay distinct while being one directory. Reproduced in a user namespace --
+   * a walk entered through the alias put the home directory on the search list
+   * and read its .env, which is the credential boundary this ceiling exists to
+   * hold.
+   *
+   * The inode identity is POSIX-only on purpose. Windows fs.Stats does not
+   * populate dev/ino dependably, and the aliases Windows does offer --
+   * junctions and symlinks -- are already collapsed by realpath.
+   */
+  static sameDirectory(a: string, b: string): boolean {
+    if (SmartEnvLoader.canonical(a) === SmartEnvLoader.canonical(b)) {
+      return true;
+    }
+
+    if (process.platform === 'win32') {
+      return false;
+    }
+
+    const left = SmartEnvLoader.statIdentity(a);
+    const right = SmartEnvLoader.statIdentity(b);
+    return left !== undefined && right !== undefined
+      && SmartEnvLoader.sameFileIdentity(left, right);
+  }
+
+  /**
+   * A directory's filesystem identity, or undefined if it is not on disk.
+   *
+   * Read as BigInt. The default statSync hands dev and ino back as JavaScript
+   * numbers, which cannot hold every 64-bit inode: this machine already reports
+   * inodes around 6.2e15 against a safe-integer ceiling of 9.0e15, so two
+   * distinct inodes on a filesystem that numbers them higher would round to the
+   * same value. That failure is the dangerous direction -- it would declare an
+   * ordinary ancestor to be the home directory and drop the project root from
+   * the search entirely.
+   */
+  private static statIdentity(path: string): { dev: bigint; ino: bigint } | undefined {
+    try {
+      const stats = statSync(path, { bigint: true });
+      return { dev: stats.dev, ino: stats.ino };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Whether two filesystem identities are the same one. Split out to be tested exactly. */
+  static sameFileIdentity(a: { dev: bigint; ino: bigint }, b: { dev: bigint; ino: bigint }): boolean {
+    return a.dev === b.dev && a.ino === b.ino;
+  }
+
+  /**
+   * The home directory to use as a ceiling, or undefined if there is none.
+   *
+   * homedir() used to be a default parameter, which meant it ran before the
+   * function body and its result went unchecked. Two ways that hurt: with
+   * HOME='' it returns '', and resolve('') is the working directory -- so the
+   * ceiling became cwd and the walk stopped before it started, losing a real
+   * project's .env one level up. And in a container running as an arbitrary UID
+   * with no passwd entry, homedir() throws outright, which took down the whole
+   * environment load before it could even look at the variables already set.
+   *
+   * Anything relative or blank is rejected for the same reason: it would
+   * resolve against cwd.
+   *
+   * Every usable candidate is kept, not just the first. $HOME and the effective
+   * user's home are different facts and both are ceilings: under sudo, a
+   * service manager or a container, HOME=/root while the real home is
+   * /home/u -- measured, taking only the first left /home/u on the search list,
+   * which is precisely what a ceiling is for.
+   *
+   * An empty result means no ceiling could be established at all, and the
+   * caller must not walk anywhere on its own.
+   */
+  homeDirectories(
+    explicit?: string,
+    sources: Array<() => string | undefined> = [() => homedir(), () => userInfo().homedir]
+  ): string[] {
+    const found: string[] = [];
+    const seen = new Set<string>();
+
+    for (const source of [() => explicit, ...sources]) {
+      let value: string | undefined;
+      try {
+        value = source();
+      } catch {
+        continue; // no passwd entry, or no HOME to fall back on
+      }
+
+      const trimmed = value?.trim();
+      if (!trimmed || !isAbsolute(trimmed)) {
+        continue; // blank or relative would resolve against the working directory
+      }
+
+      const key = SmartEnvLoader.canonical(trimmed);
+      if (!seen.has(key)) {
+        seen.add(key);
+        found.push(trimmed);
+      }
+    }
+
+    return found;
+  }
+
+  /**
    * Directories between `start` and the project root that contains it.
    *
    * A project root holds package.json or .git -- the markers every other tool
@@ -256,14 +389,18 @@ export class SmartEnvLoader {
    *
    * `start` itself is excluded; the caller already searched it.
    */
-  ancestorsUpToProjectRoot(start: string, home: string = homedir()): string[] {
-    const ceiling = SmartEnvLoader.canonical(home);
+  ancestorsUpToProjectRoot(start: string, home?: string): string[] {
+    const ceilings = this.homeDirectories(home);
+    if (ceilings.length === 0) {
+      return [];
+    }
+
     const from = resolve(start);
     const ancestors: string[] = [];
     let current = from;
 
     while (current !== dirname(current)) {
-      if (SmartEnvLoader.canonical(current) === ceiling) {
+      if (ceilings.some(ceiling => SmartEnvLoader.sameDirectory(current, ceiling))) {
         return [];
       }
 

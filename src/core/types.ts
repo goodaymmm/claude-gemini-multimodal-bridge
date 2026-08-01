@@ -345,7 +345,7 @@ export class CGMBError extends Error {
     message: string,
     public code: string,
     public layer?: LayerType,
-    public details?: Record<string, any>
+    public details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'CGMBError';
@@ -353,14 +353,14 @@ export class CGMBError extends Error {
 }
 
 export class LayerError extends CGMBError {
-  constructor(message: string, layer: LayerType, details?: Record<string, any>) {
+  constructor(message: string, layer: LayerType, details?: Record<string, unknown>) {
     super(message, 'LAYER_ERROR', layer, details);
     this.name = 'LayerError';
   }
 }
 
 export class WorkflowError extends CGMBError {
-  constructor(message: string, details?: Record<string, any>) {
+  constructor(message: string, details?: Record<string, unknown>) {
     super(message, 'WORKFLOW_ERROR', undefined, details);
     this.name = 'WorkflowError';
   }

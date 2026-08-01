@@ -20,22 +20,52 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, '..', 'dist', 'cli.js');
+// Built, not written by hand: an escape spliced into a string literal is how
+// a generated fixture elsewhere in this suite became invalid JavaScript.
+const NEWLINE = String.fromCharCode(10);
 
 /** How long to wait for the milestone before giving up and letting a test fail. */
 const READY_TIMEOUT_MS = 60000;
 /** Grace after the milestone for trailing writes on both streams to arrive. */
 const SETTLE_MS = 400;
 
-/** Has the server answered the initialize request? */
+/** The JSON value on a line, or undefined if it is not JSON at all. */
+function parseLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Is this a JSON-RPC 2.0 frame?
+ *
+ * Being parseable is not the same as being protocol. The logger emits JSON --
+ * `{"level":"info","message":"..."}` is a perfectly good JSON document -- so a
+ * check that only asked whether a line parsed accepted exactly the output it
+ * exists to reject. Every frame carries jsonrpc "2.0" and is either a request
+ * or notification (method) or a response (result or error against an id).
+ */
+function isProtocolFrame(value) {
+  const has = (key) => Object.prototype.hasOwnProperty.call(value, key);
+
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) { return false; }
+  if (value.jsonrpc !== '2.0') { return false; }
+  if (typeof value.method === 'string') { return true; }
+
+  return has('id') && (has('result') || has('error'));
+}
+
+/** Has the server answered the initialize request -- with a response, not just JSON? */
 function sawInitializeResponse(stdout) {
   return stdout.split('\n').some(line => {
     const trimmed = line.trim();
     if (trimmed === '') { return false; }
-    try {
-      return JSON.parse(trimmed).id === 1;
-    } catch {
-      return false;
-    }
+    const frame = parseLine(trimmed);
+    return isProtocolFrame(frame)
+      && frame.id === 1
+      && Object.prototype.hasOwnProperty.call(frame, 'result');
   });
 }
 
@@ -153,21 +183,52 @@ function whyItEnded({ exit, spawnError }) {
   return 'still running at the deadline';
 }
 
-/** Lines on stdout that are not parseable JSON. */
+/** Lines on stdout that are not JSON-RPC frames. */
 function nonProtocolLines(stdout) {
   return stdout
     .split('\n')
     .map(line => line.trim())
     .filter(line => line !== '')
-    .filter(line => {
-      try {
-        JSON.parse(line);
-        return false;
-      } catch {
-        return true;
-      }
-    });
+    .filter(line => !isProtocolFrame(parseLine(line)));
 }
+
+describe('what counts as protocol on stdout', () => {
+  it('rejects a JSON log line as firmly as a plain one', () => {
+    // The check these cases depend on. It used to ask only whether a line
+    // parsed as JSON, and the logger emits JSON: a Winston line on stdout --
+    // the exact failure the suite exists to catch -- would have been counted as
+    // protocol and the run would have gone green.
+    const logLine = JSON.stringify({ level: 'info', message: 'CGMB server started' });
+    const noVersion = JSON.stringify({ id: 1, result: {} });
+    const wrongVersion = JSON.stringify({ jsonrpc: '1.0', id: 1, result: {} });
+    const bare = 'CGMB server started';
+
+    assert.deepEqual(nonProtocolLines([logLine, noVersion, wrongVersion, bare].join('\n')),
+      [logLine, noVersion, wrongVersion, bare],
+      'only JSON-RPC frames may pass');
+
+    const response = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { capabilities: {} } });
+    const failure = JSON.stringify({ jsonrpc: '2.0', id: 2, error: { code: -32601, message: 'x' } });
+    const notification = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' });
+
+    assert.deepEqual(nonProtocolLines([response, failure, notification, ''].join('\n')), [],
+      'and real frames must not be reported');
+  });
+
+  it('accepts only a real initialize response as the milestone', () => {
+    // `ready` gates the other cases: if anything with id 1 satisfies it, a run
+    // that logged its way to an id can be read as a server that answered.
+    const good = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05' } });
+
+    assert.equal(sawInitializeResponse(good), true);
+    assert.equal(sawInitializeResponse(JSON.stringify({ id: 1, result: {} })), false, 'no jsonrpc field');
+    assert.equal(sawInitializeResponse(JSON.stringify({ jsonrpc: '2.0', id: 2, result: {} })), false, 'wrong id');
+    assert.equal(
+      sawInitializeResponse(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'x' })), false,
+      'a request carrying id 1 is not an answer to one'
+    );
+  });
+});
 
 describe('MCP stdio channel', () => {
   it('writes nothing but JSON to stdout, with NODE_ENV unset', async () => {
@@ -213,11 +274,22 @@ describe('MCP stdio channel', () => {
     // --debug set LOG_LEVEL but not CGMB_DEBUG, and the console transport was
     // gated on the latter -- so the flag was silently inert exactly where it
     // was needed.
-    // Both runs stop at the same milestone -- the initialize response plus the
-    // same settle window -- so the comparison is between what the two
-    // configurations wrote, not between how long each was allowed to run.
-    // Stopping each as soon as its own condition was met would make the sizes
-    // a function of timing.
+    // Judged by content, not by volume. Comparing stderr lengths made the case
+    // a race: the two runs differ by two lines out of thirty, and under WSL the
+    // extra ones did not always arrive inside the settle window, so this failed
+    // roughly one run in three with nothing wrong.
+    //
+    // The marker is written while the environment is being loaded, long before
+    // the milestone either run stops at, so its presence does not depend on
+    // timing at all.
+    // A line at a level a plain run cannot emit. The earlier marker --
+    // "Environment loading completed" -- was passed to envLoader as a
+    // parameter, so it appeared whether or not the flag reached the logger at
+    // all, and the logger is where --debug was still inert: the singleton is
+    // built during module import, before argv is parsed, so a --debug run
+    // emitted not one line above info.
+    const debugLevelLines = text => text.split(NEWLINE).filter(line => /"level":"debug"/.test(line));
+
     const plain = await runServe({ env: { NODE_ENV: 'production' } });
     const debug = await runServe({ env: { NODE_ENV: 'production' }, args: ['--debug'] });
 
@@ -227,8 +299,13 @@ describe('MCP stdio channel', () => {
       `debug: ${whyItEnded(debug)})`
     );
     assert.ok(
-      debug.stderr.length > plain.stderr.length,
-      '--debug must produce more output than a plain run'
+      debugLevelLines(debug.stderr).length > 0,
+      `--debug must produce debug-level output; stderr had none:
+${debug.stderr.slice(-600)}`
+    );
+    assert.deepEqual(
+      debugLevelLines(plain.stderr), [],
+      'and a plain run must not -- otherwise the marker proves nothing about the flag'
     );
     assert.deepEqual(nonProtocolLines(debug.stdout), [], '--debug must not reach stdout either');
   });

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import { execSync, spawn } from 'child_process';
 import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
@@ -89,6 +90,18 @@ function detectLanguage(text: string): string | null {
  * AIStudioLayer handles AI Studio MCP integration with enhanced authentication support
  * Provides multimodal file processing for PDF, images, audio, and documents
  */
+
+/**
+ * The cancellation in force for the current execute() call.
+ *
+ * Threading a signal parameter through every dispatch branch and on into ten
+ * executeMCPCommand call sites would be a wide mechanical change for one fact
+ * that is the same everywhere. An instance field cannot hold it: one layer
+ * instance serves concurrent requests, so one caller giving up would kill
+ * another caller's child. Async context is per-call and follows the awaits.
+ */
+const cancellation = new AsyncLocalStorage<AbortSignal>();
+
 export class AIStudioLayer implements LayerInterface {
   private readonly instanceId: string;
   private authVerifier: AuthVerifier;
@@ -100,6 +113,15 @@ export class AIStudioLayer implements LayerInterface {
   private antigravityLayer: AntigravityCLILayer | undefined;
   private mcpServerProcess?: any;
   private persistentMCPProcess?: any; // Persistent MCP process for better performance
+  /**
+   * Children currently doing billed work, so a timeout can actually end it.
+   *
+   * The CLI wraps image, audio, document and multimodal runs in a timeout that
+   * used to end only the waiting: the request kept running in the child, was
+   * still billed, and a retry on top of it paid twice. Cancellation has to
+   * reach a process, and this is the set of processes it has to reach.
+   */
+  private activeChildren = new Set<any>();
   private mcpProcessStartTime = 0; // Track when MCP process was started
   private readonly MCP_PROCESS_TTL = 10 * 60 * 1000; // 10 minutes MCP process lifetime
   private isInitialized = false;
@@ -295,9 +317,9 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Execute a task through AI Studio
    */
-  async execute(task: any): Promise<LayerResult> {
+  async execute(task: any, signal?: AbortSignal): Promise<LayerResult> {
     return safeExecute(
-      async () => {
+      async (operationSignal) => cancellation.run(operationSignal, async () => {
         const startTime = Date.now();
         
         // Use lightweight initialization for simple tasks
@@ -392,11 +414,12 @@ export class AIStudioLayer implements LayerInterface {
             model: AI_MODELS.MULTIMODAL_DEFAULT,
           },
         };
-      },
+      }),
       {
         operationName: 'execute-aistudio-task',
         layer: 'aistudio',
         timeout: this.getTaskTimeout(task),
+        ...(signal ? { signal } : {}),
       }
     );
   }
@@ -803,7 +826,12 @@ export class AIStudioLayer implements LayerInterface {
     });
 
     try {
-      // Step 1: Generate script using gemini-2.0-flash
+      // Step 1: Generate the script.
+      //
+      // This was hardcoded to gemini-2.0-flash, a generation Google has shut
+      // down, so the request could only be rejected -- the same defect as the
+      // gemini-2.0-flash-exp that was removed from six call sites, missed
+      // because the check that found those forbade one exact literal.
       const scriptPrompt = options.scriptPrompt || 
         `Generate a script for the following request: ${prompt}. ` +
         (options.speakers ? 
@@ -812,7 +840,7 @@ export class AIStudioLayer implements LayerInterface {
       
       const scriptResult = await this.executeMCPCommandOptimized('generate_text', {
         prompt: scriptPrompt,
-        model: 'gemini-2.0-flash',
+        model: AI_MODELS.GEMINI_FLASH,
         maxOutputTokens: 1000
       });
 
@@ -1608,7 +1636,71 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Execute MCP command
    */
-  private async executeMCPCommand(command: string, params: any): Promise<any> {
+  /**
+   * End a child immediately, by whatever means the platform requires.
+   *
+   * SIGKILL rather than SIGTERM because the point is to stop paying: a server
+   * that installed a SIGTERM handler, or is blocked inside an HTTP call, would
+   * otherwise keep going. Windows has no signals, so taskkill /T /F is the
+   * equivalent -- and /T matters, since the child may itself have spawned one.
+   */
+  static terminateChild(child: { pid?: number | undefined; kill: (signal?: NodeJS.Signals | number) => boolean }): void {
+    if (child.pid === undefined) {
+      return;
+    }
+
+    if (isPlatformWindows()) {
+      try {
+        execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
+        return;
+      } catch {
+        // fall through to the signal attempt below
+      }
+    }
+
+    try {
+      child.kill('SIGKILL');
+    } catch (error) {
+      logger.debug('Could not terminate MCP child', { error: (error as Error).message });
+    }
+  }
+
+  /**
+   * Stop everything this layer currently has running.
+   *
+   * Called when a CLI timeout fires. Returns how many children were ended, so a
+   * caller -- or a test -- can tell the difference between cancelling work and
+   * cancelling nothing. The persistent process is included: killing it costs a
+   * respawn on the next call, which the existing check for a killed process
+   * already handles, and leaving it running costs money.
+   */
+  abortActiveOperations(reason: string = 'cancelled'): number {
+    const children = [...this.activeChildren];
+    if (this.persistentMCPProcess && !this.persistentMCPProcess.killed) {
+      children.push(this.persistentMCPProcess);
+    }
+
+    for (const child of children) {
+      AIStudioLayer.terminateChild(child);
+    }
+
+    this.activeChildren.clear();
+    if (this.persistentMCPProcess) {
+      this.persistentMCPProcess = undefined;
+    }
+
+    if (children.length > 0) {
+      logger.info('Ended in-flight AI Studio work', { reason, processes: children.length });
+    }
+
+    return children.length;
+  }
+
+  private async executeMCPCommand(
+    command: string,
+    params: any,
+    signal: AbortSignal | undefined = cancellation.getStore()
+  ): Promise<any> {
     // Normalize file paths in params for cross-platform compatibility
     // This ensures Windows backslashes are converted to forward slashes before MCP transmission
     if (params) {
@@ -1708,6 +1800,30 @@ export class AIStudioLayer implements LayerInterface {
           GOOGLE_AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
         },
       });
+
+      this.activeChildren.add(child);
+      child.once('close', () => this.activeChildren.delete(child));
+
+      // Cancellation reaches this process, not just the promise waiting on it.
+      // safeExecute aborts on any terminal outcome, so a retry that has already
+      // given up on attempt one no longer leaves attempt one generating -- the
+      // MCP server bills for its output whether or not anyone is still reading.
+      if (signal) {
+        const stopOnAbort = () => {
+          if (!isCompleted) {
+            isCompleted = true;
+            logger.info(`[${this.instanceId}] Cancelling MCP command`, { command, pid: child.pid });
+            AIStudioLayer.terminateChild(child);
+          }
+        };
+
+        if (signal.aborted) {
+          stopOnAbort();
+        } else {
+          signal.addEventListener('abort', stopOnAbort, { once: true });
+          child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
+        }
+      }
 
       // Diagnostic log after successful spawn
       logger.info(`[${this.instanceId}] MCP process spawned`, {
