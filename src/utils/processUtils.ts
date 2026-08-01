@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'child_process';
-import { realpathSync } from 'fs';
+import { realpathSync, statSync } from 'fs';
 import { isAbsolute, join, relative, resolve } from 'path';
 import { logger } from './logger.js';
 
@@ -199,25 +199,45 @@ export function commandAvailable(command: string, args: string[] = ['--version']
 }
 
 /**
- * Where `pgrep` is, resolved once and only from a trusted location.
+ * Where `pgrep` is -- from a fixed list of system locations, never from PATH.
  *
- * `execFileSync('pgrep', ...)` searched PATH. This module exists partly to stop
- * exactly that: a `pgrep` inside the working tree or a node_modules/.bin on
- * PATH -- which npm and npx both arrange -- would have been executed during
- * cancellation and shutdown, inheriting this process's whole environment,
- * API keys included. Resolved through the same check every other command in
- * here goes through, and fail closed when there is nothing trustworthy.
+ * Two versions of this were wrong. The first called `execFileSync('pgrep', ...)`
+ * and let PATH decide, which npm and npx populate with node_modules/.bin. The
+ * second routed it through resolveTrustedCommand, whose rule is "not inside the
+ * current working directory" -- so running from a subdirectory of a repository
+ * made that repository's own node_modules/.bin an *ancestor*, outside cwd, and
+ * therefore trusted. Both would have run a `pgrep` committed to a checkout,
+ * during cancellation and shutdown, at this process's privileges.
+ *
+ * There is no general rule that makes PATH safe here, so PATH is not consulted.
+ * pgrep is a system tool and lives in a system directory; anything calling
+ * itself pgrep somewhere else is not the tool we mean. The list is short,
+ * absolute, and checked to be a regular file.
  */
+const SYSTEM_PGREP_PATHS = [
+  '/usr/bin/pgrep',
+  '/bin/pgrep',
+  '/usr/local/bin/pgrep',
+  '/sbin/pgrep',
+  '/usr/sbin/pgrep',
+];
+
 let pgrepPath: string | undefined | null = null;
 
 function trustedPgrep(): string | undefined {
   if (pgrepPath === null) {
-    pgrepPath = resolveTrustedCommand('pgrep');
+    pgrepPath = SYSTEM_PGREP_PATHS.find(candidate => {
+      try {
+        return statSync(candidate).isFile();
+      } catch {
+        return false;
+      }
+    });
   }
   return pgrepPath;
 }
 
-/** For tests: forget the resolved path so a different PATH can be exercised. */
+/** For tests: forget the resolved path. */
 export function resetPgrepResolution(): void {
   pgrepPath = null;
 }
@@ -305,10 +325,14 @@ function descendantsOf(pid: number, pgrep: string): number[] {
  *     and signalling the negative pid reaches every member at once -- the
  *     kernel's own bookkeeping, with no window for a fork to escape through.
  *     Windows has no groups; `taskkill /T /F` is its equivalent.
- *  2. Walking with `pgrep -P`, for a child that has no group of its own --
- *     spawned elsewhere, or on a platform where detaching did not take. A walk
- *     is a snapshot, so it is repeated until it stops finding anything new, but
- *     it cannot be as airtight as (1). It is the fallback, not the plan.
+ *  2. Walking with `pgrep -P`, which finds descendants wherever they are --
+ *     including one that called setsid and left the group entirely, which (1)
+ *     cannot reach. A walk is a snapshot, so it is repeated until it stops
+ *     finding anything new.
+ *
+ * Both run on POSIX, every time. They find different things: (1) is atomic but
+ * only covers the group, (2) covers escapees but is a snapshot. Using either as
+ * a reason to skip the other leaves exactly the gap the other was for.
  *
  * Detaching used to be the whole answer, and its cost is that the child leaves
  * the terminal's foreground process group, so Ctrl-C no longer reaches it
@@ -328,8 +352,21 @@ export function terminateProcessTree(child: { pid?: number | undefined; kill: (s
     } catch {
       // The process may already be gone; fall through to the signal attempt.
     }
-  } else if (!killProcessGroup(child.pid)) {
+  } else {
+    // Both, always, in this order.
+    //
+    // Treating a successful group signal as "the tree is gone" was wrong:
+    // process.kill(-pid) succeeding says only that *something* in that group
+    // received it. A child that called setsid, or that was itself spawned
+    // detached, has left for a group of its own -- the signal still succeeds
+    // and the escapee never hears it. The two mechanisms find different things,
+    // so neither is a reason to skip the other.
+    //
+    // The walk runs first, while the parent is still alive to be walked from:
+    // killing the group first would reparent anything that escaped and put it
+    // out of reach of `pgrep -P`.
     walkAndKillDescendants(child.pid);
+    killProcessGroup(child.pid);
   }
 
   try {
@@ -344,15 +381,14 @@ export function terminateProcessTree(child: { pid?: number | undefined; kill: (s
  *
  * A negative pid addresses the group whose id is that pid, which exists only
  * for a process spawned `detached` (or one that called setpgid itself). For
- * anything else this fails with ESRCH -- measured -- and the caller falls back
- * to walking.
+ * anything else this fails with ESRCH -- measured. The result is not a verdict
+ * on whether the tree is gone; see the caller.
  */
-function killProcessGroup(pid: number): boolean {
+function killProcessGroup(pid: number): void {
   try {
     process.kill(-pid, 'SIGKILL');
-    return true;
   } catch {
-    return false;
+    // No group of its own, or already gone. The walk above is what covers it.
   }
 }
 

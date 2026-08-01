@@ -944,6 +944,58 @@ describe('shutdown reaches what a running server started', () => {
   });
 });
 
+describe('a grandchild that leaves the group is still ended', {
+  skip: process.platform === 'win32' && 'setsid is POSIX; Windows uses taskkill /T',
+}, () => {
+  // A successful group signal says only that something in that group received
+  // it. A child that calls setsid has left for a group of its own -- the signal
+  // still succeeds and the escapee never hears it. Treating that success as
+  // "the tree is gone" skipped the walk, which is the only thing that could
+  // have found it.
+
+  it('finds one that called setsid and left', async () => {
+    const id = Math.random().toString(36).slice(2);
+    const marks = join(scratch, `escapee-marks-${id}.txt`);
+    const pidFile = join(scratch, `escapee-pid-${id}.txt`);
+
+    const escapee = join(scratch, `escapee-${id}.cjs`);
+    writeFileSync(escapee, [
+      "process.on('SIGTERM', () => {});",
+      "const fs = require('fs');",
+      `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, 'tick'), 40);`,
+    ].join(NEWLINE), 'utf8');
+
+    // detached inside the child: a session of its own, out of the parent's
+    // process group entirely.
+    const parent = join(scratch, `escapee-parent-${id}.cjs`);
+    writeFileSync(parent, [
+      "const { spawn } = require('child_process');",
+      `spawn(process.execPath, [${JSON.stringify(escapee)}], { stdio: 'ignore', detached: true });`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const child = spawn(process.execPath, [parent], { stdio: 'ignore', detached: true });
+
+    for (let waited = 0; waited < 8000 && !existsSync(pidFile); waited += 100) {
+      await settle(100);
+    }
+    const escapeePid = Number(readFileSync(pidFile, 'utf8'));
+    assert.ok(escapeePid > 0, 'the escapee must have started to prove anything');
+    await settle(300);
+
+    terminateProcessTree(child);
+    await settle();
+
+    assert.equal(
+      isAlive(escapeePid), false,
+      'a descendant in a group of its own outlived the tree it belonged to'
+    );
+
+    try { process.kill(escapeePid, 'SIGKILL'); } catch { /* already gone */ }
+  });
+});
+
 describe('the process group carries it when the walk cannot', {
   skip: process.platform === 'win32' && 'POSIX process groups; Windows uses taskkill /T',
 }, () => {
@@ -1006,6 +1058,43 @@ describe('what the tree walk is allowed to run', () => {
   // node_modules/.bin at the front of PATH, so a `pgrep` committed to a
   // repository would have been executed during cancellation and shutdown --
   // inheriting this process's whole environment, API keys included.
+
+  it('refuses a pgrep planted in an ancestor of the working directory', () => {
+    // The first fix routed pgrep through resolveTrustedCommand, whose rule is
+    // "not inside the current working directory". Run from a subdirectory --
+    // which is normal -- the repository's own node_modules/.bin becomes an
+    // *ancestor*, outside cwd, and was therefore trusted. npm and npx put
+    // ancestor .bin directories on PATH, so this is the ordinary case, not an
+    // exotic one. pgrep is resolved from a fixed list of system paths now, so
+    // no PATH entry of any shape can be chosen.
+    const nested = join(scratch, `nested-cwd-${Math.random().toString(36).slice(2)}`);
+    const ancestorBin = join(nested, 'node_modules', '.bin');
+    mkdirSync(join(nested, 'subdir'), { recursive: true });
+    mkdirSync(ancestorBin, { recursive: true });
+
+    const stolen = join(scratch, `ancestor-stolen-${Math.random().toString(36).slice(2)}.txt`);
+    const fake = join(ancestorBin, process.platform === 'win32' ? 'pgrep.cmd' : 'pgrep');
+    if (process.platform === 'win32') {
+      writeFileSync(fake, `@echo off\r\necho stolen > "${stolen}"\r\n`, 'utf8');
+    } else {
+      writeFileSync(fake, `#!/bin/sh\necho stolen > "${stolen}"\n`, { mode: 0o755 });
+    }
+
+    const savedPath = process.env.PATH;
+    const savedCwd = process.cwd();
+    try {
+      process.chdir(join(nested, 'subdir'));
+      process.env.PATH = ancestorBin + delimiter + savedPath;
+      resetPgrepResolution();
+
+      terminateProcessTree({ pid: 2147480000, kill: () => false });
+      assert.equal(existsSync(stolen), false, 'a pgrep on PATH was executed');
+    } finally {
+      process.chdir(savedCwd);
+      process.env.PATH = savedPath;
+      resetPgrepResolution();
+    }
+  });
 
   it('refuses a pgrep planted in the working tree', () => {
     const planted = join(process.cwd(), 'node_modules', '.bin');

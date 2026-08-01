@@ -608,16 +608,23 @@ export class ClaudeCodeLayer implements LayerInterface {
       };
 
       const timeoutId = setTimeout(() => {
-        // SIGTERM first, so a well-behaved `claude` can finish tidily.
-        child.kill('SIGTERM');
-
-        // Then the tree, whether or not the parent took the hint. Escalating
-        // only when the parent was *still alive* had it exactly backwards: a
-        // `claude` that exits promptly on SIGTERM makes the condition false, so
-        // the helpers it started were never touched -- the well-behaved case
-        // was the leaky one. The walk is harmless once everything is gone.
+        // The tree is ended from the live parent, not after it.
+        //
+        // Two versions of this were wrong. The first escalated only if the
+        // parent was *still alive* two seconds after SIGTERM, so a `claude`
+        // that exits promptly left its helpers running -- the tidy case was the
+        // leaky one. The second always escalated, but still killed the parent
+        // first: on Windows what this holds is the cmd.exe that launched
+        // claude.cmd, and `taskkill /PID <parent> /T` cannot enumerate a tree
+        // whose root has already exited. Either way the helpers survived.
+        //
+        // So: end the tree while the parent is still there to be walked from,
+        // and let SIGTERM follow for a process that would rather leave tidily.
+        terminateProcessTree(child);
         setTimeout(() => {
-          terminateProcessTree(child);
+          if (child.exitCode === null && child.signalCode === null) {
+            terminateProcessTree(child);
+          }
         }, 2000).unref();
         settled = true;
         reject(new Error(`Claude Code execution timeout after ${timeout}ms`));
