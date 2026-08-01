@@ -826,7 +826,12 @@ export class AIStudioLayer implements LayerInterface {
     });
 
     try {
-      // Step 1: Generate script using gemini-2.0-flash
+      // Step 1: Generate the script.
+      //
+      // This was hardcoded to gemini-2.0-flash, a generation Google has shut
+      // down, so the request could only be rejected -- the same defect as the
+      // gemini-2.0-flash-exp that was removed from six call sites, missed
+      // because the check that found those forbade one exact literal.
       const scriptPrompt = options.scriptPrompt || 
         `Generate a script for the following request: ${prompt}. ` +
         (options.speakers ? 
@@ -835,7 +840,7 @@ export class AIStudioLayer implements LayerInterface {
       
       const scriptResult = await this.executeMCPCommandOptimized('generate_text', {
         prompt: scriptPrompt,
-        model: 'gemini-2.0-flash',
+        model: AI_MODELS.GEMINI_FLASH,
         maxOutputTokens: 1000
       });
 

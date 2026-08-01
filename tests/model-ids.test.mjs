@@ -1,17 +1,23 @@
 /**
- * Model IDs the AI Studio layer sends to Google.
+ * Model IDs this project sends, checked against a catalogue rather than a shape.
  *
  * A plausible-looking ID is not the same as an existing one. `gemini-2.0-flash-exp`
  * was the hardcoded default for image and multimodal analysis at six call sites,
- * long after Google shut the 2.0 Flash line down -- it is absent from the live
- * catalogue, so every call that fell back to the default would have been
- * rejected. Nothing caught it because nothing checked.
+ * long after Google shut the 2.0 Flash line down -- every call that fell back to
+ * the default would have been rejected, and nothing caught it because nothing
+ * checked.
  *
- * These are static checks: asking the live catalogue would need a billed API key
- * and network, which does not belong in a unit test. What can be pinned here is
- * that no shut-down generation is used as a default and that every constant is
- * shaped like a model ID. Existence against the catalogue is verified by hand
- * with GET /v1beta/models when a value changes.
+ * The first version of this file then checked for that one literal and for a
+ * `^gemini-[0-9]` shape. Both are satisfied by any invented ID, and a plain
+ * `gemini-2.0-flash` -- the same shut-down generation -- sat in the TTS script
+ * step untouched by either. Membership of a dated catalogue is the check that
+ * would have caught it, so that is what this does now:
+ * tests/fixtures/model-catalogue.json lists what has been verified to exist,
+ * against which service, and when.
+ *
+ * Still a snapshot, not a live lookup: asking the real catalogue needs a billed
+ * key and network. What it buys is that a new or changed ID cannot reach a call
+ * site without someone verifying it and dating the entry.
  */
 
 import assert from 'node:assert/strict';
@@ -20,10 +26,16 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { AI_MODELS } from '../dist/core/types.js';
+import { AI_MODELS, ANTIGRAVITY_MODELS, DEFAULT_ANTIGRAVITY_MODEL } from '../dist/core/types.js';
+
+
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = join(HERE, '..', 'src');
+
+const CATALOGUE = JSON.parse(readFileSync(join(HERE, 'fixtures', 'model-catalogue.json'), 'utf8'));
+const KNOWN = new Set([...CATALOGUE.aistudio, ...CATALOGUE.antigravity]);
+const RETIRED = CATALOGUE.retired;
 
 /** Every .ts file under src/. */
 function sourceFiles(dir = SRC, found = []) {
@@ -39,22 +51,26 @@ function sourceFiles(dir = SRC, found = []) {
 }
 
 describe('AI Studio model constants', () => {
-  it('names no shut-down generation', () => {
-    // Google lists Gemini 2.0 Flash and 2.0 Flash-Lite as shut down. A default
-    // pointing at one is a request that cannot succeed.
+  it('names only models the catalogue says exist', () => {
+    // The check the shape regex could not make: `gemini-9.9-turbo` matches
+    // ^gemini-[0-9] perfectly and does not exist.
     for (const [key, value] of Object.entries(AI_MODELS)) {
-      assert.doesNotMatch(
-        value, /^gemini-2\.0-/,
-        `${key} = ${value} is from a shut-down generation`
+      assert.equal(typeof value, 'string', `${key} must be a string`);
+      assert.ok(
+        CATALOGUE.aistudio.includes(value),
+        `AI_MODELS.${key} = ${value} is not in the verified AI Studio catalogue. `
+        + 'Confirm it with GET /v1beta/models, then add it to '
+        + 'tests/fixtures/model-catalogue.json with the date.'
       );
     }
   });
 
-  it('gives every constant the shape of a model ID', () => {
+  it('names nothing that has been retired', () => {
     for (const [key, value] of Object.entries(AI_MODELS)) {
-      assert.equal(typeof value, 'string', `${key} must be a string`);
-      assert.match(value, /^gemini-[0-9]/, `${key} = ${value} does not look like a model ID`);
-      assert.doesNotMatch(value, /\s/, `${key} = ${value} contains whitespace`);
+      assert.equal(
+        RETIRED[value], undefined,
+        `AI_MODELS.${key} = ${value} is retired: ${RETIRED[value]}`
+      );
     }
   });
 
@@ -72,22 +88,62 @@ describe('AI Studio model constants', () => {
   });
 });
 
-describe('no source file hardcodes a retired model', () => {
-  it('has removed every gemini-2.0-flash-exp literal', () => {
+describe('Antigravity CLI model constants', () => {
+  it('lists only models agy was seen to serve', () => {
+    // A different catalogue from AI Studio's, and the only authority for it is
+    // the live output of `agy models`. Guessing here produces a CLI call that
+    // fails at the far end with an unhelpful message.
+    for (const value of ANTIGRAVITY_MODELS) {
+      if (!value.startsWith('gemini-')) { continue; } // agy also serves other vendors
+      assert.ok(
+        CATALOGUE.antigravity.includes(value),
+        `${value} is not in the verified agy catalogue -- check \`agy models\``
+      );
+    }
+  });
+
+  it('defaults to one of them', () => {
+    assert.ok(
+      ANTIGRAVITY_MODELS.includes(DEFAULT_ANTIGRAVITY_MODEL),
+      `the default ${DEFAULT_ANTIGRAVITY_MODEL} is not a model agy serves`
+    );
+  });
+});
+
+describe('every model literal at a call site', () => {
+  it('is a model that has been verified to exist', () => {
+    // The constants above are only half of it: a literal typed inline at a call
+    // site bypasses them entirely, which is how a shut-down gemini-2.0-flash
+    // stayed in the TTS script step while AI_MODELS was clean.
     const offenders = [];
 
     for (const file of sourceFiles()) {
+      const relative = file.replace(/.*[\\\\/]src[\\\\/]/, 'src/');
       const text = readFileSync(file, 'utf8');
-      // Comments explaining the removal are fine; a string literal is not.
-      for (const line of text.split('\n')) {
-        if (!line.includes('gemini-2.0-flash-exp')) { continue; }
-        const isComment = /^\s*(\/\/|\*|\/\*)/.test(line);
-        if (!isComment) {
-          offenders.push(`${file.replace(/.*[\\/]src[\\/]/, 'src/')}: ${line.trim().slice(0, 80)}`);
+
+      text.split('\n').forEach((line, index) => {
+        // A comment naming a retired model is how the removal is explained.
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) { return; }
+
+        // Anchored on a version digit: every real ID carries one, and
+          // `gemini-first` -- a --strategy value in cli.ts -- does not.
+          for (const match of line.matchAll(/['"`](gemini-[0-9][a-z0-9.-]*)['"`]/g)) {
+          const id = match[1];
+          const why = RETIRED[id];
+
+          if (why) {
+            offenders.push(`${relative}:${index + 1}  ${id} -- retired: ${why}`);
+          } else if (!KNOWN.has(id)) {
+            offenders.push(`${relative}:${index + 1}  ${id} -- not in the verified catalogue`);
+          }
         }
-      }
+      });
     }
 
-    assert.deepEqual(offenders, [], `retired model still used:\n${offenders.join('\n')}`);
+    assert.deepEqual(
+      offenders, [],
+      'model IDs must be verified and listed in tests/fixtures/model-catalogue.json:\n'
+      + offenders.join('\n')
+    );
   });
 });
