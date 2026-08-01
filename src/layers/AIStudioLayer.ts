@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import { execSync, spawn } from 'child_process';
 import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
@@ -89,6 +90,18 @@ function detectLanguage(text: string): string | null {
  * AIStudioLayer handles AI Studio MCP integration with enhanced authentication support
  * Provides multimodal file processing for PDF, images, audio, and documents
  */
+
+/**
+ * The cancellation in force for the current execute() call.
+ *
+ * Threading a signal parameter through every dispatch branch and on into ten
+ * executeMCPCommand call sites would be a wide mechanical change for one fact
+ * that is the same everywhere. An instance field cannot hold it: one layer
+ * instance serves concurrent requests, so one caller giving up would kill
+ * another caller's child. Async context is per-call and follows the awaits.
+ */
+const cancellation = new AsyncLocalStorage<AbortSignal>();
+
 export class AIStudioLayer implements LayerInterface {
   private readonly instanceId: string;
   private authVerifier: AuthVerifier;
@@ -304,9 +317,9 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Execute a task through AI Studio
    */
-  async execute(task: any): Promise<LayerResult> {
+  async execute(task: any, signal?: AbortSignal): Promise<LayerResult> {
     return safeExecute(
-      async () => {
+      async (operationSignal) => cancellation.run(operationSignal, async () => {
         const startTime = Date.now();
         
         // Use lightweight initialization for simple tasks
@@ -401,11 +414,12 @@ export class AIStudioLayer implements LayerInterface {
             model: AI_MODELS.MULTIMODAL_DEFAULT,
           },
         };
-      },
+      }),
       {
         operationName: 'execute-aistudio-task',
         layer: 'aistudio',
         timeout: this.getTaskTimeout(task),
+        ...(signal ? { signal } : {}),
       }
     );
   }
@@ -1625,7 +1639,7 @@ export class AIStudioLayer implements LayerInterface {
    * otherwise keep going. Windows has no signals, so taskkill /T /F is the
    * equivalent -- and /T matters, since the child may itself have spawned one.
    */
-  static terminateChild(child: { pid?: number; kill: (signal?: string) => boolean }): void {
+  static terminateChild(child: { pid?: number | undefined; kill: (signal?: NodeJS.Signals | number) => boolean }): void {
     if (child.pid === undefined) {
       return;
     }
@@ -1677,7 +1691,11 @@ export class AIStudioLayer implements LayerInterface {
     return children.length;
   }
 
-  private async executeMCPCommand(command: string, params: any): Promise<any> {
+  private async executeMCPCommand(
+    command: string,
+    params: any,
+    signal: AbortSignal | undefined = cancellation.getStore()
+  ): Promise<any> {
     // Normalize file paths in params for cross-platform compatibility
     // This ensures Windows backslashes are converted to forward slashes before MCP transmission
     if (params) {
@@ -1780,6 +1798,27 @@ export class AIStudioLayer implements LayerInterface {
 
       this.activeChildren.add(child);
       child.once('close', () => this.activeChildren.delete(child));
+
+      // Cancellation reaches this process, not just the promise waiting on it.
+      // safeExecute aborts on any terminal outcome, so a retry that has already
+      // given up on attempt one no longer leaves attempt one generating -- the
+      // MCP server bills for its output whether or not anyone is still reading.
+      if (signal) {
+        const stopOnAbort = () => {
+          if (!isCompleted) {
+            isCompleted = true;
+            logger.info(`[${this.instanceId}] Cancelling MCP command`, { command, pid: child.pid });
+            AIStudioLayer.terminateChild(child);
+          }
+        };
+
+        if (signal.aborted) {
+          stopOnAbort();
+        } else {
+          signal.addEventListener('abort', stopOnAbort, { once: true });
+          child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
+        }
+      }
 
       // Diagnostic log after successful spawn
       logger.info(`[${this.instanceId}] MCP process spawned`, {

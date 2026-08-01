@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { AIStudioLayer } from '../dist/layers/AIStudioLayer.js';
+import { safeExecute } from '../dist/utils/errorHandler.js';
 import { withCLITimeout } from '../dist/utils/TimeoutManager.js';
 
 // Not `cgmb-agy-*`: the workspace-isolation test scans tmpdir for that prefix.
@@ -259,5 +260,166 @@ describe('the production spawn path, end to end', () => {
     assert.equal(isAlive(spawned.pid), false, 'the server was still billing when the caller gave up');
     assert.equal(stub.ticks(), atFailure, 'no work may happen after the caller was told it failed');
     assert.equal(stub.starts(), startsAtFailure, 'and nothing may be respawned in its place');
+  });
+});
+
+describe('nothing keeps running after a terminal result', () => {
+  // The lifecycle question, asked of the path that bills: once the caller has
+  // its answer -- success or failure -- no child, timer or retry belonging to
+  // that call may still be doing anything.
+  //
+  // safeExecute is where every layer call goes through, and its AbortController
+  // used to reach nothing at all: it was created, aborted on timeout, and the
+  // operation was never given the signal. So a timeout or an inner failure
+  // ended the waiting while the MCP server carried on generating, and the retry
+  // stacked on top of it paid for a second one.
+
+  // execute() is the production entry point and it authenticates first, so
+  // without a key it refuses before spawning anything and these cases would
+  // measure the refusal. The value is a well-formed shape and nothing else: the
+  // stand-in below never looks at it, and no request leaves the machine.
+  const realKey = process.env.AI_STUDIO_API_KEY;
+  process.env.AI_STUDIO_API_KEY = 'AIzaSyTESTKEYNOTREALNOTUSED0000000000';
+  after(() => {
+    if (realKey === undefined) {
+      delete process.env.AI_STUDIO_API_KEY;
+    } else {
+      process.env.AI_STUDIO_API_KEY = realKey;
+    }
+  });
+
+  /** A stand-in MCP server: ignores SIGTERM, records that it started, keeps working. */
+  function stubServer() {
+    const id = Math.random().toString(36).slice(2);
+    const marks = join(scratch, `life-marks-${id}.txt`);
+    const starts = join(scratch, `life-starts-${id}.txt`);
+    const script = join(scratch, `life-stub-${id}.cjs`);
+
+    writeFileSync(script, [
+      "process.on('SIGTERM', () => {});",
+      "const fs = require('fs');",
+      `fs.appendFileSync(${JSON.stringify(starts)}, process.pid + ${JSON.stringify('\n')});`,
+      "process.stdin.resume();",
+      `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, ${JSON.stringify('work\n')}), 40);`,
+    ].join('\n'), 'utf8');
+
+    const count = file => {
+      try {
+        return readFileSync(file, 'utf8').split('\n').filter(Boolean).length;
+      } catch {
+        return 0;
+      }
+    };
+
+    return { script, ticks: () => count(marks), starts: () => count(starts) };
+  }
+
+  /**
+   * Start a layer command through the production route and wait for its child.
+   *
+   * The child is identified by difference against what was already running:
+   * one layer instance can have several in flight, and taking the first entry
+   * of the set handed back someone else's process.
+   */
+  async function spawnThrough(layer, signal) {
+    const before = new Set(layer.activeChildren);
+    const inFlight = layer.execute({ action: 'generate_image', prompt: 'anything' }, signal);
+    inFlight.catch(() => {}); // it ends when the child is killed
+
+    const fresh = () => [...layer.activeChildren].find(child => !before.has(child));
+    for (let waited = 0; waited < 15000 && !fresh(); waited += 100) {
+      await settle(100);
+    }
+    return fresh();
+  }
+
+  it('ends the layer child when the operation around it fails', async () => {
+    const stub = stubServer();
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => stub.script;
+
+    let spawned;
+
+    await assert.rejects(() => safeExecute(async (signal) => {
+      spawned = await spawnThrough(layer, signal);
+      await settle(300); // let it bill for a while before we give up on it
+
+      // Preconditions, so this cannot conclude anything about a stand-in that
+      // died on startup -- which is exactly how an earlier version of this
+      // shape passed with cancellation removed.
+      assert.equal(stub.starts(), 1, 'the stand-in must have started exactly once');
+      assert.ok(stub.ticks() > 0, 'and it must be doing work worth cancelling');
+      assert.ok(spawned?.pid, 'the production path must have spawned something');
+      assert.equal(isAlive(spawned.pid), true, 'it must still be running when we give up');
+
+      // An inner failure, which is the common case: the layer's own budget or
+      // the API rejecting, long before any outer timeout.
+      throw new Error('inner failure');
+    }, { operationName: 'lifecycle-inner-failure', timeout: 60000 }), /inner failure/);
+
+    const atFailure = stub.ticks();
+    await settle();
+
+    assert.equal(isAlive(spawned.pid), false, 'the server was still billing after the caller gave up');
+    assert.equal(stub.ticks(), atFailure, 'no work may happen after a terminal result');
+    assert.equal(stub.starts(), 1, 'and nothing may be respawned in its place');
+  });
+
+  it('ends the layer child when the operation around it times out', async () => {
+    const stub = stubServer();
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => stub.script;
+
+    let spawned;
+
+    await assert.rejects(() => safeExecute(async (signal) => {
+      spawned = await spawnThrough(layer, signal);
+      assert.ok(spawned?.pid, 'the production path must have spawned something');
+      await new Promise(resolve => setTimeout(resolve, 30000)); // outlive the budget
+    }, { operationName: 'lifecycle-timeout', timeout: 2000 }), /timed out/);
+
+    const atTimeout = stub.ticks();
+    await settle();
+
+    assert.equal(isAlive(spawned.pid), false, 'a timeout that leaves the work running is not a timeout');
+    assert.equal(stub.ticks(), atTimeout, 'no work may happen after the caller was told it timed out');
+  });
+
+  it('does not cancel a caller that is still waiting on a sibling call', async () => {
+    // One layer instance serves concurrent requests. Cancellation is per-call:
+    // one caller giving up must not take another caller's child with it, which
+    // is why the signal travels in async context rather than on the instance.
+    const doomed = stubServer();
+    const survivor = stubServer();
+    const layer = new AIStudioLayer();
+
+    layer.resolveMCPServerPath = () => survivor.script;
+    let keeper;
+    const keptAlive = safeExecute(async (signal) => {
+      keeper = await spawnThrough(layer, signal);
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      return 'still here';
+    }, { operationName: 'lifecycle-sibling', timeout: 60000 });
+
+    for (let waited = 0; waited < 15000 && !keeper; waited += 100) {
+      await settle(100);
+    }
+    assert.ok(keeper?.pid, 'the surviving call must have a child');
+
+    layer.resolveMCPServerPath = () => doomed.script;
+    let victim;
+    await assert.rejects(() => safeExecute(async (signal) => {
+      victim = await spawnThrough(layer, signal);
+      assert.ok(victim?.pid && victim.pid !== keeper.pid, 'the two calls must have separate children');
+      throw new Error('inner failure');
+    }, { operationName: 'lifecycle-victim', timeout: 60000 }), /inner failure/);
+
+    await settle();
+
+    assert.equal(isAlive(victim.pid), false, 'the cancelled call must have ended its own child');
+    assert.equal(isAlive(keeper.pid), true, "and must not have ended anyone else's");
+
+    assert.equal(await keptAlive, 'still here');
+    layer.abortActiveOperations('test cleanup');
   });
 });

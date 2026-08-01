@@ -452,7 +452,8 @@ export class LayerManager {
    */
   public async executeWithLayer(
     layerType: LayerType,
-    task: any
+    task: any,
+    signal?: AbortSignal
   ): Promise<LayerResult> {
     // Checked before routing, for every layer.
     //
@@ -478,7 +479,9 @@ export class LayerManager {
 
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();
-        return await aiStudioLayer.execute(task);
+        // The one layer that spawns a billed child. Cancellation has to reach
+        // the process, not just the promise waiting on it.
+        return await aiStudioLayer.execute(task, signal);
 
       default:
         throw new Error(`Unknown layer type: ${layerType}`);
@@ -2033,7 +2036,7 @@ export class LayerManager {
       // including the Antigravity quality check in conversion workflows and the
       // fallback used when AI Studio fails.
       const result = await safeExecute(
-        () => this.executeWithLayer(step.layer, executionParams),
+        (signal) => this.executeWithLayer(step.layer, executionParams, signal),
         {
           operationName: `execute-step-${step.id}`,
           layer: step.layer,
