@@ -1532,6 +1532,8 @@ export class AIStudioLayer implements LayerInterface {
         stdio: 'pipe',
         cwd: process.cwd(),
         shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
+        // Its own process group on POSIX; see terminateProcessTree.
+        ...(isWindowsSpawn ? {} : { detached: true }),
         env: {
           ...process.env,
           AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
@@ -1975,6 +1977,8 @@ export class AIStudioLayer implements LayerInterface {
         stdio: 'pipe',
         cwd: process.cwd(),
         shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
+        // Its own process group on POSIX; see terminateProcessTree.
+        ...(isWindowsSpawn ? {} : { detached: true }),
         env: {
           ...process.env,
           // New preferred environment variable name

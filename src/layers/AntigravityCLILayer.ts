@@ -553,7 +553,11 @@ export class AntigravityCLILayer implements LayerInterface {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: workspaceDir,
         env: this.buildChildEnv(),
-        ...(isWindows ? { windowsHide: true } : {}),
+        // Its own process group on POSIX, so a cancellation can end the group
+        // atomically rather than hunting for descendants. The cost -- Ctrl-C no
+        // longer reaching it directly -- is covered by the shutdown handlers
+        // every entry point installs, and by the live set below.
+        ...(isWindows ? { windowsHide: true } : { detached: true }),
       });
 
       liveChildren.add(child);

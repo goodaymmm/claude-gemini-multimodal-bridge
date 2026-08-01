@@ -6,7 +6,7 @@ import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } fro
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
-import { installShutdownHandlers, runShutdown } from './utils/shutdown.js';
+import { installShutdownHandlers, onShutdown } from './utils/shutdown.js';
 import { getEnvironmentStatus, loadEnvironmentSmart } from './utils/envLoader.js';
 import { getManualSetupInstructions, getMCPStatus, setupCGMBMCP } from './utils/mcpConfigManager.js';
 import path from 'path';
@@ -186,17 +186,15 @@ program
         } catch (error) {
           logger.error('Error during server shutdown', error as Error);
         }
-        // The children this server started while it was running. The awaited
-        // shutdown at the end of parseAsync() runs at the moment `serve`
-        // *starts*, when there is nothing yet to clean up, so without this a
-        // long-running server left its MCP child and any agy behind -- in-flight
-        // API calls included.
-        await runShutdown();
-        process.exit(0);
       };
 
-      process.on('SIGINT', gracefulShutdown);
-      process.on('SIGTERM', gracefulShutdown);
+      // Registered as a shutdown step rather than as its own signal listener.
+      // Two listeners for the same signal ran concurrently: the central one
+      // started runShutdown().finally(process.exit) while this one was still
+      // awaiting server.stop(), so with a short shutdown the process exited
+      // before the transport had closed -- and which finished first depended on
+      // timing. One handler, one order.
+      onShutdown('cgmb-server', gracefulShutdown);
       
     } catch (error) {
       logger.error('Failed to start CGMB server', error as Error);
@@ -2316,8 +2314,6 @@ program.on('option:*', function(this: any) {
 installShutdownHandlers();
 
 await program.parseAsync();
-
-await runShutdown();
 
 // If no command provided, show help
 if (!process.argv.slice(2).length) {

@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -191,6 +191,49 @@ function nonProtocolLines(stdout) {
     .filter(line => line !== '')
     .filter(line => !isProtocolFrame(parseLine(line)));
 }
+
+describe('the server stays up, and a one-shot command does not', () => {
+  // Two halves of the same rule, and getting one right broke the other.
+  //
+  // Cleanup used to run unconditionally as soon as parseAsync returned. That
+  // was harmless while it had nothing registered -- and stopped being harmless
+  // the moment `server.stop()` became one of its steps: `serve` returns from
+  // its action as soon as the transport is connected, so the cleanup ran
+  // against a healthy server and shut it down. Measured: exit 0 without
+  // answering a single request, which the four cases below caught.
+  //
+  // The other half is that a one-shot command must still end. Cleanup now
+  // hangs off 'beforeExit', which fires when the loop empties -- for `cgmb
+  // --version`, and never for a server.
+
+  it('answers requests instead of shutting itself down at startup', async () => {
+    const run = await runServe();
+
+    // `ready` is the whole point: it means an initialize response came back.
+    // The regression made the server stop itself before that, so it exited 0
+    // having answered nothing -- and a run that answers cannot have done that.
+    // The exit is not asserted on: runServe kills the server, and what a killed
+    // process reports differs between platforms.
+    assert.ok(run.ready, `the server stopped itself before answering (${whyItEnded(run)})`);
+    assert.deepEqual(nonProtocolLines(run.stdout), [], 'and it must have answered on the protocol channel');
+  });
+
+  it('lets a one-shot command exit, and quickly', async () => {
+    const started = Date.now();
+    const result = spawnSync(process.execPath, [CLI, '--version'], {
+      encoding: 'utf8',
+      timeout: 60000,
+      windowsHide: true,
+    });
+
+    assert.equal(result.status, 0, `--version must exit 0: ${result.stderr}`);
+    assert.match(result.stdout, /[0-9]+\.[0-9]+\.[0-9]+/, 'and print a version');
+    assert.ok(
+      Date.now() - started < 30000,
+      'cleanup must not keep a finished command alive; a child holding stdio does exactly that'
+    );
+  });
+});
 
 describe('what counts as protocol on stdout', () => {
   it('rejects a JSON log line as firmly as a plain one', () => {

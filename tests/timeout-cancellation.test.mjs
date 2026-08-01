@@ -15,13 +15,13 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { AIStudioLayer, shutdownAIStudio } from '../dist/layers/AIStudioLayer.js';
-import { terminateProcessTree } from '../dist/utils/processUtils.js';
+import { resetPgrepResolution, resolveTrustedCommand, terminateProcessTree } from '../dist/utils/processUtils.js';
 import { runShutdown } from '../dist/utils/shutdown.js';
 import { safeExecute } from '../dist/utils/errorHandler.js';
 import { withCLITimeout } from '../dist/utils/TimeoutManager.js';
@@ -633,7 +633,11 @@ describe('ending a child ends what it started', () => {
   // Windows has no groups; taskkill /T is the equivalent and is exercised here
   // as well, since the tree is the same shape either way.
 
-  it('kills a grandchild, not just the process it was handed', async () => {
+  for (const [shape, spawnOptions] of [
+    ['its own process group', process.platform === 'win32' ? {} : { detached: true }],
+    ['no group of its own, walked instead', {}],
+  ]) {
+  it(`kills a grandchild with ${shape}`, async () => {
     const id = Math.random().toString(36).slice(2);
     const marks = join(scratch, `grandchild-marks-${id}.txt`);
     const pidFile = join(scratch, `grandchild-pid-${id}.txt`);
@@ -655,12 +659,12 @@ describe('ending a child ends what it started', () => {
       "setInterval(() => {}, 1000);",
     ].join(NEWLINE), 'utf8');
 
-    // Spawned the way the layers spawn: no `detached`. Detaching would give the
-    // child a process group of its own and make a group signal work, but it
-    // also takes the child out of the terminal's foreground group, so Ctrl-C
-    // stops reaching it -- which is why the tree is walked instead. Testing
-    // against a detached child would have proved the easy case.
-    const child = spawn(process.execPath, [parent], { stdio: 'ignore' });
+    // Both mechanisms are exercised: `detached` is how the layers spawn, and
+    // gives the child a group the kernel can end atomically; without it there
+    // is no group and the walk is what has to find the grandchild. Testing only
+    // the detached shape would have proved the easy case, and only the
+    // undetached shape would have left the production path unexercised.
+    const child = spawn(process.execPath, [parent], { stdio: 'ignore', ...spawnOptions });
 
     for (let waited = 0; waited < 8000 && !existsSync(pidFile); waited += 100) {
       await settle(100);
@@ -686,6 +690,7 @@ describe('ending a child ends what it started', () => {
     await settle();
     assert.equal(ticks(), atKill, 'and it must not have done anything more');
   });
+  }
 });
 
 describe('a cancelled request is cancelled inside the server too', () => {
@@ -936,5 +941,119 @@ describe('shutdown reaches what a running server started', () => {
 
     assert.equal(first, second, 'concurrent callers must share one run');
     await first;
+  });
+});
+
+describe('the process group carries it when the walk cannot', {
+  skip: process.platform === 'win32' && 'POSIX process groups; Windows uses taskkill /T',
+}, () => {
+  // The two mechanisms cover for each other, which means neither is proven by
+  // a case the other can satisfy -- disabling the group path changed nothing
+  // while the walk was available. So the walk is taken away: with no pgrep to
+  // resolve, only the group can reach a grandchild, which is exactly the
+  // situation on a POSIX system without procps.
+
+  it('ends a detached grandchild with no pgrep available', async () => {
+    const id = Math.random().toString(36).slice(2);
+    const marks = join(scratch, `grouponly-marks-${id}.txt`);
+    const pidFile = join(scratch, `grouponly-pid-${id}.txt`);
+
+    const grandchild = join(scratch, `grouponly-gc-${id}.cjs`);
+    writeFileSync(grandchild, [
+      "process.on('SIGTERM', () => {});",
+      "const fs = require('fs');",
+      `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      `setInterval(() => fs.appendFileSync(${JSON.stringify(marks)}, 'tick'), 40);`,
+    ].join(NEWLINE), 'utf8');
+
+    const parent = join(scratch, `grouponly-parent-${id}.cjs`);
+    writeFileSync(parent, [
+      "const { spawn } = require('child_process');",
+      `spawn(process.execPath, [${JSON.stringify(grandchild)}], { stdio: 'ignore' });`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const child = spawn(process.execPath, [parent], { stdio: 'ignore', detached: true });
+
+    for (let waited = 0; waited < 8000 && !existsSync(pidFile); waited += 100) {
+      await settle(100);
+    }
+    const grandPid = Number(readFileSync(pidFile, 'utf8'));
+    assert.ok(grandPid > 0, 'the grandchild must have started to prove anything');
+    await settle(300);
+
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = join(scratch, 'definitely-empty');
+      resetPgrepResolution();
+      assert.equal(resolveTrustedCommand('pgrep'), undefined, 'the walk must be unavailable for this case');
+
+      terminateProcessTree(child);
+      await settle();
+
+      assert.equal(isAlive(grandPid), false, 'the group must have carried it without any walk');
+    } finally {
+      process.env.PATH = savedPath;
+      resetPgrepResolution();
+      try { process.kill(grandPid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+});
+
+describe('what the tree walk is allowed to run', () => {
+  // The walk shells out to `pgrep`, and the first version resolved it from
+  // PATH. This module exists partly to stop that: npm and npx both put
+  // node_modules/.bin at the front of PATH, so a `pgrep` committed to a
+  // repository would have been executed during cancellation and shutdown --
+  // inheriting this process's whole environment, API keys included.
+
+  it('refuses a pgrep planted in the working tree', () => {
+    const planted = join(process.cwd(), 'node_modules', '.bin');
+    mkdirSync(planted, { recursive: true });
+
+    const stolen = join(scratch, `stolen-${Math.random().toString(36).slice(2)}.txt`);
+    const fake = join(planted, process.platform === 'win32' ? 'pgrep.cmd' : 'pgrep');
+
+    if (process.platform === 'win32') {
+      writeFileSync(fake, `@echo off\r\necho stolen > "${stolen}"\r\n`, 'utf8');
+    } else {
+      writeFileSync(fake, `#!/bin/sh\necho stolen > "${stolen}"\n`, { mode: 0o755 });
+    }
+
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = planted + delimiter + savedPath;
+      resetPgrepResolution();
+
+      const resolved = resolveTrustedCommand('pgrep');
+      assert.ok(
+        resolved === undefined || !resolved.includes('node_modules'),
+        `a pgrep inside the tree must never be chosen, got: ${resolved}`
+      );
+
+      // And the production path must not have run it.
+      terminateProcessTree({ pid: process.pid + 999999, kill: () => false });
+      assert.equal(existsSync(stolen), false, 'the planted pgrep was executed');
+    } finally {
+      process.env.PATH = savedPath;
+      resetPgrepResolution();
+      rmSync(fake, { force: true });
+    }
+  });
+
+  it('says so rather than pretending, when there is no pgrep at all', () => {
+    // "no children" and "there is no pgrep here" used to be the same answer, so
+    // on a POSIX system without procps every tree kill silently became a
+    // single-process kill and reported success.
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = join(scratch, 'definitely-empty');
+      resetPgrepResolution();
+
+      assert.equal(resolveTrustedCommand('pgrep'), undefined, 'nothing trustworthy must be found');
+    } finally {
+      process.env.PATH = savedPath;
+      resetPgrepResolution();
+    }
   });
 });

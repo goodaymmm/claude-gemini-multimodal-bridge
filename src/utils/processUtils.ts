@@ -1,6 +1,7 @@
 import { execFileSync, execSync } from 'child_process';
 import { realpathSync } from 'fs';
 import { isAbsolute, join, relative, resolve } from 'path';
+import { logger } from './logger.js';
 
 /**
  * Safe, shell-free invocation of external commands on every platform.
@@ -198,36 +199,88 @@ export function commandAvailable(command: string, args: string[] = ['--version']
 }
 
 /**
+ * Where `pgrep` is, resolved once and only from a trusted location.
+ *
+ * `execFileSync('pgrep', ...)` searched PATH. This module exists partly to stop
+ * exactly that: a `pgrep` inside the working tree or a node_modules/.bin on
+ * PATH -- which npm and npx both arrange -- would have been executed during
+ * cancellation and shutdown, inheriting this process's whole environment,
+ * API keys included. Resolved through the same check every other command in
+ * here goes through, and fail closed when there is nothing trustworthy.
+ */
+let pgrepPath: string | undefined | null = null;
+
+function trustedPgrep(): string | undefined {
+  if (pgrepPath === null) {
+    pgrepPath = resolveTrustedCommand('pgrep');
+  }
+  return pgrepPath;
+}
+
+/** For tests: forget the resolved path so a different PATH can be exercised. */
+export function resetPgrepResolution(): void {
+  pgrepPath = null;
+}
+
+/**
+ * Direct children of a pid, or undefined if they cannot be determined.
+ *
+ * The distinction matters: "no children" and "there is no pgrep here" were the
+ * same answer, so on a POSIX system without procps every tree kill silently
+ * became a single-process kill.
+ */
+function childrenOf(pid: number, pgrep: string): number[] | undefined {
+  try {
+    return execFileSync(pgrep, ['-P', String(pid)], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      // Only what a process lister needs. It has no business with this
+      // process's credentials.
+      env: { PATH: process.env.PATH ?? '' },
+    })
+      .split('\n')
+      .map(line => Number(line.trim()))
+      .filter(value => Number.isInteger(value) && value > 0);
+  } catch (error) {
+    // Exit status 1 is pgrep's "no matches", which is a real answer. Anything
+    // else -- not found, timed out, killed -- is not.
+    const status = (error as { status?: number }).status;
+    return status === 1 ? [] : undefined;
+  }
+}
+
+/**
  * Every descendant of a pid, deepest last.
  *
- * `pgrep -P` lists direct children; walking it gives the whole tree. One spawn
- * per level, which is fine at shutdown and nowhere near a hot path.
+ * Walked repeatedly rather than once. A single snapshot misses anything forked
+ * after its parent was scanned, and killing that parent reparents the newcomer
+ * out of reach. Re-walking until a pass finds nothing new closes the window
+ * that a process which forks while being torn down would otherwise sit in.
  */
-function descendantsOf(pid: number): number[] {
+function descendantsOf(pid: number, pgrep: string): number[] {
   const found: number[] = [];
-  const queue = [pid];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === undefined) {
-      break;
-    }
+  for (let pass = 0; pass < 5; pass += 1) {
+    const before = found.length;
+    const queue = [pid, ...found];
 
-    let children: number[] = [];
-    try {
-      children = execFileSync('pgrep', ['-P', String(current)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-        .split('\n')
-        .map(line => Number(line.trim()))
-        .filter(value => Number.isInteger(value) && value > 0);
-    } catch {
-      // No children, or no pgrep. Either way there is nothing more to walk.
-    }
-
-    for (const child of children) {
-      if (!found.includes(child)) {
-        found.push(child);
-        queue.push(child);
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (current === undefined) {
+        break;
       }
+
+      for (const child of childrenOf(current, pgrep) ?? []) {
+        if (!found.includes(child)) {
+          found.push(child);
+          queue.push(child);
+        }
+      }
+    }
+
+    if (found.length === before) {
+      break; // nothing new appeared; the tree has stopped growing
     }
   }
 
@@ -244,17 +297,24 @@ function descendantsOf(pid: number): number[] {
  * The tree matters. `child.kill()` signals one process, and both `claude` and
  * `agy` spawn their own helpers -- so killing the one we hold left descendants
  * running and, on Windows, holding files open in a directory about to be
- * removed. Windows has taskkill /T for this.
+ * removed.
  *
- * POSIX is walked rather than signalled by process group. Signalling the group
- * needs the child spawned `detached`, and detaching had a cost that outweighed
- * the convenience: a detached child is outside the terminal's foreground group,
- * so Ctrl-C no longer reaches it and every spawn site becomes responsible for
- * ending its own children through machinery that has to exist and be wired
- * everywhere. Walking the tree needs nothing from the spawn site.
+ * Two mechanisms, in order of how much they can be trusted:
  *
- * Children first, then the parent: killing the parent first can leave a
- * descendant reparented to init and out of reach of the walk.
+ *  1. The process group. Spawning `detached` gives a child a group of its own,
+ *     and signalling the negative pid reaches every member at once -- the
+ *     kernel's own bookkeeping, with no window for a fork to escape through.
+ *     Windows has no groups; `taskkill /T /F` is its equivalent.
+ *  2. Walking with `pgrep -P`, for a child that has no group of its own --
+ *     spawned elsewhere, or on a platform where detaching did not take. A walk
+ *     is a snapshot, so it is repeated until it stops finding anything new, but
+ *     it cannot be as airtight as (1). It is the fallback, not the plan.
+ *
+ * Detaching used to be the whole answer, and its cost is that the child leaves
+ * the terminal's foreground process group, so Ctrl-C no longer reaches it
+ * directly. That is covered by installShutdownHandlers(), which every entry
+ * point now installs: the signal reaches this process, and this process ends
+ * the groups it owns.
  */
 export function terminateProcessTree(child: { pid?: number | undefined; kill: (signal?: NodeJS.Signals | number) => boolean }): void {
   if (child.pid === undefined) {
@@ -268,19 +328,54 @@ export function terminateProcessTree(child: { pid?: number | undefined; kill: (s
     } catch {
       // The process may already be gone; fall through to the signal attempt.
     }
-  } else {
-    for (const descendant of descendantsOf(child.pid).reverse()) {
-      try {
-        process.kill(descendant, 'SIGKILL');
-      } catch {
-        // Already gone.
-      }
-    }
+  } else if (!killProcessGroup(child.pid)) {
+    walkAndKillDescendants(child.pid);
   }
 
   try {
     child.kill('SIGKILL');
   } catch {
     // Already gone.
+  }
+}
+
+/**
+ * Signal the child's own process group, if it has one.
+ *
+ * A negative pid addresses the group whose id is that pid, which exists only
+ * for a process spawned `detached` (or one that called setpgid itself). For
+ * anything else this fails with ESRCH -- measured -- and the caller falls back
+ * to walking.
+ */
+function killProcessGroup(pid: number): boolean {
+  try {
+    process.kill(-pid, 'SIGKILL');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The fallback: find the descendants ourselves and end them, deepest first. */
+function walkAndKillDescendants(pid: number): void {
+  const pgrep = trustedPgrep();
+
+  if (pgrep === undefined) {
+    // Nothing trustworthy to enumerate with. Say so rather than silently
+    // killing one process and reporting success: a caller that believes the
+    // tree is gone will not look for what is left.
+    logger.warn('Cannot enumerate the process tree: no trusted pgrep found', {
+      pid,
+      consequence: 'only the process itself will be ended; helpers it started may survive',
+    });
+    return;
+  }
+
+  for (const descendant of descendantsOf(pid, pgrep).reverse()) {
+    try {
+      process.kill(descendant, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
   }
 }

@@ -570,6 +570,10 @@ export class ClaudeCodeLayer implements LayerInterface {
         cwd: this.packageRoot,
         env: this.buildChildEnv(),
         windowsHide: true,
+        // Its own process group on POSIX; see terminateProcessTree. Every
+        // child is tracked in liveClaudeChildren and ended by the shutdown
+        // step, so detaching does not make it anyone's orphan.
+        ...(process.platform === 'win32' ? {} : { detached: true }),
         ...target.spawnOptions,
       });
 
@@ -604,15 +608,16 @@ export class ClaudeCodeLayer implements LayerInterface {
       };
 
       const timeoutId = setTimeout(() => {
+        // SIGTERM first, so a well-behaved `claude` can finish tidily.
         child.kill('SIGTERM');
-        // Escalate only if the process is genuinely still alive: `child.killed`
-        // only reports that a signal was delivered. The tree, not the one
-        // process: `claude` starts helpers, and killing only what we hold left
-        // them running.
+
+        // Then the tree, whether or not the parent took the hint. Escalating
+        // only when the parent was *still alive* had it exactly backwards: a
+        // `claude` that exits promptly on SIGTERM makes the condition false, so
+        // the helpers it started were never touched -- the well-behaved case
+        // was the leaky one. The walk is harmless once everything is gone.
         setTimeout(() => {
-          if (child.exitCode === null && child.signalCode === null) {
-            terminateProcessTree(child);
-          }
+          terminateProcessTree(child);
         }, 2000).unref();
         settled = true;
         reject(new Error(`Claude Code execution timeout after ${timeout}ms`));

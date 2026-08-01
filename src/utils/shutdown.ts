@@ -103,6 +103,21 @@ export function installShutdownHandlers(): void {
       void runShutdown().finally(() => process.exit(0));
     });
   }
+
+  // The ordinary end of a one-shot command: the event loop has emptied, so
+  // there is nothing left to do but tidy up -- and 'beforeExit', unlike 'exit',
+  // can wait for that.
+  //
+  // This replaced an unconditional `await runShutdown()` after parseAsync
+  // returned. That looked equivalent and was not: `serve` returns from its
+  // action as soon as the transport is connected, so the call landed while the
+  // server was healthy and ran every step against it -- including the one that
+  // stops the server. Measured: `cgmb serve` exited 0 without answering a
+  // single request. A long-running server never empties its loop, so this never
+  // fires for one.
+  process.on('beforeExit', () => {
+    void runShutdown();
+  });
 }
 
 let handlersInstalled = false;
