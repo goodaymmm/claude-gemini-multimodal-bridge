@@ -217,6 +217,100 @@ describe('claude layer: running the CLI', () => {
   });
 });
 
+describe('a workflow step that carries structure, not prose', () => {
+  // Steps addressed to this layer often have no sentence in them. The analysis
+  // workflow's analyze_requirements step arrives as {documents, analysisType,
+  // outputRequirements} and its synthesize_analysis step as {analysisResults,
+  // requirements} -- none of which is prompt, request or input. Both fell
+  // through to the literal "Please help with this task." Measured against a
+  // live run before this: Claude answered "no specific task has been described
+  // in this conversation", twice, and both answers were folded into the
+  // workflow result as though they were work.
+
+  it('describes the step instead of asking for help with nothing', async () => {
+    const dir = makeStubDir('structured-step', ECHO_STUB);
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({
+        action: 'analyze_requirements',
+        documents: ['/tmp/report.pdf'],
+        analysisType: 'summary',
+        outputRequirements: 'one paragraph',
+      });
+    });
+
+    const sent = String(result.data);
+    assert.equal(result.success, true);
+    assert.ok(!sent.includes('Please help with this task.'), 'the placeholder must be gone');
+    assert.ok(sent.includes('analyze_requirements'), 'the step must say what it is');
+    assert.ok(sent.includes('/tmp/report.pdf'), 'and carry its input');
+    assert.ok(sent.includes('one paragraph'), 'including the requirements');
+  });
+
+  it('still says something useful when a step really has no input', async () => {
+    const dir = makeStubDir('empty-step', ECHO_STUB);
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({ action: 'validate_conversion' });
+    });
+
+    assert.ok(String(result.data).includes('validate_conversion'), 'name the step even with nothing to add');
+  });
+
+  it('leaves a step that does carry prose alone', async () => {
+    const dir = makeStubDir('prose-step', ECHO_STUB);
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({ action: 'plan_extraction', prompt: 'Extract the tables.' });
+    });
+
+    assert.equal(String(result.data).trim(), 'STUB_SAW:Extract the tables.', 'a prompt must pass through untouched');
+  });
+});
+
+describe('how long a step is given', () => {
+  // The estimate is 5 seconds for anything that is not a workflow or complex
+  // reasoning, plus a 30-second buffer -- so an ordinary step got 35 seconds to
+  // run an interactive `claude` that answers a real question. It came back
+  // inside that only while it was answering a placeholder; the moment the step
+  // was given something to think about, the analysis workflow's first step
+  // timed out at exactly 35000ms.
+
+  it('gives a general step the same budget as any other claude call', () => {
+    // Measured: one analyze_requirements step took 85 seconds to do the work
+    // properly. 35 seconds could only ever have been enough for a placeholder.
+    const layer = new ClaudeCodeLayer();
+
+    assert.equal(
+      layer.getTaskTimeout({ action: 'analyze_requirements', documents: ['a.pdf'] }),
+      layer.DEFAULT_TIMEOUT,
+      'a step is not a different kind of call from any other claude invocation'
+    );
+  });
+
+  it('honours a timeout the caller set', () => {
+    const layer = new ClaudeCodeLayer();
+
+    assert.equal(layer.getTaskTimeout({ prompt: 'x', timeout: 5000 }), 5000, 'an explicit budget wins');
+  });
+
+  it('sizes the estimate from the prompt that will be sent', () => {
+    // A step whose text is assembled from its fields has no task.prompt, so
+    // reading only that scored it as the shortest possible request.
+    const layer = new ClaudeCodeLayer();
+    const long = 'x'.repeat(1500);
+
+    assert.ok(
+      layer.getEstimatedDuration({ action: 'plan_extraction' }, long)
+      > layer.getEstimatedDuration({ action: 'plan_extraction' }, 'short'),
+      'a long prompt must raise the estimate even when it is not on the task'
+    );
+  });
+});
+
 describe('what the claude child does not inherit', () => {
   // CGMB is commonly registered as an MCP server inside Claude Code, so the
   // process that shells out to `claude` is itself running under a Claude Code

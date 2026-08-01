@@ -390,21 +390,24 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get estimated duration for a task
    */
-  getEstimatedDuration(task: ClaudeCodeTask): number {
+  getEstimatedDuration(task: ClaudeCodeTask, prompt?: string): number {
     const baseTime = 5000; // 5 seconds base
-    
+
     if (task.type === 'workflow' || task.action === 'workflow') {
       return baseTime * 3; // Workflows take longer
     }
-    
+
     if (task.action === 'complex_reasoning') {
       return baseTime * 2; // Complex reasoning takes longer
     }
-    
-    if (task.prompt && task.prompt.length > 1000) {
+
+    // The prompt that will be sent, when the caller knows it. Reading only
+    // task.prompt missed every step whose text is assembled from its fields.
+    const text = prompt ?? task.prompt;
+    if (text && text.length > 1000) {
       return baseTime * 1.5; // Longer prompts take more time
     }
-    
+
     return baseTime;
   }
 
@@ -412,11 +415,47 @@ export class ClaudeCodeLayer implements LayerInterface {
    * Execute general Claude Code task
    */
   private async executeGeneral(task: ClaudeCodeTask): Promise<string> {
-    const prompt = task.prompt || task.request || task.input || 'Please help with this task.';
-    
+    const prompt = task.prompt || task.request || task.input || this.describeTask(task);
+
+    // Sized from the prompt that is actually sent, not from task.prompt. A step
+    // whose text is built here has no task.prompt at all, so the estimate
+    // scored it as the shortest possible request.
     return await this.executeClaudeCommand(prompt, {
-      timeout: this.getTaskTimeout(task),
+      timeout: this.getTaskTimeout(task, prompt),
     });
+  }
+
+  /**
+   * A prompt built from a task that carries no prose.
+   *
+   * Workflow steps addressed to this layer often carry structure rather than a
+   * sentence: the analysis workflow's `analyze_requirements` step arrives as
+   * {documents, analysisType, outputRequirements}, and its `synthesize_analysis`
+   * step as {analysisResults, requirements}. None of those is prompt, request
+   * or input, so both fell through to the literal "Please help with this
+   * task." -- measured against a live run, Claude answered "no specific task
+   * has been described in this conversation", twice, and both answers were
+   * folded into the workflow result as though they were work.
+   */
+  private describeTask(task: ClaudeCodeTask): string {
+    const action = typeof task.action === 'string' ? task.action : task.type;
+    const skip = new Set(['action', 'type', 'files', 'options', 'workflow', 'depth']);
+
+    const fields = Object.entries(task)
+      .filter(([key, value]) => !skip.has(key) && value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+
+    if (fields.length === 0) {
+      return action
+        ? `Perform the "${action}" step of a CGMB workflow. No further input was supplied.`
+        : 'Please help with this task.';
+    }
+
+    const heading = action
+      ? `Perform the "${action}" step of a CGMB workflow, using the following input:`
+      : 'Please act on the following input:';
+
+    return `${heading}\n\n${fields.join('\n')}`;
   }
 
   /**
@@ -922,12 +961,25 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get task timeout
    */
-  private getTaskTimeout(task: ClaudeCodeTask): number {
+  private getTaskTimeout(task: ClaudeCodeTask, prompt?: string): number {
     if (typeof task.timeout === 'number') {
       return task.timeout;
     }
-    
-    return this.getEstimatedDuration(task) + 30000; // Add 30s buffer
+
+    // A floor, not a guess. The estimate below is 5 seconds for anything that
+    // is not a workflow or complex reasoning, so an ordinary step got 35
+    // seconds -- for an interactive `claude` invocation that answers a real
+    // question. Measured: the analysis workflow's first step timed out at
+    // exactly 35000ms as soon as it was given something to think about, having
+    // previously come back fast because it was answering a placeholder.
+    //
+    // The floor is this layer's own budget. A step is not a different kind of
+    // call from any other `claude` invocation, and the estimate is a guess with
+    // no measurement behind it: measured, one analyze_requirements step took 85
+    // seconds to do the work properly, which 120 seconds would clear only
+    // narrowly and 35 not at all. LayerManager bounds the step at the same five
+    // minutes, so this cannot outlive its caller.
+    return Math.max(this.getEstimatedDuration(task, prompt) + 30000, this.DEFAULT_TIMEOUT);
   }
 
   /**
