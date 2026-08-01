@@ -1250,15 +1250,36 @@ describe('where a trusted command may come from', () => {
   // two binaries that actually get run.
 
   const SEP = String.fromCharCode(92);
+  const onWindows = process.platform === 'win32';
 
-  it('refuses anything under a node_modules, wherever it is', () => {
-    const rejected = [
+  // Paths have to match the platform. A Windows path handed to resolve() on
+  // POSIX is treated as relative, so it lands under the working directory and
+  // is rejected for the wrong reason -- which is how the "ordinary install
+  // location" case came to assert that C:\Program Files was untrusted on
+  // Linux. The same shape of mistake as a /proc case that skipped only Windows.
+  const rejected = onWindows
+    ? [
       `C:${SEP}repo${SEP}node_modules${SEP}.bin${SEP}claude.cmd`,
-      '/repo/node_modules/.bin/agy',
       `C:${SEP}a${SEP}b${SEP}node_modules${SEP}x${SEP}y${SEP}claude.cmd`,
+      `C:${SEP}repo${SEP}node_modules${SEP}.bin${SEP}pgrep.cmd`,
+    ]
+    : [
+      '/repo/node_modules/.bin/agy',
       '/home/u/project/node_modules/.bin/pgrep',
+      '/a/b/node_modules/x/y/claude',
     ];
 
+  const accepted = onWindows
+    ? [
+      `C:${SEP}Program Files${SEP}nodejs${SEP}claude.cmd`,
+      `C:${SEP}Windows${SEP}System32${SEP}taskkill.exe`,
+    ]
+    : [
+      '/usr/local/bin/agy',
+      '/usr/bin/pgrep',
+    ];
+
+  it('refuses anything under a node_modules, wherever it is', () => {
     for (const candidate of rejected) {
       assert.equal(
         isUntrustedBinaryLocation(candidate), true,
@@ -1270,12 +1291,6 @@ describe('where a trusted command may come from', () => {
   it('still accepts an ordinary installed location', () => {
     // The rule has to stay usable: rejecting everything would be safe and
     // useless, and these are where the real binaries live.
-    const accepted = [
-      `C:${SEP}Program Files${SEP}nodejs${SEP}claude.cmd`,
-      '/usr/local/bin/agy',
-      '/usr/bin/pgrep',
-    ];
-
     for (const candidate of accepted) {
       assert.equal(
         isUntrustedBinaryLocation(candidate), false,
