@@ -1,5 +1,5 @@
-import { execFileSync, execSync } from 'child_process';
-import { realpathSync, statSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { accessSync, constants, readdirSync, readFileSync, realpathSync, statSync } from 'fs';
 import { isAbsolute, join, relative, resolve } from 'path';
 import { logger } from './logger.js';
 
@@ -199,20 +199,61 @@ export function commandAvailable(command: string, args: string[] = ['--version']
 }
 
 /**
+ * Windows' own taskkill, by absolute path.
+ *
+ * Every call was `execSync('taskkill /pid ...')`, which runs through cmd.exe --
+ * and cmd.exe searches the current directory before PATH. A `taskkill.cmd` in a
+ * checkout would therefore have been executed on every timeout, cancellation
+ * and shutdown, at this process's privileges and with its whole environment.
+ * The same trust boundary that was closed for pgrep, left open here.
+ *
+ * Also no shell: the pid goes in an argument array, so there is nothing to
+ * quote and nothing for cmd.exe to reinterpret.
+ */
+function systemTaskkill(): string {
+  return join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'taskkill.exe');
+}
+
+/**
+ * End a Windows process and everything it started. Returns false if taskkill
+ * could not do it, so the caller can fall back to the signal it has.
+ */
+export function windowsTerminateTree(pid: number | undefined): boolean {
+  if (pid === undefined) {
+    return false;
+  }
+
+  try {
+    execFileSync(systemTaskkill(), ['/pid', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      timeout: 10000,
+      windowsHide: true,
+      // A process-ending tool needs none of this process's environment.
+      env: { SystemRoot: process.env.SystemRoot ?? 'C:/Windows' },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Where `pgrep` is -- from a fixed list of system locations, never from PATH.
  *
- * Two versions of this were wrong. The first called `execFileSync('pgrep', ...)`
- * and let PATH decide, which npm and npx populate with node_modules/.bin. The
- * second routed it through resolveTrustedCommand, whose rule is "not inside the
- * current working directory" -- so running from a subdirectory of a repository
- * made that repository's own node_modules/.bin an *ancestor*, outside cwd, and
+ * Two earlier versions were wrong. The first let PATH decide, which npm and npx
+ * populate with node_modules/.bin. The second used resolveTrustedCommand, whose
+ * rule is "not inside the current working directory" -- so running from a
+ * subdirectory made the repository's own node_modules/.bin an *ancestor*, and
  * therefore trusted. Both would have run a `pgrep` committed to a checkout,
  * during cancellation and shutdown, at this process's privileges.
  *
  * There is no general rule that makes PATH safe here, so PATH is not consulted.
- * pgrep is a system tool and lives in a system directory; anything calling
- * itself pgrep somewhere else is not the tool we mean. The list is short,
- * absolute, and checked to be a regular file.
+ * Each candidate must be executable, and a candidate that is not is skipped
+ * rather than cached -- otherwise a stray non-executable file at the first path
+ * would have masked the real tool further down.
+ *
+ * On Linux none of this is reached: /proc answers the same question with no
+ * external process at all. This is for the POSIX systems without it.
  */
 const SYSTEM_PGREP_PATHS = [
   '/usr/bin/pgrep',
@@ -228,7 +269,11 @@ function trustedPgrep(): string | undefined {
   if (pgrepPath === null) {
     pgrepPath = SYSTEM_PGREP_PATHS.find(candidate => {
       try {
-        return statSync(candidate).isFile();
+        if (!statSync(candidate).isFile()) {
+          return false;
+        }
+        accessSync(candidate, constants.X_OK);
+        return true;
       } catch {
         return false;
       }
@@ -237,9 +282,55 @@ function trustedPgrep(): string | undefined {
   return pgrepPath;
 }
 
+/** The resolved system pgrep, if there is one. */
+export function resolveSystemPgrep(): string | undefined {
+  return trustedPgrep();
+}
+
 /** For tests: forget the resolved path. */
 export function resetPgrepResolution(): void {
   pgrepPath = null;
+}
+
+/**
+ * Direct children of a pid, read from /proc.
+ *
+ * No external process, so no command to resolve and no trust boundary to get
+ * wrong -- which is the whole of the pgrep problem, avoided rather than
+ * defended. Linux and WSL both have it; anything else falls through to pgrep.
+ *
+ * PPid comes from `status` rather than `stat`, whose second field is the
+ * command name in parentheses and may itself contain spaces and parentheses.
+ */
+function childrenViaProc(pid: number): number[] | undefined {
+  let entries: string[];
+  try {
+    entries = readdirSync('/proc');
+  } catch {
+    return undefined; // no /proc here
+  }
+
+  const children: number[] = [];
+
+  for (const entry of entries) {
+    const candidate = Number(entry);
+    if (!Number.isInteger(candidate) || candidate <= 0) {
+      continue;
+    }
+
+    try {
+      const status = readFileSync(`/proc/${candidate}/status`, 'utf8');
+      const match = status.match(/^PPid:\s+([0-9]+)/m);
+      if (match && Number(match[1]) === pid) {
+        children.push(candidate);
+      }
+    } catch {
+      // The process ended between the listing and the read. Not a child of
+      // ours as far as anything we can still act on is concerned.
+    }
+  }
+
+  return children;
 }
 
 /**
@@ -249,7 +340,11 @@ export function resetPgrepResolution(): void {
  * same answer, so on a POSIX system without procps every tree kill silently
  * became a single-process kill.
  */
-function childrenOf(pid: number, pgrep: string): number[] | undefined {
+function childrenViaPgrep(pid: number, pgrep: string | undefined): number[] | undefined {
+  if (pgrep === undefined) {
+    return undefined;
+  }
+
   try {
     return execFileSync(pgrep, ['-P', String(pid)], {
       encoding: 'utf8',
@@ -271,6 +366,22 @@ function childrenOf(pid: number, pgrep: string): number[] | undefined {
 }
 
 /**
+ * How children are found, in order of preference.
+ *
+ * A parameter rather than a hard-coded chain, because "this source on its own"
+ * is the only way to show that a source works. The first version of the test
+ * for /proc emptied PATH -- which proves nothing, since the resolver does not
+ * read PATH -- and passed with /proc removed.
+ */
+export type ChildLister = (pid: number) => number[] | undefined;
+
+export const PROC_SOURCE: ChildLister = pid => childrenViaProc(pid);
+export const PGREP_SOURCE: ChildLister = pid => childrenViaPgrep(pid, trustedPgrep());
+
+/** What production uses: /proc where there is one, pgrep otherwise. */
+export const DEFAULT_CHILD_SOURCES: ChildLister[] = [PROC_SOURCE, PGREP_SOURCE];
+
+/**
  * Every descendant of a pid, deepest last.
  *
  * Walked repeatedly rather than once. A single snapshot misses anything forked
@@ -278,7 +389,17 @@ function childrenOf(pid: number, pgrep: string): number[] | undefined {
  * out of reach. Re-walking until a pass finds nothing new closes the window
  * that a process which forks while being torn down would otherwise sit in.
  */
-function descendantsOf(pid: number, pgrep: string): number[] {
+export function listDescendants(pid: number, sources: ChildLister[] = DEFAULT_CHILD_SOURCES): number[] {
+  const childrenOf = (of: number): number[] | undefined => {
+    for (const source of sources) {
+      const children = source(of);
+      if (children !== undefined) {
+        return children;
+      }
+    }
+    return undefined;
+  };
+
   const found: number[] = [];
 
   for (let pass = 0; pass < 5; pass += 1) {
@@ -291,7 +412,7 @@ function descendantsOf(pid: number, pgrep: string): number[] {
         break;
       }
 
-      for (const child of childrenOf(current, pgrep) ?? []) {
+      for (const child of childrenOf(current) ?? []) {
         if (!found.includes(child)) {
           found.push(child);
           queue.push(child);
@@ -346,25 +467,31 @@ export function terminateProcessTree(child: { pid?: number | undefined; kill: (s
   }
 
   if (process.platform === 'win32') {
-    try {
-      execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
+    if (windowsTerminateTree(child.pid)) {
       return;
-    } catch {
-      // The process may already be gone; fall through to the signal attempt.
     }
+    // The process may already be gone; fall through to the signal attempt.
   } else {
-    // Both, always, in this order.
+    // Stop, enumerate, kill -- in that order, and both mechanisms every time.
     //
     // Treating a successful group signal as "the tree is gone" was wrong:
     // process.kill(-pid) succeeding says only that *something* in that group
-    // received it. A child that called setsid, or that was itself spawned
-    // detached, has left for a group of its own -- the signal still succeeds
-    // and the escapee never hears it. The two mechanisms find different things,
-    // so neither is a reason to skip the other.
+    // received it. A descendant that called setsid, or was itself spawned
+    // detached, has left for a group of its own and never hears it. The two
+    // mechanisms find different things, so neither is a reason to skip the
+    // other.
     //
-    // The walk runs first, while the parent is still alive to be walked from:
-    // killing the group first would reparent anything that escaped and put it
-    // out of reach of `pgrep -P`.
+    // SIGSTOP comes first because enumeration is a snapshot, and a snapshot
+    // races anything still able to fork: a child spawned after the last
+    // `pgrep -P` and before the kill belongs to no list and, once its parent
+    // dies, to no reachable group either. A stopped process cannot fork. This
+    // does not make the window zero -- a fork already in flight when the signal
+    // lands still completes, and only an OS containment (cgroup, job object)
+    // closes that properly -- but it turns a wide window into a narrow one.
+    //
+    // The walk still runs before the group kill: killing the group first
+    // reparents anything that escaped and puts it out of reach of `pgrep -P`.
+    stopProcessGroup(child.pid);
     walkAndKillDescendants(child.pid);
     killProcessGroup(child.pid);
   }
@@ -384,6 +511,25 @@ export function terminateProcessTree(child: { pid?: number | undefined; kill: (s
  * anything else this fails with ESRCH -- measured. The result is not a verdict
  * on whether the tree is gone; see the caller.
  */
+/**
+ * Freeze the group so it cannot fork while it is being enumerated.
+ *
+ * Best-effort: a process with no group of its own, or one already gone, simply
+ * is not stopped. Anything still running is killed moments later regardless, so
+ * a failed stop costs nothing but the narrower window.
+ */
+function stopProcessGroup(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGSTOP');
+  } catch {
+    try {
+      process.kill(pid, 'SIGSTOP');
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
 function killProcessGroup(pid: number): void {
   try {
     process.kill(-pid, 'SIGKILL');
@@ -394,9 +540,9 @@ function killProcessGroup(pid: number): void {
 
 /** The fallback: find the descendants ourselves and end them, deepest first. */
 function walkAndKillDescendants(pid: number): void {
-  const pgrep = trustedPgrep();
-
-  if (pgrep === undefined) {
+  // /proc is tried first and needs nothing resolved; only a system without it
+  // *and* without a usable pgrep leaves us unable to enumerate.
+  if (DEFAULT_CHILD_SOURCES.every(source => source(pid) === undefined)) {
     // Nothing trustworthy to enumerate with. Say so rather than silently
     // killing one process and reporting success: a caller that believes the
     // tree is gone will not look for what is left.
@@ -407,7 +553,7 @@ function walkAndKillDescendants(pid: number): void {
     return;
   }
 
-  for (const descendant of descendantsOf(pid, pgrep).reverse()) {
+  for (const descendant of listDescendants(pid).reverse()) {
     try {
       process.kill(descendant, 'SIGKILL');
     } catch {

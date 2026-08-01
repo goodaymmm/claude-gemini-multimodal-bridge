@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'async_hooks';
-import { terminateProcessTree } from '../utils/processUtils.js';
+import { terminateProcessTree, windowsTerminateTree } from '../utils/processUtils.js';
 import { onShutdown } from '../utils/shutdown.js';
-import { execSync, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
 import * as fs from 'fs';
@@ -1500,7 +1500,7 @@ export class AIStudioLayer implements LayerInterface {
           if (isPlatformWindows()) {
             // Windows: Use taskkill for reliable termination
             try {
-              execSync(`taskkill /pid ${this.persistentMCPProcess.pid} /T /F`, { stdio: 'ignore' });
+              windowsTerminateTree(this.persistentMCPProcess.pid);
             } catch {
               this.persistentMCPProcess.kill();
             }
@@ -1830,8 +1830,9 @@ export class AIStudioLayer implements LayerInterface {
 
     if (isPlatformWindows()) {
       try {
-        execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
-        return;
+        if (windowsTerminateTree(child.pid)) {
+          return;
+        }
       } catch {
         // fall through to the signal attempt below
       }
@@ -2041,7 +2042,7 @@ export class AIStudioLayer implements LayerInterface {
           if (process.platform === 'win32') {
             // Windows: Use taskkill for reliable termination
             try {
-              execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
+              windowsTerminateTree(child.pid);
             } catch {
               child.kill();
             }

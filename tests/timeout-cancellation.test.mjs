@@ -21,7 +21,15 @@ import { delimiter, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { AIStudioLayer, shutdownAIStudio } from '../dist/layers/AIStudioLayer.js';
-import { resetPgrepResolution, resolveTrustedCommand, terminateProcessTree } from '../dist/utils/processUtils.js';
+import {
+  PGREP_SOURCE,
+  PROC_SOURCE,
+  listDescendants,
+  resetPgrepResolution,
+  resolveSystemPgrep,
+  resolveTrustedCommand,
+  terminateProcessTree,
+} from '../dist/utils/processUtils.js';
 import { runShutdown } from '../dist/utils/shutdown.js';
 import { safeExecute } from '../dist/utils/errorHandler.js';
 import { withCLITimeout } from '../dist/utils/TimeoutManager.js';
@@ -996,6 +1004,82 @@ describe('a grandchild that leaves the group is still ended', {
   });
 });
 
+describe('enumeration without an external tool', {
+  skip: process.platform === 'win32' && 'POSIX enumeration; Windows uses taskkill /T',
+}, () => {
+  // The pgrep candidate list is five absolute paths, which is not every Linux:
+  // a distribution shipping it elsewhere would have had no walk at all, and
+  // with it no defence against a descendant that left the process group. So on
+  // Linux the walk does not use pgrep -- /proc answers the same question with
+  // no external process, and therefore no command to resolve.
+  //
+  // Each source is exercised *alone*. An earlier version of this emptied PATH
+  // and expected that to disable pgrep; it does not, because the resolver does
+  // not read PATH -- so the case passed with /proc removed entirely, proving
+  // nothing. The source is a parameter now, which is the only way to show that
+  // one of them works on its own.
+
+  /** A process with a child and a grandchild, for something to enumerate. */
+  async function familyOfThree() {
+    const id = Math.random().toString(36).slice(2);
+    const ready = join(scratch, `family-${id}.txt`);
+
+    const leaf = join(scratch, `family-leaf-${id}.cjs`);
+    writeFileSync(leaf, [
+      "const fs = require('fs');",
+      `fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const mid = join(scratch, `family-mid-${id}.cjs`);
+    writeFileSync(mid, [
+      "const { spawn } = require('child_process');",
+      `spawn(process.execPath, [${JSON.stringify(leaf)}], { stdio: 'ignore' });`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const root = spawn(process.execPath, [mid], { stdio: 'ignore' });
+    for (let waited = 0; waited < 8000 && !existsSync(ready); waited += 100) {
+      await settle(100);
+    }
+    const leafPid = Number(readFileSync(ready, 'utf8'));
+    return { root, leafPid };
+  }
+
+  it('finds the whole family through /proc alone', async () => {
+    const { root, leafPid } = await familyOfThree();
+    try {
+      assert.ok(leafPid > 0, 'the family must exist to be enumerated');
+      const found = listDescendants(root.pid, [PROC_SOURCE]);
+      assert.ok(found.includes(leafPid), `/proc missed the grandchild: ${found.join(',')}`);
+    } finally {
+      terminateProcessTree(root);
+    }
+  });
+
+  it('finds the whole family through pgrep alone, where there is one', async () => {
+    const { root, leafPid } = await familyOfThree();
+    try {
+      const found = listDescendants(root.pid, [PGREP_SOURCE]);
+      // Not every POSIX system has pgrep at one of the system paths; if it has
+      // none, this source legitimately finds nothing and /proc is what carries
+      // the walk. Say which happened rather than asserting blindly.
+      if (found.length === 0) {
+        assert.equal(resolveSystemPgrep(), undefined, 'pgrep exists but found nothing');
+      } else {
+        assert.ok(found.includes(leafPid), `pgrep missed the grandchild: ${found.join(',')}`);
+      }
+    } finally {
+      terminateProcessTree(root);
+    }
+  });
+
+  it('reports nothing, rather than guessing, when no source can answer', () => {
+    const nothingWorks = listDescendants(process.pid, [() => undefined]);
+    assert.deepEqual(nothingWorks, [], 'an unusable source must not invent descendants');
+  });
+});
+
 describe('the process group carries it when the walk cannot', {
   skip: process.platform === 'win32' && 'POSIX process groups; Windows uses taskkill /T',
 }, () => {
@@ -1048,6 +1132,44 @@ describe('the process group carries it when the walk cannot', {
       process.env.PATH = savedPath;
       resetPgrepResolution();
       try { process.kill(grandPid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+});
+
+describe('what the Windows tree kill is allowed to run', {
+  skip: process.platform !== 'win32' && 'taskkill is Windows-only',
+}, () => {
+  it('does not run a taskkill from PATH or the current directory', () => {
+    // cmd.exe searches the current directory before PATH, and every call was
+    // `execSync('taskkill /pid ...')` -- so a taskkill.cmd in a checkout, or
+    // anywhere on PATH, would have run on every timeout, cancellation and
+    // shutdown with this process's environment. Resolved from System32 by
+    // absolute path now, with no shell involved.
+    //
+    // Planted on PATH as well as in the current directory: this machine sets
+    // NoDefaultCurrentDirectoryInExePath, which masks the cwd half, so a case
+    // that only planted there demonstrated nothing here -- and passed with the
+    // shell call restored.
+    const stolen = join(scratch, `taskkill-stolen-${Math.random().toString(36).slice(2)}.txt`);
+    const plantedDir = join(scratch, `taskkill-bin-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(plantedDir, { recursive: true });
+
+    const onPath = join(plantedDir, 'taskkill.cmd');
+    const inCwd = join(process.cwd(), 'taskkill.cmd');
+    const body = `@echo off\r\necho stolen > "${stolen}"\r\n`;
+    writeFileSync(onPath, body, 'utf8');
+    writeFileSync(inCwd, body, 'utf8');
+
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = plantedDir + delimiter + savedPath;
+
+      // A pid that cannot exist, so the real taskkill simply fails.
+      terminateProcessTree({ pid: 2147480000, kill: () => false });
+      assert.equal(existsSync(stolen), false, 'a planted taskkill was executed');
+    } finally {
+      process.env.PATH = savedPath;
+      rmSync(inCwd, { force: true });
     }
   });
 });
