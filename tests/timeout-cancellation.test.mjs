@@ -1091,10 +1091,20 @@ describe('a descendant that keeps forking while it is being torn down', {
       "setInterval(() => {}, 1000);",
     ].join(NEWLINE), 'utf8');
 
+    // Fast, but bounded. It has to still be forking while the walk runs --
+    // that is the whole point, and slowing it to 120ms stopped the mutation
+    // being caught at all -- but an unbounded one ran the machine hot enough to
+    // stall the rest of the suite when node:test runs files concurrently, and a
+    // failure would have left it running.
     const forker = join(dir, 'forker.cjs');
     writeFileSync(forker, [
       "const { spawn } = require('child_process');",
-      `setInterval(() => spawn(process.execPath, [${JSON.stringify(spawnee)}], { stdio: 'ignore' }), 30);`,
+      "let spawned = 0;",
+      `const timer = setInterval(() => {`,
+      `  if (spawned >= 60) { clearInterval(timer); return; }`,
+      `  spawned += 1;`,
+      `  spawn(process.execPath, [${JSON.stringify(spawnee)}], { stdio: 'ignore' });`,
+      `}, 25);`,
     ].join(NEWLINE), 'utf8');
 
     const parent = join(dir, 'parent.cjs');
@@ -1105,10 +1115,12 @@ describe('a descendant that keeps forking while it is being torn down', {
     ].join(NEWLINE), 'utf8');
 
     const root = spawn(process.execPath, [parent], { stdio: 'ignore', detached: true });
-    await settle(900); // let it get well underway
+    // Terminated while it is still spawning: the point is a fork that lands
+    // during the walk, so the walk has to happen mid-run rather than after.
+    await settle(400);
 
     const before = readFileSync(join(dir, 'pids.txt'), 'utf8').trim().split(/\s+/).filter(Boolean);
-    assert.ok(before.length > 3, `the forker must be busy to prove anything: ${before.length}`);
+    assert.ok(before.length >= 3, `the forker must be busy to prove anything: ${before.length}`);
 
     terminateProcessTree(root);
     await settle();
