@@ -15,14 +15,18 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 
 import { ClaudeCodeLayer } from '../dist/layers/ClaudeCodeLayer.js';
+import { safeExecute } from '../dist/utils/errorHandler.js';
 
 const isWindows = process.platform === 'win32';
+// Built, not typed: a backslash here is a JavaScript escape, so a hand-written
+// newline lands as a real one inside the generated stub source.
+const NEWLINE = String.fromCharCode(10);
 
 // Not `cgmb-agy-*`: the workspace-isolation test scans tmpdir for that prefix.
 const scratch = mkdtempSync(join(tmpdir(), 'cgmb-claude-'));
@@ -214,6 +218,102 @@ describe('claude layer: running the CLI', () => {
       existsSync(sentinel), false,
       'a shell ran the payload: the sentinel it was told to create exists'
     );
+  });
+});
+
+describe('cancelling a claude step ends the claude', () => {
+  // A workflow step gets a shorter budget than the layer does, so the caller is
+  // told it failed and moves on -- falls back to another layer, or reports. The
+  // signal used to reach only the AI Studio layer, so the `claude` this caller
+  // had given up on ran to its own five-minute budget, still writing wherever
+  // it had been pointed. That is a second external call nobody reads.
+
+  /**
+   * A stand-in that answers the probes and then refuses to finish the request.
+   *
+   * It has to answer `--version` and `auth` like the echo stub does, or the
+   * layer never gets as far as executing anything -- the first version of this
+   * hung on the probe instead, and what survived cancellation was the probe's
+   * child, not the one under test.
+   *
+   * It ignores SIGTERM on purpose: a stand-in that would have died anyway
+   * proves nothing about whether the production path ends the work.
+   */
+  function hangingStub(pidFile, marks) {
+    return [
+      "import { appendFileSync, writeFileSync } from 'node:fs';",
+      "if (process.argv.includes('--version')) { console.log('1.0.0-stub'); process.exit(0); }",
+      "if (process.argv.includes('auth')) { console.log(JSON.stringify({ loggedIn: true })); process.exit(0); }",
+      "process.on('SIGTERM', () => {});",
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      `setInterval(() => appendFileSync(${JSON.stringify(marks)}, 'tick'), 40);`,
+    ].join(NEWLINE);
+  }
+
+  const isAlive = pid => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const ticksIn = marks => {
+    try {
+      return readFileSync(marks, 'utf8').split('tick').length - 1;
+    } catch {
+      return 0;
+    }
+  };
+
+  it('leaves nothing running after the caller is told it failed', async () => {
+    const id = Math.random().toString(36).slice(2);
+    const marks = join(scratch, `claude-marks-${id}.txt`);
+    const pidFile = join(scratch, `claude-pid-${id}.txt`);
+    const dir = makeStubDir(`cancel-claude-${id}`, hangingStub(pidFile, marks));
+
+    await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+
+      await assert.rejects(() => safeExecute(
+        (signal) => layer.execute({ prompt: 'anything' }, signal),
+        { operationName: 'short-step', timeout: 4000 }
+      ));
+    });
+
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    assert.ok(pid > 0, 'the stand-in must have started to prove anything');
+
+    const atFailure = ticksIn(marks);
+    assert.ok(atFailure > 0, 'and it must have been doing work worth cancelling');
+
+    await new Promise(resolve => setTimeout(resolve, 900));
+
+    assert.equal(isAlive(pid), false, 'the claude was still running after the caller gave up');
+    assert.equal(ticksIn(marks), atFailure, 'and it must not have done anything more');
+  });
+
+  it('does not start one at all for a caller that has already given up', async () => {
+    const id = Math.random().toString(36).slice(2);
+    const started = join(scratch, `claude-started-${id}.txt`);
+    const dir = makeStubDir(`pre-cancel-claude-${id}`, [
+      "import { appendFileSync } from 'node:fs';",
+      "if (process.argv.includes('--version')) { console.log('1.0.0-stub'); process.exit(0); }",
+      "if (process.argv.includes('auth')) { console.log(JSON.stringify({ loggedIn: true })); process.exit(0); }",
+      `appendFileSync(${JSON.stringify(started)}, 'x');`,
+      "console.log('STUB_SAW:ran');",
+    ].join(NEWLINE));
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      await assert.rejects(() => layer.execute({ prompt: 'anything' }, controller.signal));
+    });
+
+    assert.equal(existsSync(started), false, 'nothing may be spawned for work nobody is waiting for');
   });
 });
 

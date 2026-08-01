@@ -37,6 +37,10 @@ const isAlive = pid => {
   }
 };
 
+// Built, not typed: a backslash in this file is a JavaScript escape, so a
+// hand-written newline lands as a real one inside the generated source.
+const NEWLINE = String.fromCharCode(10);
+
 const settle = (ms = 700) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
@@ -421,5 +425,190 @@ describe('nothing keeps running after a terminal result', () => {
 
     assert.equal(await keptAlive, 'still here');
     layer.abortActiveOperations('test cleanup');
+  });
+});
+
+describe('the shared MCP process answers the caller who asked', () => {
+  // executeMCPCommandOptimized reuses one process for several requests -- the
+  // route a general text request and a multi-PDF analysis take. Each call used
+  // to add its own stdout listener and settle on the first line carrying a
+  // result or an error, whatever id it had, so two concurrent requests both
+  // took the first answer: one caller was handed the other caller's output and
+  // nothing reported a problem. The ids were Date.now(), which two requests in
+  // the same millisecond share.
+
+  /**
+   * A stand-in MCP server that answers out of order.
+   *
+   * The second request is answered first, and each answer carries the id it
+   * was asked with, so a router that matches ids gets both right and one that
+   * takes the first line gets both wrong.
+   */
+  // The escapes below are doubled on purpose. A single backslash in this
+  // file is a JavaScript escape, so it puts a real carriage return inside a
+  // regex literal and a real newline inside a quoted string in the file that
+  // gets written -- and the stand-in then dies on startup, which looks
+  // exactly like a stand-in that was cancelled.
+  function reorderingServer() {
+    const script = join(scratch, `reorder-${Math.random().toString(36).slice(2)}.cjs`);
+
+    writeFileSync(script, [
+      "const held = [];",
+      "let buf = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', chunk => {",
+      "  buf += chunk;",
+      "  const lines = buf.split(/\\r?\\n/);",
+      "  buf = lines.pop() || '';",
+      "  for (const line of lines) {",
+      "    if (!line.trim()) { continue; }",
+      "    const req = JSON.parse(line);",
+      "    held.push(req);",
+      "    if (held.length === 2) {",
+      "      for (const r of held.reverse()) {",
+      "        const answer = { jsonrpc: '2.0', id: r.id,",
+      "          result: { content: [{ type: 'text', text: 'answer-for-' + r.params.arguments.marker }] } };",
+      "        process.stdout.write(JSON.stringify(answer) + '\\n');",
+      "      }",
+      "    }",
+      "  }",
+      "});",
+      "process.stdin.resume();",
+    ].join('\n'), 'utf8');
+
+    return script;
+  }
+
+  it('gives each concurrent caller its own answer, in whatever order they arrive', async () => {
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => reorderingServer();
+
+    const first = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'alpha' });
+    const second = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'beta' });
+
+    const [a, b] = await Promise.all([first, second]);
+
+    const textOf = r => (r?.content ?? []).map(c => c.text ?? '').join('');
+    assert.equal(textOf(a), 'answer-for-alpha', 'the first caller was handed the wrong answer');
+    assert.equal(textOf(b), 'answer-for-beta', 'the second caller was handed the wrong answer');
+  });
+
+  it('does not reuse an id between two in-flight requests', async () => {
+    // Date.now() collides for anything issued inside the same millisecond, and
+    // two ids that are equal cannot be routed apart however good the router is.
+    const layer = new AIStudioLayer();
+    const ids = new Set();
+
+    for (let i = 0; i < 50; i += 1) {
+      ids.add(layer.nextOptimizedRequestId());
+    }
+
+    assert.equal(ids.size, 50, 'every in-flight request needs an id of its own');
+  });
+
+  it('fails the callers still waiting when the shared process dies', async () => {
+    // Otherwise they wait out their own timeout -- minutes -- for a process
+    // that is already gone.
+    const script = join(scratch, `dies-${Math.random().toString(36).slice(2)}.cjs`);
+    writeFileSync(script, "process.stdin.resume(); setTimeout(() => process.exit(7), 300);", 'utf8');
+
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => script;
+
+    await assert.rejects(
+      () => layer.executeMCPCommandOptimized('analyze_documents', { marker: 'orphan' }),
+      /exited \(code 7\)/,
+      'a caller must be told the process died rather than waiting for its own timeout'
+    );
+  });
+
+  it('stops waiting when its own call is cancelled, and leaves siblings alone', async () => {
+    // The process is shared, so cancelling one request must not kill it: the
+    // other caller is very likely mid-answer on the same process.
+    //
+    // The stand-in here answers only the sibling and never the cancelled one,
+    // so the cancellation is what ends that call. An earlier version used the
+    // reordering stand-in, which answers both as soon as the second request
+    // arrives -- the "cancelled" call had already resolved before abort() was
+    // reached, and the case passed without cancelling anything.
+    const script = join(scratch, `selective-${Math.random().toString(36).slice(2)}.cjs`);
+    writeFileSync(script, [
+      "let buf = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', chunk => {",
+      "  buf += chunk;",
+      "  const lines = buf.split(/\\r?\\n/);",
+      "  buf = lines.pop() || '';",
+      "  for (const line of lines) {",
+      "    if (!line.trim()) { continue; }",
+      "    const req = JSON.parse(line);",
+      "    if (req.params.arguments.marker !== 'kept') { continue; }",
+      "    const answer = { jsonrpc: '2.0', id: req.id,",
+      "      result: { content: [{ type: 'text', text: 'answer-for-kept' }] } };",
+      "    process.stdout.write(JSON.stringify(answer) + '\\n');",
+      "  }",
+      "});",
+      "process.stdin.resume();",
+    ].join(NEWLINE), 'utf8');
+
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => script;
+
+    const controller = new AbortController();
+    const cancelled = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'doomed' }, controller.signal);
+    cancelled.catch(() => {});
+
+    const survivor = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'kept' });
+
+    await settle(300);
+    controller.abort();
+
+    await assert.rejects(() => cancelled, /cancelled/);
+
+    const textOf = r => (r?.content ?? []).map(c => c.text ?? '').join('');
+    assert.equal(textOf(await survivor), 'answer-for-kept', 'the sibling call must still be answered');
+  });
+
+  it('takes its cancellation from execute(), not only from an argument', async () => {
+    // The production route. Every other case here hands the signal in
+    // directly, which does not exercise the async context that execute() sets
+    // up -- and the optimized path read no context at all: `processGeneral`
+    // and multi-PDF analysis go through it, so an outer timeout or failure
+    // left them waiting on a request nobody wanted.
+    const script = join(scratch, `silent-${Math.random().toString(36).slice(2)}.cjs`);
+    writeFileSync(script, "process.stdin.resume();", 'utf8'); // never answers
+
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => script;
+
+    await assert.rejects(
+      () => safeExecute(
+        (signal) => layer.execute({ action: 'generate_content', prompt: 'anything' }, signal),
+        { operationName: 'optimized-context', timeout: 2000 }
+      ),
+      (error) => {
+        assert.match(String(error.message), /cancelled|timed out/i);
+        return true;
+      }
+    );
+
+    // The request must be gone from the router, not merely unawaited: an entry
+    // left behind would take the next response addressed to that id.
+    assert.equal(layer.pendingOptimized.size, 0, 'a cancelled request must release its slot');
+  });
+
+  it('refuses to start at all for a caller that has already given up', async () => {
+    const layer = new AIStudioLayer();
+    let spawned = 0;
+    layer.resolveMCPServerPath = () => { spawned += 1; return reorderingServer(); };
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await assert.rejects(
+      () => layer.executeMCPCommandOptimized('analyze_documents', { marker: 'never' }, controller.signal),
+      /cancelled before it started/
+    );
+    assert.equal(spawned, 0, 'nothing may be spawned for work nobody is waiting for');
   });
 });

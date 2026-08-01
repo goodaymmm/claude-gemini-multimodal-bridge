@@ -2294,8 +2294,18 @@ program.on('option:*', function(this: any) {
   }
 });
 
-// Parse command line arguments
-program.parse();
+// Parse command line arguments.
+//
+// parseAsync, so there is somewhere to wait. The exit hook that sweeps agy
+// workspaces cannot: an 'exit' handler may only do synchronous work, and on
+// Windows a removal issued while the process is still dying fails because the
+// files are still open. Here the children are ended, awaited, and only then are
+// the directories removed. Handlers that call process.exit() themselves still
+// fall back to the hook.
+await program.parseAsync();
+
+const { shutdownAntigravity } = await import('./layers/AntigravityCLILayer.js');
+await shutdownAntigravity();
 
 // If no command provided, show help
 if (!process.argv.slice(2).length) {

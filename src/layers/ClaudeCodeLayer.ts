@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import { execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -18,7 +19,7 @@ interface ClaudeCodeTask {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { buildSpawnTarget, resolveTrustedCommand } from '../utils/processUtils.js';
+import { buildSpawnTarget, resolveTrustedCommand, terminateProcessTree } from '../utils/processUtils.js';
 
 /**
  * Said by whichever initialisation path fails first.
@@ -37,6 +38,16 @@ const CLAUDE_NOT_FOUND_MESSAGE =
  * ClaudeCodeLayer handles direct Claude Code execution with enhanced authentication support
  * Provides complex reasoning tasks and workflow orchestration capabilities
  */
+
+/**
+ * The cancellation in force for the current execute() call.
+ *
+ * Per-call rather than per-instance: one layer instance serves concurrent
+ * requests, so an instance field would have one caller giving up kill another
+ * caller's child. Same mechanism as AIStudioLayer.
+ */
+const claudeCancellation = new AsyncLocalStorage<AbortSignal>();
+
 export class ClaudeCodeLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private claudePath?: string;
@@ -209,9 +220,16 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Execute a task through Claude Code
    */
-  async execute(task: ClaudeCodeTask): Promise<LayerResult> {
+  async execute(task: ClaudeCodeTask, signal?: AbortSignal): Promise<LayerResult> {
+    // Nothing is started for a caller that has already given up. Without this,
+    // the work ran and the cancellation then had to undo it -- and an
+    // interactive `claude` is not free to start.
+    if (signal?.aborted) {
+      throw new Error('Claude Code execution cancelled before it started');
+    }
+
     return safeExecute(
-      async () => {
+      async (operationSignal) => claudeCancellation.run(operationSignal, async () => {
         const startTime = Date.now();
         
         // Use lightweight initialization for simple tasks
@@ -261,9 +279,10 @@ export class ClaudeCodeLayer implements LayerInterface {
             model: 'claude-code',
           },
         };
-      },
+      }),
       {
         operationName: 'execute-claude-code-task',
+        ...(signal ? { signal } : {}),
         layer: 'claude',
         timeout: this.getTaskTimeout(task),
       }
@@ -522,6 +541,24 @@ export class ClaudeCodeLayer implements LayerInterface {
 
       let output = '';
       let errorOutput = '';
+      let settled = false;
+
+      // Cancellation ends the child, not just the waiting. A short workflow
+      // timeout used to return failure to the caller -- which fell back, or
+      // moved on -- while this `claude` ran to its own five-minute budget,
+      // still writing wherever it had been pointed.
+      const signal = claudeCancellation.getStore();
+
+      const stopOnAbort = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeoutId);
+        logger.info('Cancelling Claude Code execution', { pid: child.pid });
+        terminateProcessTree(child);
+        reject(new Error('Claude Code execution cancelled'));
+      };
 
       const timeoutId = setTimeout(() => {
         child.kill('SIGTERM');
@@ -532,8 +569,18 @@ export class ClaudeCodeLayer implements LayerInterface {
             child.kill('SIGKILL');
           }
         }, 2000).unref();
+        settled = true;
         reject(new Error(`Claude Code execution timeout after ${timeout}ms`));
       }, timeout);
+
+      if (signal) {
+        if (signal.aborted) {
+          stopOnAbort();
+        } else {
+          signal.addEventListener('abort', stopOnAbort, { once: true });
+          child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
+        }
+      }
 
       child.stdout.on('data', (data) => {
         output += data.toString();
@@ -545,7 +592,12 @@ export class ClaudeCodeLayer implements LayerInterface {
 
       child.on('close', (code) => {
         clearTimeout(timeoutId);
-        
+
+        if (settled) {
+          return; // already timed out or cancelled; the caller has its answer
+        }
+        settled = true;
+
         if (code === 0 && output.trim() !== '') {
           logger.debug('Claude command completed successfully', {
             outputLength: output.length,
@@ -569,6 +621,10 @@ export class ClaudeCodeLayer implements LayerInterface {
 
       child.on('error', (error) => {
         clearTimeout(timeoutId);
+        if (settled) {
+          return;
+        }
+        settled = true;
         logger.error('Claude command process error', { error: error.message });
         reject(error);
       });

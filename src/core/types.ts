@@ -261,7 +261,13 @@ export interface LayerInterface {
   initialize(): Promise<void>;
   isAvailable(): Promise<boolean>;
   canHandle(task: any): boolean;
-  execute(task: any): Promise<LayerResult>;
+  /**
+   * @param signal cancels the work, not just the waiting. Every layer that
+   * spawns a subprocess must end it when this fires: a caller that has been
+   * told the operation failed is not reading the answer, and an external AI
+   * call left running is billed and may be duplicated by the fallback.
+   */
+  execute(task: any, signal?: AbortSignal): Promise<LayerResult>;
   getCapabilities(): string[];
   getCost(task: any): number;
   getEstimatedDuration(task: any): number;

@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { realpathSync } from 'fs';
 import { isAbsolute, join, relative, resolve } from 'path';
 
@@ -195,4 +195,46 @@ export function probeCommand(
 /** True when a command resolves to a trusted executable that runs successfully. */
 export function commandAvailable(command: string, args: string[] = ['--version']): boolean {
   return probeCommand(command, args) !== undefined;
+}
+
+/**
+ * End a child and anything it started, by whatever means the platform has.
+ *
+ * SIGKILL rather than SIGTERM because the point is to stop paying: a process
+ * blocked inside an HTTP call, or one that installed a SIGTERM handler, would
+ * otherwise keep going.
+ *
+ * The tree matters. `child.kill()` signals one process, and both `claude` and
+ * `agy` spawn their own helpers -- so killing the one we hold left descendants
+ * running and, on Windows, holding files open in a directory we were about to
+ * delete. Windows has no signals at all, so taskkill /T /F is the equivalent;
+ * on POSIX the negative pid signals the whole process group, which `detached`
+ * children have of their own, falling back to the single process otherwise.
+ */
+export function terminateProcessTree(child: { pid?: number | undefined; kill: (signal?: NodeJS.Signals | number) => boolean }): void {
+  if (child.pid === undefined) {
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
+      return;
+    } catch {
+      // The process may already be gone; fall through to the signal attempt.
+    }
+  } else {
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+      return;
+    } catch {
+      // No process group of its own (not detached): signal it directly.
+    }
+  }
+
+  try {
+    child.kill('SIGKILL');
+  } catch {
+    // Already gone.
+  }
 }

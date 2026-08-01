@@ -467,15 +467,21 @@ export class LayerManager {
     // not be contingent on which step happens to run first.
     assertNoCredentialFiles(task);
 
+    // The cancellation goes to every layer, not only to the one that spawns a
+    // billed child. A short workflow timeout used to return failure to the
+    // caller -- which then fell back, or moved on -- while the Claude or agy
+    // subprocess it had given up on ran to its own much longer budget: a
+    // duplicate external call, and a `claude` child still writing somewhere
+    // after nobody was reading.
     switch (layerType) {
       case 'claude':
         const claudeLayer = await this.getClaudeLayerAsync();
-        return await claudeLayer.execute(task);
+        return await claudeLayer.execute(task, signal);
 
       case 'gemini': // deprecated alias
       case 'antigravity':
         const antigravityLayer = await this.getAntigravityLayerAsync();
-        return await antigravityLayer.execute(task);
+        return await antigravityLayer.execute(task, signal);
 
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();

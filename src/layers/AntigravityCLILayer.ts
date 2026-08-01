@@ -1,4 +1,5 @@
-import { spawn } from 'child_process';
+import { AsyncLocalStorage } from 'async_hooks';
+import { ChildProcess, spawn } from 'child_process';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
@@ -7,6 +8,7 @@ import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { SearchCache } from '../utils/SearchCache.js';
+import { terminateProcessTree } from '../utils/processUtils.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLeast, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
@@ -24,8 +26,17 @@ import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLe
  * 'exit' handlers may only do synchronous work, which both of these are.
  */
 const isWindows = process.platform === 'win32';
+
+/**
+ * The cancellation in force for the current execute() call.
+ *
+ * Per-call rather than per-instance: one layer instance serves concurrent
+ * requests, so an instance field would have one caller giving up kill another
+ * caller's agy. Same mechanism as the other two layers.
+ */
+const cancellation = new AsyncLocalStorage<AbortSignal>();
 const liveWorkspaces = new Set<string>();
-const liveChildren = new Set<{ kill: (signal?: NodeJS.Signals) => boolean; exitCode: number | null; signalCode: NodeJS.Signals | null }>();
+const liveChildren = new Set<ChildProcess>();
 let sweepInstalled = false;
 
 function installExitSweep(): void {
@@ -35,24 +46,72 @@ function installExitSweep(): void {
   sweepInstalled = true;
 
   process.once('exit', () => {
+    // The last-resort backstop, and it can only do synchronous work: there is
+    // no way to wait for a child to close inside an 'exit' handler. So it kills
+    // the tree and tries the directory, and accepts that on Windows the removal
+    // may lose a race against a process that has not finished dying -- a
+    // leftover directory in tmp is the lesser failure, and shutdownAntigravity()
+    // below is what makes it rare.
     for (const child of liveChildren) {
-      if (child.exitCode === null && child.signalCode === null) {
-        try {
-          child.kill(isWindows ? undefined : 'SIGKILL');
-        } catch {
-          // Already gone between the check and the signal.
-        }
-      }
+      terminateProcessTree(child);
     }
     for (const dir of liveWorkspaces) {
       try {
         rmSync(dir, { recursive: true, force: true });
       } catch {
-        // Nothing useful can be logged at exit; a leftover directory in tmp is
-        // the lesser failure than throwing out of an exit handler.
+        // Nothing useful can be logged at exit.
       }
     }
   });
+}
+
+/**
+ * Stop everything this layer started, and wait for it.
+ *
+ * Called before a one-shot CLI run exits. The exit hook cannot wait, and on
+ * Windows a `rmSync` issued while the process is still dying fails because the
+ * files are still open -- and the failure is swallowed, because throwing out of
+ * an exit handler is worse. Here there is somewhere to wait, so the children
+ * are ended, awaited, and only then are the directories removed.
+ *
+ * Safe to call when nothing is running: it returns immediately.
+ */
+export async function shutdownAntigravity(timeoutMs = 5000): Promise<void> {
+  const children = [...liveChildren];
+  const workspaces = [...liveWorkspaces];
+
+  if (children.length === 0 && workspaces.length === 0) {
+    return;
+  }
+
+  for (const child of children) {
+    terminateProcessTree(child);
+  }
+
+  await Promise.all(children.map(child => new Promise<void>(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+
+    const done = setTimeout(resolve, timeoutMs);
+    child.once('close', () => {
+      clearTimeout(done);
+      resolve();
+    });
+  })));
+
+  for (const dir of workspaces) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      liveWorkspaces.delete(dir);
+    } catch (error) {
+      logger.debug('Could not remove Antigravity workspace during shutdown', {
+        dir,
+        error: (error as Error).message,
+      });
+    }
+  }
 }
 
 /**
@@ -224,8 +283,15 @@ export class AntigravityCLILayer implements LayerInterface {
   /**
    * Main execution method
    */
-  async execute(task: AntigravityTask): Promise<LayerResult> {
-    const startTime = Date.now();
+  async execute(task: AntigravityTask, signal?: AbortSignal): Promise<LayerResult> {
+    if (signal?.aborted) {
+      throw new Error('Antigravity CLI execution cancelled before it started');
+    }
+
+    return cancellation.run(signal ?? new AbortController().signal, () => this.executeInContext(task, Date.now()));
+  }
+
+  private async executeInContext(task: AntigravityTask, startTime: number): Promise<LayerResult> {
 
     // Ensure initialization
     if (!this.isInitialized) {
@@ -499,6 +565,23 @@ export class AntigravityCLILayer implements LayerInterface {
       let stderr = '';
       let settled = false;
 
+      // Cancellation ends the CLI, not just the waiting. A short workflow
+      // timeout used to return failure while this agy ran to its own budget --
+      // a duplicate external call the caller would never read.
+      const signal = cancellation.getStore();
+
+      const stopOnAbort = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(killTimer);
+        logger.info('Cancelling Antigravity CLI execution', { pid: child.pid });
+        terminateProcessTree(child);
+        cleanupWorkspace();
+        reject(new Error('Antigravity CLI execution cancelled'));
+      };
+
       // Remove the scratch directory once the child is gone, whatever the
       // outcome. Anything agy wrote there belongs to this request alone.
       const cleanupWorkspace = (): void => {
@@ -600,12 +683,14 @@ export class AntigravityCLILayer implements LayerInterface {
         setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) {
             logger.warn('Antigravity CLI ignored SIGTERM, escalating', { pid: child.pid });
-            if (isWindows) {
-              child.kill();
-            } else {
-              child.kill('SIGKILL');
-            }
+            // The tree, not the one process: agy spawns its own helpers, and a
+            // survivor holds files open in the directory about to be removed.
+            terminateProcessTree(child);
           }
+          // Cleanup here as well as on close. On a timeout the caller has
+          // already been told it failed and may be on its way out, and the
+          // close that cleanup normally hangs off may never be observed.
+          cleanupWorkspace();
         }, 2000);
 
         if (!settled) {
@@ -616,6 +701,15 @@ export class AntigravityCLILayer implements LayerInterface {
           ));
         }
       }, this.DEFAULT_TIMEOUT + 5000);
+
+      if (signal) {
+        if (signal.aborted) {
+          stopOnAbort();
+        } else {
+          signal.addEventListener('abort', stopOnAbort, { once: true });
+          child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
+        }
+      }
     });
   }
 

@@ -122,6 +122,26 @@ export class AIStudioLayer implements LayerInterface {
    * reach a process, and this is the set of processes it has to reach.
    */
   private activeChildren = new Set<any>();
+
+  /**
+   * Requests waiting on the shared MCP process, keyed by the id they sent.
+   *
+   * The shared process answers several callers, so an answer has to be matched
+   * to the caller who asked for it. Before this, each call added its own stdout
+   * listener and settled on the first line carrying a result or an error --
+   * whatever id it had -- so two concurrent requests both took the first
+   * answer and one caller was handed the other's output.
+   */
+  private pendingOptimized = new Map<
+    number,
+    (response: { result?: unknown; error?: { message?: string } }) => void
+  >();
+
+  /** Monotonic, so two requests in the same millisecond cannot collide. */
+  private optimizedRequestSeq = 0;
+
+  /** The tail of the MCP server's stderr, for explaining a timeout. */
+  private recentMCPStderr = '';
   private mcpProcessStartTime = 0; // Track when MCP process was started
   private readonly MCP_PROCESS_TTL = 10 * 60 * 1000; // 10 minutes MCP process lifetime
   private isInitialized = false;
@@ -1461,6 +1481,8 @@ export class AIStudioLayer implements LayerInterface {
       });
       
       this.mcpProcessStartTime = now;
+      this.recentMCPStderr = '';
+      this.attachMCPResponseRouter(this.persistentMCPProcess);
       
       // Set up error handling
       this.persistentMCPProcess.on('error', (error: Error) => {
@@ -1480,157 +1502,187 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Execute MCP command with optimized persistent process
    */
-  private async executeMCPCommandOptimized(command: string, params: any): Promise<any> {
+  private async executeMCPCommandOptimized(
+    command: string,
+    params: any,
+    signal: AbortSignal | undefined = cancellation.getStore()
+  ): Promise<any> {
     // For simple commands, try direct API call first
     if (command === 'multimodal_process' && this.canUseDirectAPI(params)) {
       return await this.executeDirectAPI(command, params);
     }
-    
+
+    if (signal?.aborted) {
+      throw new Error(`AI Studio MCP command cancelled before it started: ${command}`);
+    }
+
     // Use persistent MCP process for complex operations
-    const process = await this.getPersistentMCPProcess();
-    
-    return new Promise<any>((resolve, reject) => {
-      const timeout = this.calculateOptimizedTimeout(command, params);
-      
-      logger.debug(`[${this.instanceId}] Executing optimized MCP command`, {
-        instanceId: this.instanceId,
-        command,
-        hasParams: !!params,
-        timeout,
-        timeoutMinutes: Math.round(timeout / 60000),
-        usesPersistentProcess: true,
-        paramKeys: params ? Object.keys(params) : []
-      });
+    const mcpProcess = await this.getPersistentMCPProcess();
 
-      let output = '';
-      let errorOutput = '';
+    const timeout = this.calculateOptimizedTimeout(command, params);
+    const id = this.nextOptimizedRequestId();
 
-      // Send MCP request
-      const mcpRequest = {
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method: 'tools/call',
-        params: {
-          name: command,
-          arguments: params
-        }
-      };
-
-      // Create cleanup function to ensure proper timeout clearing
-      let isResolved = false;
-      // Must stay `let`, declared here. cleanup() below closes over it and is
-      // defined before setTimeout runs, so moving the declaration down to a
-      // `const` would make cleanup reference a block-scoped binding ahead of
-      // its declaration. The rule's analysis does not see the closure.
-      // eslint-disable-next-line prefer-const
-      let timeoutId: NodeJS.Timeout;
-      
-      const cleanup = () => {
-        if (!isResolved) {
-          isResolved = true;
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-          }
-          try {
-            process.stdout.removeListener('data', dataHandler);
-            process.stderr.removeListener('data', errorHandler);
-          } catch (error) {
-            // Ignore cleanup errors
-          }
-        }
-      };
-      
-      logger.debug(`[${this.instanceId}] Sending optimized MCP request`, {
-        instanceId: this.instanceId,
-        command,
-        requestId: mcpRequest.id,
-        requestLength: JSON.stringify(mcpRequest).length
-      });
-      
-      try {
-        process.stdin.write(JSON.stringify(mcpRequest) + '\n');
-      } catch (error) {
-        cleanup();
-        reject(new Error(`Failed to send MCP request: ${(error as Error).message}`));
-        return;
-      }
-      
-      const dataHandler = (data: Buffer) => {
-        const chunk = data.toString();
-        output += chunk;
-        
-        logger.debug(`[${this.instanceId}] Optimized MCP stdout chunk received`, {
-          instanceId: this.instanceId,
-          command,
-          chunkLength: chunk.length,
-          totalOutputLength: output.length
-        });
-        
-        // Try to parse complete responses (handle both Unix \n and Windows \r\n)
-        const lines = output.split(/\r?\n/);
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const mcpResponse = JSON.parse(line);
-              if (mcpResponse.result || mcpResponse.error) {
-                if (!isResolved) {
-                  cleanup(); // Immediate cleanup and timeout clear
-                  
-                  logger.debug(`[${this.instanceId}] MCP response received - immediate resolution`, {
-                    instanceId: this.instanceId,
-                    command,
-                    hasResult: !!mcpResponse.result,
-                    hasError: !!mcpResponse.error,
-                    responseId: mcpResponse.id
-                  });
-                  
-                  if (mcpResponse.error) {
-                    reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
-                  } else {
-                    resolve(mcpResponse.result); // Immediate resolve (timeout issue fix)
-                  }
-                }
-                return;
-              }
-            } catch {
-              // Continue parsing other lines
-              continue;
-            }
-          }
-        }
-      };
-
-      const errorHandler = (data: Buffer) => {
-        const chunk = data.toString();
-        errorOutput += chunk;
-        logger.debug(`[${this.instanceId}] Optimized MCP stderr chunk received`, {
-          instanceId: this.instanceId,
-          command,
-          chunkLength: chunk.length,
-          errorContent: chunk.substring(0, 200)
-        });
-      };
-      
-      // Set up timeout with immediate cleanup
-      timeoutId = setTimeout(() => {
-        if (!isResolved) {
-          cleanup();
-          // Attach whatever the server wrote to stderr. It was being collected
-          // and then dropped, so a timeout reported only "timed out" while the
-          // reason -- a missing key, a quota refusal -- sat unread in the
-          // buffer. Trimmed because it can be long and is only a hint.
-          const stderrHint = errorOutput.trim()
-            ? ` Server stderr: ${errorOutput.trim().slice(-500)}`
-            : '';
-          reject(new Error(
-            `AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully.${stderrHint}`
-          ));
-        }
-      }, timeout);
-
-      process.stdout.on('data', dataHandler);
-      process.stderr.on('data', errorHandler);
+    logger.debug(`[${this.instanceId}] Executing optimized MCP command`, {
+      instanceId: this.instanceId,
+      command,
+      id,
+      hasParams: !!params,
+      timeout,
+      timeoutMinutes: Math.round(timeout / 60000),
+      usesPersistentProcess: true,
+      paramKeys: params ? Object.keys(params) : []
     });
+
+    return new Promise<any>((resolve, reject) => {
+      let settled = false;
+
+      const finish = (act: () => void): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.pendingOptimized.delete(id);
+        clearTimeout(timeoutId);
+        signal?.removeEventListener('abort', onAbort);
+        act();
+      };
+
+      const onAbort = (): void => finish(() => {
+        // The process is shared, so it is not killed here: another request is
+        // very likely mid-answer on it, and taking the process out would fail
+        // that caller too. What this call stops is its own waiting and its own
+        // slot in the router.
+        logger.info(`[${this.instanceId}] Cancelling optimized MCP command`, { command, id });
+        reject(new Error(`AI Studio MCP command cancelled: ${command}`));
+      });
+
+      const timeoutId = setTimeout(() => finish(() => {
+        // Attach whatever the server wrote to stderr. It was being collected
+        // and then dropped, so a timeout reported only "timed out" while the
+        // reason -- a missing key, a quota refusal -- sat unread in the buffer.
+        const stderr = this.recentMCPStderr.trim();
+        const stderrHint = stderr ? ` Server stderr: ${stderr.slice(-500)}` : '';
+        reject(new Error(
+          `AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully.${stderrHint}`
+        ));
+      }), timeout);
+
+      // Registered by id, and answered only by the response carrying that id.
+      //
+      // Every call used to add its own stdout listener to the shared process
+      // and resolve on the first line that had a `result` or an `error`,
+      // whatever id it carried. Two concurrent requests therefore both settled
+      // on whichever answer arrived first -- so a caller could be handed
+      // another caller's document analysis and no error would be raised. The
+      // ids were Date.now(), which two requests in the same millisecond share.
+      this.pendingOptimized.set(id, (response: { result?: unknown; error?: { message?: string } }) => finish(() => {
+        logger.debug(`[${this.instanceId}] MCP response routed`, {
+          instanceId: this.instanceId,
+          command,
+          id,
+          hasResult: !!response.result,
+          hasError: !!response.error,
+        });
+
+        if (response.error) {
+          reject(new Error(`MCP Error: ${response.error.message || 'Unknown error'}`));
+        } else {
+          resolve(response.result);
+        }
+      }));
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      try {
+        mcpProcess.stdin.write(JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: { name: command, arguments: params },
+        }) + '\n');
+      } catch (error) {
+        finish(() => reject(new Error(`Failed to send MCP request: ${(error as Error).message}`)));
+      }
+    });
+  }
+
+  /** A request id no other in-flight request on this process can share. */
+  private nextOptimizedRequestId(): number {
+    this.optimizedRequestSeq += 1;
+    return this.optimizedRequestSeq;
+  }
+
+  /**
+   * Attach the single reader that routes responses to the requests waiting on
+   * them, and fail everything still waiting if the process goes away.
+   */
+  private attachMCPResponseRouter(child: any): void {
+    let buffered = '';
+
+    // setEncoding before the listener, so Node's decoder holds partial
+    // multi-byte sequences across chunk boundaries rather than turning one
+    // character into two U+FFFD -- the same defect that corrupted Japanese
+    // answers in the Antigravity layer.
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+
+    child.stdout?.on('data', (chunk: string) => {
+      buffered += chunk;
+
+      // Split on complete lines only; the tail may be half a response.
+      const lines = buffered.split(/\r?\n/);
+      buffered = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+
+        let response: { id?: unknown; result?: unknown; error?: { message?: string } };
+        try {
+          response = JSON.parse(line);
+        } catch {
+          continue; // not a frame; the server logs prose here too
+        }
+
+        if (response.result === undefined && response.error === undefined) {
+          continue; // a notification, not an answer
+        }
+
+        const waiting = typeof response.id === 'number'
+          ? this.pendingOptimized.get(response.id)
+          : undefined;
+
+        if (waiting) {
+          waiting(response);
+        } else {
+          logger.debug(`[${this.instanceId}] MCP response with no caller waiting`, { id: response.id });
+        }
+      }
+    });
+
+    child.stderr?.on('data', (chunk: string) => {
+      // Kept for the timeout message, bounded so a chatty server cannot grow it
+      // without limit.
+      this.recentMCPStderr = (this.recentMCPStderr + chunk).slice(-4000);
+    });
+
+    const failAllWaiting = (why: string): void => {
+      const waiting = [...this.pendingOptimized.values()];
+      this.pendingOptimized.clear();
+      for (const settle of waiting) {
+        settle({ error: { message: why } });
+      }
+    };
+
+    child.on('exit', (code: number) => failAllWaiting(
+      `the AI Studio MCP process exited (code ${code}) before answering`
+    ));
+    child.on('error', (error: Error) => failAllWaiting(
+      `the AI Studio MCP process failed: ${error.message}`
+    ));
   }
 
   /**
@@ -1746,6 +1798,13 @@ export class AIStudioLayer implements LayerInterface {
       timeout = Math.max(240000, this.DEFAULT_TIMEOUT * 1.3); // Minimum 4 minutes for complex processing
     }
     
+    // Nothing is spawned for a caller that has already given up. Checking only
+    // inside the promise meant the child was created and registered first, and
+    // the cancellation then had to undo work that never needed doing.
+    if (signal?.aborted) {
+      throw new Error(`AI Studio MCP command cancelled before it started: ${command}`);
+    }
+
     return new Promise<any>((resolve, reject) => {
       logger.debug(`[${this.instanceId}] Executing MCP command`, {
         instanceId: this.instanceId,
@@ -1808,23 +1867,6 @@ export class AIStudioLayer implements LayerInterface {
       // safeExecute aborts on any terminal outcome, so a retry that has already
       // given up on attempt one no longer leaves attempt one generating -- the
       // MCP server bills for its output whether or not anyone is still reading.
-      if (signal) {
-        const stopOnAbort = () => {
-          if (!isCompleted) {
-            isCompleted = true;
-            logger.info(`[${this.instanceId}] Cancelling MCP command`, { command, pid: child.pid });
-            AIStudioLayer.terminateChild(child);
-          }
-        };
-
-        if (signal.aborted) {
-          stopOnAbort();
-        } else {
-          signal.addEventListener('abort', stopOnAbort, { once: true });
-          child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
-        }
-      }
-
       // Diagnostic log after successful spawn
       logger.info(`[${this.instanceId}] MCP process spawned`, {
         instanceId: this.instanceId,
@@ -1838,6 +1880,31 @@ export class AIStudioLayer implements LayerInterface {
       let errorOutput = '';
 
       let isCompleted = false;
+
+      // Cancellation reaches this process, not just the promise waiting on it.
+      // safeExecute aborts on any terminal outcome, so a retry that has already
+      // given up on attempt one no longer leaves attempt one generating -- the
+      // MCP server bills for its output whether or not anyone is still reading.
+      //
+      // Wired here, below the state it needs. The first version of this sat
+      // beside the spawn, thirty lines above `isCompleted`: an already-aborted
+      // signal ran the handler immediately and threw ReferenceError out of the
+      // temporal dead zone, after the child had been spawned and registered and
+      // so without terminating it. It also only set the flag -- the timer stayed
+      // armed and nothing rejected, so the close handler saw isCompleted and
+      // returned, leaving the caller waiting out its own five minutes for a
+      // process that was already dead.
+      const stopOnAbort = (): void => {
+        if (isCompleted) {
+          return;
+        }
+        isCompleted = true;
+        clearTimeout(timeoutId);
+        logger.info(`[${this.instanceId}] Cancelling MCP command`, { command, pid: child.pid });
+        AIStudioLayer.terminateChild(child);
+        reject(new Error(`AI Studio MCP command cancelled: ${command}`));
+      };
+
       const timeoutId = setTimeout(() => {
         if (!isCompleted) {
           isCompleted = true;
@@ -1855,6 +1922,11 @@ export class AIStudioLayer implements LayerInterface {
           reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
         }
       }, timeout);
+
+      if (signal) {
+        signal.addEventListener('abort', stopOnAbort, { once: true });
+        child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
+      }
 
       // Send MCP request
       const mcpRequest = {
