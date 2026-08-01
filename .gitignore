@@ -190,3 +190,6 @@ docs/generated/NEXT_STEPS.md
 
 # Development notes (local only)
 NEXT_STEPS.md
+
+# Knowledge-graph output (graphify). Regenerated from source; never committed.
+graphify-out/
