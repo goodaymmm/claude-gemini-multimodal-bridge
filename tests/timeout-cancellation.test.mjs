@@ -655,10 +655,12 @@ describe('ending a child ends what it started', () => {
       "setInterval(() => {}, 1000);",
     ].join(NEWLINE), 'utf8');
 
-    const child = spawn(process.execPath, [parent], {
-      stdio: 'ignore',
-      ...(process.platform === 'win32' ? {} : { detached: true }),
-    });
+    // Spawned the way the layers spawn: no `detached`. Detaching would give the
+    // child a process group of its own and make a group signal work, but it
+    // also takes the child out of the terminal's foreground group, so Ctrl-C
+    // stops reaching it -- which is why the tree is walked instead. Testing
+    // against a detached child would have proved the easy case.
+    const child = spawn(process.execPath, [parent], { stdio: 'ignore' });
 
     for (let waited = 0; waited < 8000 && !existsSync(pidFile); waited += 100) {
       await settle(100);
@@ -695,6 +697,89 @@ describe('a cancelled request is cancelled inside the server too', () => {
   // What this proves is that the server is told. It cannot prove the charge
   // stops: Google documents abortSignal as client-side only and bills work
   // already started. Telling the server is what stops the accumulation.
+
+  /** A stand-in that records every cancellation notification and never answers. */
+  function recordsCancellations(seen) {
+    const script = join(scratch, `records-${Math.random().toString(36).slice(2)}.cjs`);
+    writeFileSync(script, [
+      "const fs = require('fs');",
+      "let buf = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', chunk => {",
+      "  buf += chunk;",
+      "  const lines = buf.split(/\\r?\\n/);",
+      "  buf = lines.pop() || '';",
+      "  for (const line of lines) {",
+      "    if (!line.trim()) { continue; }",
+      "    const msg = JSON.parse(line);",
+      `    fs.appendFileSync(${JSON.stringify(seen)}, (msg.method || 'call:' + msg.id) + ' ');`,
+      "  }",
+      "});",
+      "process.stdin.resume();",
+    ].join(NEWLINE), 'utf8');
+    return script;
+  }
+
+  const recordedIn = seen => {
+    try {
+      return readFileSync(seen, 'utf8').trim().split(/\s+/).filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+
+  it('tells the server when its own budget runs out, not only when the caller aborts', async () => {
+    // A timeout is a terminal result for this caller, and the paths above it
+    // retry -- so leaving the server working on the abandoned request meant the
+    // retry ran alongside it. The notification used to be sent only from the
+    // abort handler.
+    const seen = join(scratch, `timeout-cancel-${Math.random().toString(36).slice(2)}.txt`);
+    const layer = new AIStudioLayer();
+    layer.resolveMCPServerPath = () => recordsCancellations(seen);
+    layer.calculateOptimizedTimeout = () => 1500;
+
+    await assert.rejects(
+      () => layer.executeMCPCommandOptimized('analyze_documents', { marker: 'slow' }),
+      /timeout/
+    );
+    await settle(400);
+
+    assert.ok(
+      recordedIn(seen).includes('notifications/cancelled'),
+      `the server was never told: ${recordedIn(seen).join(',')}`
+    );
+
+    await shutdownAIStudio();
+  });
+
+  it('does not send a request for a caller who gave up while the process was starting', async () => {
+    // The pre-check runs before awaiting the process and the listener is
+    // attached after, so a signal firing in between was seen by neither -- and
+    // the request went out on behalf of someone who had already left.
+    const seen = join(scratch, `race-${Math.random().toString(36).slice(2)}.txt`);
+    const layer = new AIStudioLayer();
+    const controller = new AbortController();
+
+    layer.resolveMCPServerPath = () => {
+      // Aborting here happens between the pre-check and the listener: this is
+      // the window, made deterministic.
+      controller.abort();
+      return recordsCancellations(seen);
+    };
+
+    await assert.rejects(
+      () => layer.executeMCPCommandOptimized('analyze_documents', { marker: 'gone' }, controller.signal),
+      /cancelled/
+    );
+    await settle(400);
+
+    assert.deepEqual(
+      recordedIn(seen).filter(entry => entry.startsWith('call:')), [],
+      'a request must not be sent for a caller who has already given up'
+    );
+
+    await shutdownAIStudio();
+  });
 
   it('tells the server which request to abandon', async () => {
     const seen = join(scratch, `cancelled-${Math.random().toString(36).slice(2)}.txt`);

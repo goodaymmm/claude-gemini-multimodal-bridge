@@ -553,13 +553,7 @@ export class AntigravityCLILayer implements LayerInterface {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: workspaceDir,
         env: this.buildChildEnv(),
-        // Its own process group, so a cancellation can signal the group rather
-        // than one process. agy spawns helpers of its own, and without this the
-        // negative-pid kill fails with ESRCH -- measured -- leaving descendants
-        // running and, on the timeout path, holding the workspace open. The
-        // trade is that Ctrl-C in a terminal no longer reaches it directly,
-        // which is why shutdown is explicit now.
-        ...(isWindows ? { windowsHide: true } : { detached: true }),
+        ...(isWindows ? { windowsHide: true } : {}),
       });
 
       liveChildren.add(child);

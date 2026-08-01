@@ -227,6 +227,41 @@ function cancellationConfig(): { abortSignal?: AbortSignal } {
   return signal ? { abortSignal: signal } : {};
 }
 
+/** Stop here if the caller has given up. */
+function throwIfCancelled(): void {
+  if (currentSignal()?.aborted) {
+    throw new Error('Request cancelled by the caller');
+  }
+}
+
+/**
+ * A wait that ends early when the caller gives up.
+ *
+ * The poll loop slept two seconds at a time without looking at the signal, so a
+ * cancelled request kept polling for up to the full two-minute budget.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const signal = currentSignal();
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+
+    function onAbort(): void {
+      clearTimeout(timer);
+      reject(new Error('Request cancelled by the caller'));
+    }
+
+    if (signal?.aborted) {
+      clearTimeout(timer);
+      reject(new Error('Request cancelled by the caller'));
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 class AIStudioMCPServer {
   private server: Server;
   private genAI: GoogleGenAI;
@@ -1386,7 +1421,12 @@ To retrieve this file, use:
         file: pdfPath,
         config: {
           mimeType: 'application/pdf',
-          displayName: path.basename(pdfPath)
+          displayName: path.basename(pdfPath),
+          // The upload and the poll below happen *before* generateContent, and
+          // for a large PDF they are most of the wall clock. Without the signal
+          // a cancelled request stayed here for up to two more minutes, and the
+          // retry above it started while this one was still uploading.
+          ...cancellationConfig(),
         }
       });
       
@@ -1398,14 +1438,16 @@ To retrieve this file, use:
       const maxWaitTime = 120000; // 2 minutes max wait
       
       while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
+        throwIfCancelled();
         console.error(`Waiting for PDF processing... (${waitTime / 1000}s)`);
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        await sleep(2000);
         waitTime += 2000;
-        
+        throwIfCancelled();
+
         if (!file.name) {
           throw new Error('The uploaded file has no name; cannot poll its processing state.');
         }
-        file = await this.genAI.files.get({ name: file.name });
+        file = await this.genAI.files.get({ name: file.name, config: cancellationConfig() });
         console.error(`PDF processing state: ${file.state}`);
       }
       
@@ -1441,7 +1483,8 @@ To retrieve this file, use:
         file: pdfUrl,  // Pass URL as file parameter
         config: {
           mimeType: 'application/pdf',
-          displayName: path.basename(new URL(pdfUrl).pathname) || 'url-document.pdf'
+          displayName: path.basename(new URL(pdfUrl).pathname) || 'url-document.pdf',
+          ...cancellationConfig(),
         }
       });
       
@@ -1453,14 +1496,16 @@ To retrieve this file, use:
       const maxWaitTime = 120000; // 2 minutes max wait
       
       while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
+        throwIfCancelled();
         console.error(`Waiting for PDF URL processing... (${waitTime / 1000}s)`);
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        await sleep(2000);
         waitTime += 2000;
-        
+        throwIfCancelled();
+
         if (!file.name) {
           throw new Error('The uploaded file has no name; cannot poll its processing state.');
         }
-        file = await this.genAI.files.get({ name: file.name });
+        file = await this.genAI.files.get({ name: file.name, config: cancellationConfig() });
         console.error(`PDF URL processing state: ${file.state}`);
       }
       

@@ -19,13 +19,15 @@ import { logger } from './logger.js';
  *  - the 'exit' backstop each layer installs is synchronous and cannot wait.
  *    It exists for `process.exit()` called from somewhere that did not await.
  *
- * Idempotent, and safe to call when nothing is running.
+ * Concurrent callers share one run; a later call runs again. Safe to call when
+ * nothing is running.
  */
 
 type ShutdownStep = () => Promise<void>;
 
 const steps: Array<{ name: string; run: ShutdownStep }> = [];
 let inFlight: Promise<void> | undefined;
+let generation = 0;
 
 /** Register something to be ended at shutdown. Called by the layers. */
 export function onShutdown(name: string, run: ShutdownStep): void {
@@ -44,10 +46,14 @@ export function runShutdown(): Promise<void> {
     return inFlight;
   }
 
-  inFlight = (async () => {
-    await Promise.all(steps.map(async ({ name, run }) => {
+  const run = (async () => {
+    // A snapshot: a step registered while this one is running belongs to the
+    // next call, not to a list being iterated.
+    const current = [...steps];
+
+    await Promise.all(current.map(async ({ name, run: step }) => {
       try {
-        await run();
+        await step();
       } catch (error) {
         // One step failing must not stop the others: the point is to leave as
         // little behind as possible.
@@ -55,6 +61,26 @@ export function runShutdown(): Promise<void> {
       }
     }));
   })();
+
+  // Shared only while it is running. Holding it forever made the *first* call
+  // the only one that ever did anything -- and for `cgmb serve` the first call
+  // happens at startup, before a single child exists, so a server that ran for
+  // an hour and then took a SIGINT was handed a completed promise and cleaned
+  // up nothing. Layers register lazily on first spawn, so most of them had not
+  // even been registered when that empty run completed.
+  //
+  // The generation counter, rather than comparing against the promise itself:
+  // that would have to be referenced from inside its own .finally, before its
+  // declaration -- which is exactly the temporal dead zone that bit the
+  // cancellation wiring two rounds ago.
+  generation += 1;
+  const mine = generation;
+
+  inFlight = run.finally(() => {
+    if (generation === mine) {
+      inFlight = undefined;
+    }
+  });
 
   return inFlight;
 }

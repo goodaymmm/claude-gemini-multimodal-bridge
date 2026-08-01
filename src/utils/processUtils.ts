@@ -198,7 +198,44 @@ export function commandAvailable(command: string, args: string[] = ['--version']
 }
 
 /**
- * End a child and anything it started, by whatever means the platform has.
+ * Every descendant of a pid, deepest last.
+ *
+ * `pgrep -P` lists direct children; walking it gives the whole tree. One spawn
+ * per level, which is fine at shutdown and nowhere near a hot path.
+ */
+function descendantsOf(pid: number): number[] {
+  const found: number[] = [];
+  const queue = [pid];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === undefined) {
+      break;
+    }
+
+    let children: number[] = [];
+    try {
+      children = execFileSync('pgrep', ['-P', String(current)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        .split('\n')
+        .map(line => Number(line.trim()))
+        .filter(value => Number.isInteger(value) && value > 0);
+    } catch {
+      // No children, or no pgrep. Either way there is nothing more to walk.
+    }
+
+    for (const child of children) {
+      if (!found.includes(child)) {
+        found.push(child);
+        queue.push(child);
+      }
+    }
+  }
+
+  return found;
+}
+
+/**
+ * End a child and anything it started.
  *
  * SIGKILL rather than SIGTERM because the point is to stop paying: a process
  * blocked inside an HTTP call, or one that installed a SIGTERM handler, would
@@ -206,10 +243,18 @@ export function commandAvailable(command: string, args: string[] = ['--version']
  *
  * The tree matters. `child.kill()` signals one process, and both `claude` and
  * `agy` spawn their own helpers -- so killing the one we hold left descendants
- * running and, on Windows, holding files open in a directory we were about to
- * delete. Windows has no signals at all, so taskkill /T /F is the equivalent;
- * on POSIX the negative pid signals the whole process group, which `detached`
- * children have of their own, falling back to the single process otherwise.
+ * running and, on Windows, holding files open in a directory about to be
+ * removed. Windows has taskkill /T for this.
+ *
+ * POSIX is walked rather than signalled by process group. Signalling the group
+ * needs the child spawned `detached`, and detaching had a cost that outweighed
+ * the convenience: a detached child is outside the terminal's foreground group,
+ * so Ctrl-C no longer reaches it and every spawn site becomes responsible for
+ * ending its own children through machinery that has to exist and be wired
+ * everywhere. Walking the tree needs nothing from the spawn site.
+ *
+ * Children first, then the parent: killing the parent first can leave a
+ * descendant reparented to init and out of reach of the walk.
  */
 export function terminateProcessTree(child: { pid?: number | undefined; kill: (signal?: NodeJS.Signals | number) => boolean }): void {
   if (child.pid === undefined) {
@@ -224,11 +269,12 @@ export function terminateProcessTree(child: { pid?: number | undefined; kill: (s
       // The process may already be gone; fall through to the signal attempt.
     }
   } else {
-    try {
-      process.kill(-child.pid, 'SIGKILL');
-      return;
-    } catch {
-      // No process group of its own (not detached): signal it directly.
+    for (const descendant of descendantsOf(child.pid).reverse()) {
+      try {
+        process.kill(descendant, 'SIGKILL');
+      } catch {
+        // Already gone.
+      }
     }
   }
 

@@ -6,7 +6,7 @@ import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } fro
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
-import { runShutdown } from './utils/shutdown.js';
+import { installShutdownHandlers, runShutdown } from './utils/shutdown.js';
 import { getEnvironmentStatus, loadEnvironmentSmart } from './utils/envLoader.js';
 import { getManualSetupInstructions, getMCPStatus, setupCGMBMCP } from './utils/mcpConfigManager.js';
 import path from 'path';
@@ -2309,6 +2309,12 @@ program.on('option:*', function(this: any) {
 // files are still open. Here the children are ended, awaited, and only then are
 // the directories removed. Handlers that call process.exit() themselves still
 // fall back to the hook.
+// Every mode, not just `serve`. A one-shot command spawns `claude`, `agy` and
+// an MCP server too, and Ctrl-C in the middle of one used to end the parent and
+// leave them running. installShutdownHandlers() existed for this and was never
+// called, so it protected nothing.
+installShutdownHandlers();
+
 await program.parseAsync();
 
 await runShutdown();

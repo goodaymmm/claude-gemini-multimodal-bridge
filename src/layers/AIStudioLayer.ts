@@ -1532,9 +1532,6 @@ export class AIStudioLayer implements LayerInterface {
         stdio: 'pipe',
         cwd: process.cwd(),
         shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
-        // Its own process group on POSIX, so terminateProcessTree can signal
-        // the group instead of one process.
-        ...(isWindowsSpawn ? {} : { detached: true }),
         env: {
           ...process.env,
           AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
@@ -1625,36 +1622,48 @@ export class AIStudioLayer implements LayerInterface {
         act();
       };
 
-      const onAbort = (): void => finish(() => {
-        // The process is shared, so it is not killed here: another request is
-        // very likely mid-answer on it, and taking the process out would fail
-        // that caller too.
-        //
-        // Instead the server is told, by the notification the protocol has for
-        // exactly this. It aborts that request's Google call, so this process
-        // stops waiting *and* the child stops holding an abandoned request
-        // open -- without which a run of cancellations accumulated ghost work
-        // inside a server nobody could see into.
-        //
-        // What it does not do is refund anything: Google documents abortSignal
-        // as client-side only, and usage already started is billed. Ending the
-        // request stops the next one from stacking on top of it.
-        logger.info(`[${this.instanceId}] Cancelling optimized MCP command`, { command, id });
+      // One place that tells the server, whatever ended this request.
+      //
+      // It used to live only in the abort handler, so the internal timeout
+      // removed the pending entry and rejected without telling anyone -- and
+      // the public paths that retry then started a second call with the first
+      // still running inside the server. Sent at most once: `told` guards the
+      // case where the timeout fires and the caller aborts on the way out.
+      let told = false;
+      const tellServerToStop = (why: string): void => {
+        if (told) {
+          return;
+        }
+        told = true;
+
+        logger.info(`[${this.instanceId}] Cancelling optimized MCP command`, { command, id, why });
         try {
           mcpProcess.stdin.write(JSON.stringify({
             jsonrpc: '2.0',
             method: 'notifications/cancelled',
-            params: { requestId: id, reason: 'caller cancelled' },
+            params: { requestId: id, reason: why },
           }) + '\n');
         } catch (error) {
           logger.debug('Could not send cancellation to the MCP server', {
             error: (error as Error).message,
           });
         }
+      };
+
+      const onAbort = (): void => finish(() => {
+        // The process is shared, so it is not killed here: another request is
+        // very likely mid-answer on it, and taking the process out would fail
+        // that caller too. The server is told instead.
+        tellServerToStop('caller cancelled');
         reject(new Error(`AI Studio MCP command cancelled: ${command}`));
       });
 
       const timeoutId = setTimeout(() => finish(() => {
+        // Told here too. A timeout is a terminal result for this caller, and
+        // the paths above it retry -- so leaving the server working on the
+        // abandoned request meant the retry ran alongside it.
+        tellServerToStop('caller timed out');
+
         // Attach whatever the server wrote to stderr. It was being collected
         // and then dropped, so a timeout reported only "timed out" while the
         // reason -- a missing key, a quota refusal -- sat unread in the buffer.
@@ -1691,6 +1700,15 @@ export class AIStudioLayer implements LayerInterface {
 
       if (signal) {
         signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      // Checked again, here. The first check happens before awaiting the
+      // process, and the listener is only attached after -- so a signal that
+      // fired in between was seen by neither, and the request went out on
+      // behalf of a caller who had already given up.
+      if (signal?.aborted) {
+        onAbort();
+        return;
       }
 
       try {
@@ -1957,9 +1975,6 @@ export class AIStudioLayer implements LayerInterface {
         stdio: 'pipe',
         cwd: process.cwd(),
         shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
-        // Its own process group on POSIX, so terminateProcessTree can signal
-        // the group instead of one process.
-        ...(isWindowsSpawn ? {} : { detached: true }),
         env: {
           ...process.env,
           // New preferred environment variable name

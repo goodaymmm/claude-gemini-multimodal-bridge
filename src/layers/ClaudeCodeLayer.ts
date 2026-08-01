@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'async_hooks';
-import { execFileSync, spawn } from 'child_process';
+import { ChildProcess, execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
@@ -20,6 +20,7 @@ import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { buildSpawnTarget, resolveTrustedCommand, terminateProcessTree } from '../utils/processUtils.js';
+import { onShutdown } from '../utils/shutdown.js';
 
 /**
  * Said by whichever initialisation path fails first.
@@ -47,6 +48,45 @@ const CLAUDE_NOT_FOUND_MESSAGE =
  * caller's child. Same mechanism as AIStudioLayer.
  */
 const claudeCancellation = new AsyncLocalStorage<AbortSignal>();
+
+/**
+ * The `claude` children this process has started.
+ *
+ * They had no owner at all: no live set, no shutdown step, no exit backstop.
+ * The layer ends a child when its own call is cancelled, which covers the
+ * timeout, but says nothing about the process being interrupted -- Ctrl-C ended
+ * the parent and left `claude` and its helpers running against packageRoot.
+ */
+const liveClaudeChildren = new Set<ChildProcess>();
+
+onShutdown('claude', async () => {
+  const children = [...liveClaudeChildren];
+  liveClaudeChildren.clear();
+
+  for (const child of children) {
+    terminateProcessTree(child);
+  }
+
+  await Promise.all(children.map(child => new Promise<void>(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    const done = setTimeout(resolve, 5000);
+    child.once('close', () => {
+      clearTimeout(done);
+      resolve();
+    });
+  })));
+});
+
+// The synchronous backstop, for a process.exit() that awaited nothing.
+process.once('exit', () => {
+  for (const child of liveClaudeChildren) {
+    terminateProcessTree(child);
+  }
+});
+
 
 export class ClaudeCodeLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
@@ -530,12 +570,11 @@ export class ClaudeCodeLayer implements LayerInterface {
         cwd: this.packageRoot,
         env: this.buildChildEnv(),
         windowsHide: true,
-        // Its own process group on POSIX, so cancelling signals the group.
-        // `claude` starts helpers; without this the negative-pid kill fails
-        // with ESRCH -- measured -- and only the process we hold dies.
-        ...(process.platform === 'win32' ? {} : { detached: true }),
         ...target.spawnOptions,
       });
+
+      liveClaudeChildren.add(child);
+      child.once('close', () => liveClaudeChildren.delete(child));
 
       child.stdin.on('error', () => {
         // A child that exits before reading stdin gives us EPIPE; the close
@@ -567,10 +606,12 @@ export class ClaudeCodeLayer implements LayerInterface {
       const timeoutId = setTimeout(() => {
         child.kill('SIGTERM');
         // Escalate only if the process is genuinely still alive: `child.killed`
-        // only reports that a signal was delivered.
+        // only reports that a signal was delivered. The tree, not the one
+        // process: `claude` starts helpers, and killing only what we hold left
+        // them running.
         setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) {
-            child.kill('SIGKILL');
+            terminateProcessTree(child);
           }
         }, 2000).unref();
         settled = true;
