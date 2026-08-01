@@ -1497,16 +1497,13 @@ export class AIStudioLayer implements LayerInterface {
       // Clean up old process if exists
       if (this.persistentMCPProcess && !this.persistentMCPProcess.killed) {
         try {
-          if (isPlatformWindows()) {
-            // Windows: Use taskkill for reliable termination
-            try {
-              windowsTerminateTree(this.persistentMCPProcess.pid);
-            } catch {
-              this.persistentMCPProcess.kill();
-            }
-          } else {
-            this.persistentMCPProcess.kill('SIGTERM');
-          }
+          // One helper, which already falls back for itself. Both branches used
+          // to be hand-written here, and the Windows one waited for an
+          // exception that windowsTerminateTree does not throw -- it returns
+          // false. So when taskkill failed (AppLocker, a timeout, a missing
+          // executable) the fallback kill was unreachable and the old server
+          // was orphaned on every TTL rollover.
+          terminateProcessTree(this.persistentMCPProcess);
         } catch (error) {
           logger.debug('Error killing old MCP process', { error: (error as Error).message });
         }
@@ -2038,17 +2035,10 @@ export class AIStudioLayer implements LayerInterface {
       const timeoutId = setTimeout(() => {
         if (!isCompleted) {
           isCompleted = true;
-          // Platform-aware process termination
-          if (process.platform === 'win32') {
-            // Windows: Use taskkill for reliable termination
-            try {
-              windowsTerminateTree(child.pid);
-            } catch {
-              child.kill();
-            }
-          } else {
-            child.kill('SIGKILL');  // Unix: force kill
-          }
+          // Same helper as everywhere else, for the same reason: the
+          // hand-written Windows branch here waited on an exception that never
+          // came, so a failed taskkill left billed work running.
+          terminateProcessTree(child);
           reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
         }
       }, timeout);

@@ -210,8 +210,43 @@ export function commandAvailable(command: string, args: string[] = ['--version']
  * Also no shell: the pid goes in an argument array, so there is nothing to
  * quote and nothing for cmd.exe to reinterpret.
  */
-function systemTaskkill(): string {
-  return join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'taskkill.exe');
+/** The taskkill this process will use, or undefined if none is trustworthy. */
+export function resolveSystemTaskkill(): string | undefined {
+  return systemTaskkill();
+}
+
+function systemTaskkill(): string | undefined {
+  const root = process.env.SystemRoot ?? 'C:\Windows';
+
+  // SystemRoot is an ordinary environment variable, so building the executable
+  // path from it unchecked moved the problem rather than solving it: a relative
+  // path, a UNC share, a \\?\ device path or an 8.3 short name all point
+  // somewhere else, and whatever sits at System32\taskkill.exe under it would
+  // run with this process's privileges. Shape is checked before it is used, and
+  // an unrecognisable one fails closed rather than guessing.
+  // Checked without a regex, because a backslash in one is exactly the kind of
+  // escape that does not survive being written through tooling: the first
+  // version of this compiled to a class matching only forward slashes, so
+  // `C:\Windows` was rejected, taskkill was never used, and Windows quietly
+  // lost its tree kill entirely. Character comparisons cannot collapse.
+  const separator = root[2];
+  const looksLikeALocalRoot = /^[A-Za-z]:$/.test(root.slice(0, 2))
+    && (separator === '\\' || separator === '/')
+    && root.length > 3
+    && !root.includes('~');         // 8.3 short name
+
+  if (!looksLikeALocalRoot) {
+    logger.warn('SystemRoot does not look like a local Windows directory; not using it', { root });
+    return undefined;
+  }
+
+  const candidate = join(root, 'System32', 'taskkill.exe');
+
+  try {
+    return statSync(candidate).isFile() ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -223,8 +258,13 @@ export function windowsTerminateTree(pid: number | undefined): boolean {
     return false;
   }
 
+  const taskkill = systemTaskkill();
+  if (taskkill === undefined) {
+    return false;
+  }
+
   try {
-    execFileSync(systemTaskkill(), ['/pid', String(pid), '/T', '/F'], {
+    execFileSync(taskkill, ['/pid', String(pid), '/T', '/F'], {
       stdio: 'ignore',
       timeout: 10000,
       windowsHide: true,
@@ -389,7 +429,11 @@ export const DEFAULT_CHILD_SOURCES: ChildLister[] = [PROC_SOURCE, PGREP_SOURCE];
  * out of reach. Re-walking until a pass finds nothing new closes the window
  * that a process which forks while being torn down would otherwise sit in.
  */
-export function listDescendants(pid: number, sources: ChildLister[] = DEFAULT_CHILD_SOURCES): number[] {
+export function listDescendants(
+  pid: number,
+  sources: ChildLister[] = DEFAULT_CHILD_SOURCES,
+  onDiscover: (pid: number) => void = () => {}
+): number[] {
   const childrenOf = (of: number): number[] | undefined => {
     for (const source of sources) {
       const children = source(of);
@@ -416,6 +460,11 @@ export function listDescendants(pid: number, sources: ChildLister[] = DEFAULT_CH
         if (!found.includes(child)) {
           found.push(child);
           queue.push(child);
+          // Frozen as soon as it is seen. Stopping only the root's group left
+          // a descendant that had moved to a group of its own free to fork
+          // throughout the walk -- and its children belonged to neither the
+          // list nor any group being signalled.
+          onDiscover(child);
         }
       }
     }
@@ -461,7 +510,10 @@ export function listDescendants(pid: number, sources: ChildLister[] = DEFAULT_CH
  * point now installs: the signal reaches this process, and this process ends
  * the groups it owns.
  */
-export function terminateProcessTree(child: { pid?: number | undefined; kill: (signal?: NodeJS.Signals | number) => boolean }): void {
+export function terminateProcessTree(
+  child: { pid?: number | undefined; kill: (signal?: NodeJS.Signals | number) => boolean },
+  sources: ChildLister[] = DEFAULT_CHILD_SOURCES
+): void {
   if (child.pid === undefined) {
     return;
   }
@@ -492,7 +544,7 @@ export function terminateProcessTree(child: { pid?: number | undefined; kill: (s
     // The walk still runs before the group kill: killing the group first
     // reparents anything that escaped and puts it out of reach of `pgrep -P`.
     stopProcessGroup(child.pid);
-    walkAndKillDescendants(child.pid);
+    walkAndKillDescendants(child.pid, sources);
     killProcessGroup(child.pid);
   }
 
@@ -511,6 +563,30 @@ export function terminateProcessTree(child: { pid?: number | undefined; kill: (s
  * anything else this fails with ESRCH -- measured. The result is not a verdict
  * on whether the tree is gone; see the caller.
  */
+/**
+ * A process's start time, from /proc, as an opaque token.
+ *
+ * A pid on its own is not an identity: a descendant can exit between being
+ * listed and being signalled, and on a busy machine -- or in a namespace with a
+ * small pid_max -- the number can be handed to something else owned by the same
+ * user. SIGKILL would then land on a stranger. Start time distinguishes them:
+ * it is field 22 of /proc/<pid>/stat, counted from the *last* close paren,
+ * because the command name in field 2 may itself contain spaces and parens.
+ *
+ * Returns undefined where there is no /proc, in which case the pid is all there
+ * is and the check simply does not apply.
+ */
+function startTimeOf(pid: number): string | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const afterComm = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    // fields from 3 onwards; starttime is field 22, so index 19 here.
+    return afterComm[19];
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Freeze the group so it cannot fork while it is being enumerated.
  *
@@ -539,10 +615,10 @@ function killProcessGroup(pid: number): void {
 }
 
 /** The fallback: find the descendants ourselves and end them, deepest first. */
-function walkAndKillDescendants(pid: number): void {
+function walkAndKillDescendants(pid: number, sources: ChildLister[] = DEFAULT_CHILD_SOURCES): void {
   // /proc is tried first and needs nothing resolved; only a system without it
   // *and* without a usable pgrep leaves us unable to enumerate.
-  if (DEFAULT_CHILD_SOURCES.every(source => source(pid) === undefined)) {
+  if (sources.every(source => source(pid) === undefined)) {
     // Nothing trustworthy to enumerate with. Say so rather than silently
     // killing one process and reporting success: a caller that believes the
     // tree is gone will not look for what is left.
@@ -553,7 +629,23 @@ function walkAndKillDescendants(pid: number): void {
     return;
   }
 
-  for (const descendant of listDescendants(pid).reverse()) {
+  const freeze = (target: number): void => {
+    stopProcessGroup(target);
+  };
+
+  // Identity is captured with the pid and re-checked immediately before the
+  // signal. Between the walk and the kill a descendant can exit and its number
+  // be reused by something else of the same user; killing that would destroy an
+  // unrelated process, which is a worse outcome than missing one of ours.
+  const identified = listDescendants(pid, sources, freeze)
+    .map(descendant => ({ pid: descendant, startedAt: startTimeOf(descendant) }));
+
+  for (const { pid: descendant, startedAt } of identified.reverse()) {
+    if (startedAt !== undefined && startTimeOf(descendant) !== startedAt) {
+      logger.debug('Skipping a pid that is no longer the process we found', { pid: descendant });
+      continue;
+    }
+
     try {
       process.kill(descendant, 'SIGKILL');
     } catch {

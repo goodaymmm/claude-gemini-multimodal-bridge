@@ -27,6 +27,7 @@ import {
   listDescendants,
   resetPgrepResolution,
   resolveSystemPgrep,
+  resolveSystemTaskkill,
   resolveTrustedCommand,
   terminateProcessTree,
 } from '../dist/utils/processUtils.js';
@@ -1005,7 +1006,11 @@ describe('a grandchild that leaves the group is still ended', {
 });
 
 describe('enumeration without an external tool', {
-  skip: process.platform === 'win32' && 'POSIX enumeration; Windows uses taskkill /T',
+  // Not just "not Windows": /proc is a Linux thing, and macOS is a supported
+  // platform without one. Skipping only Windows would have made the /proc case
+  // fail there for a reason that is not a defect -- and neither the Windows nor
+  // the WSL run would ever have shown it.
+  skip: process.platform !== 'linux' && `/proc enumeration is Linux-only (this is ${process.platform})`,
 }, () => {
   // The pgrep candidate list is five absolute paths, which is not every Linux:
   // a distribution shipping it elsewhere would have had no walk at all, and
@@ -1057,6 +1062,99 @@ describe('enumeration without an external tool', {
     }
   });
 
+  it('reports nothing, rather than guessing, when no source can answer', () => {
+    const nothingWorks = listDescendants(process.pid, [() => undefined]);
+    assert.deepEqual(nothingWorks, [], 'an unusable source must not invent descendants');
+  });
+});
+
+describe('a descendant that keeps forking while it is being torn down', {
+  skip: process.platform !== 'linux' && `needs /proc and process groups (this is ${process.platform})`,
+}, () => {
+  // Enumeration is a snapshot, and a snapshot races anything still able to
+  // fork. Stopping the root's group was not enough: a descendant that had moved
+  // to a group of its own -- setsid, or its own detached spawn -- kept running
+  // throughout the walk, and anything it forked belonged to neither the list
+  // nor any group being signalled.
+
+  it('leaves nothing behind, however fast it spawns', async () => {
+    const id = Math.random().toString(36).slice(2);
+    const dir = join(scratch, `forker-${id}`);
+    mkdirSync(dir, { recursive: true });
+
+    // The escapee lives in its own session and spawns a child every 30ms, each
+    // recording its pid. Whatever the walk finds, more have appeared since.
+    const spawnee = join(dir, 'spawnee.cjs');
+    writeFileSync(spawnee, [
+      "const fs = require('fs');",
+      `fs.appendFileSync(${JSON.stringify(join(dir, 'pids.txt'))}, process.pid + ' ');`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const forker = join(dir, 'forker.cjs');
+    writeFileSync(forker, [
+      "const { spawn } = require('child_process');",
+      `setInterval(() => spawn(process.execPath, [${JSON.stringify(spawnee)}], { stdio: 'ignore' }), 30);`,
+    ].join(NEWLINE), 'utf8');
+
+    const parent = join(dir, 'parent.cjs');
+    writeFileSync(parent, [
+      "const { spawn } = require('child_process');",
+      `spawn(process.execPath, [${JSON.stringify(forker)}], { stdio: 'ignore', detached: true });`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const root = spawn(process.execPath, [parent], { stdio: 'ignore', detached: true });
+    await settle(900); // let it get well underway
+
+    const before = readFileSync(join(dir, 'pids.txt'), 'utf8').trim().split(/\s+/).filter(Boolean);
+    assert.ok(before.length > 3, `the forker must be busy to prove anything: ${before.length}`);
+
+    terminateProcessTree(root);
+    await settle();
+
+    const all = readFileSync(join(dir, 'pids.txt'), 'utf8').trim().split(/\s+/).filter(Boolean);
+    const survivors = all.map(Number).filter(pid => isAlive(pid));
+
+    // Clean up before asserting, so a failure does not leave a fork bomb behind.
+    for (const pid of survivors) {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+
+    assert.deepEqual(survivors, [], `processes outlived the tree they belonged to: ${survivors.join(',')}`);
+  });
+});
+
+describe('enumeration through pgrep', {
+  skip: process.platform === 'win32' && 'pgrep is POSIX; Windows uses taskkill /T',
+}, () => {
+  // Kept for every POSIX platform, since it is what macOS actually uses.
+
+  async function familyOfThree() {
+    const id = Math.random().toString(36).slice(2);
+    const ready = join(scratch, `pgrep-family-${id}.txt`);
+
+    const leaf = join(scratch, `pgrep-leaf-${id}.cjs`);
+    writeFileSync(leaf, [
+      "const fs = require('fs');",
+      `fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const mid = join(scratch, `pgrep-mid-${id}.cjs`);
+    writeFileSync(mid, [
+      "const { spawn } = require('child_process');",
+      `spawn(process.execPath, [${JSON.stringify(leaf)}], { stdio: 'ignore' });`,
+      "setInterval(() => {}, 1000);",
+    ].join(NEWLINE), 'utf8');
+
+    const root = spawn(process.execPath, [mid], { stdio: 'ignore' });
+    for (let waited = 0; waited < 8000 && !existsSync(ready); waited += 100) {
+      await settle(100);
+    }
+    return { root, leafPid: Number(readFileSync(ready, 'utf8')) };
+  }
+
   it('finds the whole family through pgrep alone, where there is one', async () => {
     const { root, leafPid } = await familyOfThree();
     try {
@@ -1074,10 +1172,6 @@ describe('enumeration without an external tool', {
     }
   });
 
-  it('reports nothing, rather than guessing, when no source can answer', () => {
-    const nothingWorks = listDescendants(process.pid, [() => undefined]);
-    assert.deepEqual(nothingWorks, [], 'an unusable source must not invent descendants');
-  });
 });
 
 describe('the process group carries it when the walk cannot', {
@@ -1118,19 +1212,16 @@ describe('the process group carries it when the walk cannot', {
     assert.ok(grandPid > 0, 'the grandchild must have started to prove anything');
     await settle(300);
 
-    const savedPath = process.env.PATH;
     try {
-      process.env.PATH = join(scratch, 'definitely-empty');
-      resetPgrepResolution();
-      assert.equal(resolveTrustedCommand('pgrep'), undefined, 'the walk must be unavailable for this case');
-
-      terminateProcessTree(child);
+      // The walk is disabled by handing terminateProcessTree a source that
+      // cannot answer -- not by emptying PATH, which the resolver never reads.
+      // With PATH the case passed against a build with the group kill removed,
+      // because the walk quietly did the work and nothing was proven.
+      terminateProcessTree(child, [() => undefined]);
       await settle();
 
       assert.equal(isAlive(grandPid), false, 'the group must have carried it without any walk');
     } finally {
-      process.env.PATH = savedPath;
-      resetPgrepResolution();
       try { process.kill(grandPid, 'SIGKILL'); } catch { /* already gone */ }
     }
   });
@@ -1139,6 +1230,62 @@ describe('the process group carries it when the walk cannot', {
 describe('what the Windows tree kill is allowed to run', {
   skip: process.platform !== 'win32' && 'taskkill is Windows-only',
 }, () => {
+  it('will not take its executable from a SystemRoot of the wrong shape', () => {
+    // The path is built from SystemRoot, which is an ordinary environment
+    // variable: a relative path, a UNC share, a device path or an 8.3 short
+    // name all point somewhere else, and whatever sits at System32\taskkill.exe
+    // under it would run at this process's privileges.
+    //
+    // The real root must still be accepted. The first version of this check was
+    // a regex whose backslash did not survive being written, so it matched only
+    // forward slashes -- `C:\Windows` was rejected, taskkill was never used,
+    // and Windows lost its tree kill entirely. Three suites failed before
+    // anything noticed, which is the only reason it was caught.
+    const saved = process.env.SystemRoot;
+
+    // Built from character codes, not typed. A single backslash in a JS string
+    // literal is an escape -- 'C:\Windows' is the seven characters C:Windows --
+    // and an earlier version of this asserted against exactly that, then failed
+    // because no such directory exists.
+    const SEP = String.fromCharCode(92);
+    const accepted = [saved, `C:${SEP}Windows`, 'D:/Windows'];
+    const rejected = [
+      `relative${SEP}path`,
+      `${SEP}${SEP}server${SEP}share`,        // UNC
+      `${SEP}${SEP}?${SEP}C:${SEP}Windows`,   // device path
+      'C:',                                   // no directory at all
+      `C:${SEP}PROGRA~1`,                     // 8.3 short name
+      '',
+    ];
+
+    try {
+      for (const root of rejected) {
+        process.env.SystemRoot = root;
+        assert.equal(
+          resolveSystemTaskkill(), undefined,
+          `a SystemRoot of ${JSON.stringify(root)} must not be used to find taskkill`
+        );
+      }
+
+      for (const root of accepted) {
+        if (root === undefined) { continue; }
+        process.env.SystemRoot = root;
+        const resolved = resolveSystemTaskkill();
+        // Only asserted where that root actually exists on this machine; the
+        // point is that a well-formed root is not rejected out of hand.
+        if (existsSync(join(root, 'System32', 'taskkill.exe'))) {
+          assert.ok(resolved, `a real SystemRoot must be usable: ${root}`);
+        }
+      }
+    } finally {
+      if (saved === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = saved;
+      }
+    }
+  });
+
   it('does not run a taskkill from PATH or the current directory', () => {
     // cmd.exe searches the current directory before PATH, and every call was
     // `execSync('taskkill /pid ...')` -- so a taskkill.cmd in a checkout, or
