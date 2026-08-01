@@ -44,30 +44,48 @@ const isWindows = (): boolean => process.platform === 'win32';
  * canonicalised first so a symlink or junction cannot point back inside.
  */
 export function isUntrustedBinaryLocation(candidate: string): boolean {
-  const resolved = realpathOrSelf(resolve(candidate));
-
-  // Anything under a node_modules, wherever it is.
+  // Two questions, asked of two different paths.
   //
-  // The rule used to be "inside the current working directory", which npm and
-  // npx walk straight around: both put every *ancestor* node_modules/.bin on
-  // PATH, and from a subdirectory of a project those are outside cwd, so a
-  // `claude` or `agy` shim committed to a repository was trusted and executed
-  // with this process's environment. A project-local .bin is never where a
-  // system tool lives, so the segment itself is the rule.
-  // No regex. Inside a character class a backslash escapes the next character,
-  // so `[<backslash>/]` is a class containing only `/` -- the fourth time in
-  // this file that a backslash written into a pattern has not meant what it
-  // looked like. Backslashes are turned into slashes first, then the string is
-  // split on a plain '/', which has no escaping rules to get wrong.
-  const segments = resolved.split(String.fromCharCode(92)).join('/').split('/');
+  // 1. Is the *entry on PATH* inside a project's node_modules? That is what npm
+  //    and npx put there, and a shim committed to a repository is what must not
+  //    be run. This is asked of the path as given, before any symlink is
+  //    followed.
+  //
+  //    Asking it after realpath was a serious mistake: `npm install -g
+  //    @anthropic-ai/claude-code` puts /usr/local/bin/claude -- a symlink into
+  //    /usr/local/lib/node_modules/... -- so resolving first made the ordinary
+  //    global install look like a project shim and refused it. Measured: the
+  //    exact npm layout came back rejected, which would have disabled the
+  //    Claude layer on every POSIX machine that installed it the documented
+  //    way.
+  //
+  // 2. Does it *end up* inside the working directory? That one needs the real
+  //    path, or a symlink in the tree pointing at itself would slip through.
+  const segments = pathSegments(candidate);
   if (segments.includes('node_modules')) {
     return true;
   }
 
-  // And still anything inside the working directory.
   const cwd = realpathOrSelf(resolve(process.cwd()));
+  const resolved = realpathOrSelf(resolve(candidate));
   const rel = relative(cwd, resolved);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/**
+ * A path split into its parts, comparably.
+ *
+ * No regex: inside a character class a backslash escapes the next character, so
+ * `[<backslash>/]` is a class containing only `/` -- which meant Windows paths
+ * were never split at all and this check passed everything.
+ *
+ * Lower-cased where the filesystem is: Windows resolves paths without regard to
+ * case, so a directory actually named NODE_MODULES would otherwise walk past a
+ * case-sensitive comparison.
+ */
+function pathSegments(target: string): string[] {
+  const parts = target.split(String.fromCharCode(92)).join('/').split('/');
+  return isWindows() ? parts.map(part => part.toLowerCase()) : parts;
 }
 
 function realpathOrSelf(target: string): string {
@@ -101,32 +119,46 @@ function quoteForCmd(value: string): string {
  * silently removed the Windows tree kill entirely. Three suites failed, which
  * is the only reason it was noticed.
  */
+/**
+ * Where Windows keeps its system tools. Fixed, because the environment
+ * variable that used to name it is attacker-controllable.
+ */
+const WINDOWS_SYSTEM_DIRECTORIES = [
+  'C:' + String.fromCharCode(92) + 'Windows' + String.fromCharCode(92) + 'System32',
+  'C:/Windows/System32',
+];
+
 function windowsSystemDirectory(): string | undefined {
-  // Built from a character code for the same reason: a single backslash in a
-  // JavaScript string literal is an escape, so a hand-typed 'C:\Windows'
-  // default is the seven characters C:Windows -- which is exactly what it was,
-  // and it made every SystemRoot-less environment fail the check below.
-  const SEP = String.fromCharCode(92);
-  const root = process.env.SystemRoot ?? `C:${SEP}Windows`;
-
-  // The shape has to be the Windows directory *itself*, not merely something
-  // drive-absolute. Checking only for a drive letter let a path like
-  // C:\Users\attacker\payload through, and whatever sat at System32
-  // under it was then executed -- where.exe with this process's environment,
-  // and before any candidate had been trust-checked, since where.exe is what
-  // does the checking. A legitimate SystemRoot is a drive followed by one
-  // directory named Windows; nothing else is accepted.
-  const parts = root.split(SEP).join('/').replace(/[/]+$/, '').split('/');
-  const usable = parts.length === 2
-    && /^[A-Za-z]:$/.test(parts[0] ?? '')
-    && (parts[1] ?? '').toLowerCase() === 'windows';
-
-  if (!usable) {
-    logger.warn('SystemRoot is not a recognised Windows directory; not using it', { root });
-    return undefined;
+  // SystemRoot is not consulted.
+  //
+  // Two versions tried to validate it and neither could. Checking that it was
+  // drive-absolute let C:\Users\attacker\payload through; requiring
+  // it to be `<drive>:\Windows` still lets an attacker who can write to any
+  // drive create D:\Windows\System32\where.exe, or point a junction
+  // there, and set the variable. The value is attacker-controllable in every
+  // scenario the check exists for, so no amount of parsing makes it a trust
+  // anchor -- and where.exe runs *before* any candidate has been checked,
+  // because where.exe is what does the checking.
+  //
+  // Node exposes no GetSystemDirectoryW, so the alternative is the same one
+  // already used for pgrep: a fixed list of the places the tool actually lives,
+  // and fail closed when it is at none of them. Windows has been installed at
+  // %SystemDrive%\Windows for its entire history, and a machine where that
+  // is untrue loses the tree kill rather than gaining an execution hole.
+  for (const candidate of WINDOWS_SYSTEM_DIRECTORIES) {
+    try {
+      if (statSync(candidate).isDirectory()) {
+        return candidate;
+      }
+    } catch {
+      // Not here; try the next.
+    }
   }
 
-  return join(root, 'System32');
+  logger.warn('No Windows system directory found; taskkill and where will not be used', {
+    looked: WINDOWS_SYSTEM_DIRECTORIES,
+  });
+  return undefined;
 }
 
 /** A Windows system tool, by absolute path, or undefined if none is trustworthy. */
@@ -693,15 +725,26 @@ function hasProcFilesystem(): boolean {
  * is not stopped. Anything still running is killed moments later regardless, so
  * a failed stop costs nothing but the narrower window.
  */
-function stopProcessGroup(pid: number): void {
+function stopProcessGroup(pid: number): 'group' | 'pid' | 'none' {
   try {
     process.kill(-pid, 'SIGSTOP');
+    return 'group';
   } catch {
     try {
       process.kill(pid, 'SIGSTOP');
+      return 'pid';
     } catch {
-      // Already gone.
+      return 'none';
     }
+  }
+}
+
+/** Undo a stop, at the scope it was applied. */
+function resumeStopped(pid: number, scope: 'group' | 'pid'): void {
+  try {
+    process.kill(scope === 'group' ? -pid : pid, 'SIGCONT');
+  } catch {
+    // Gone, which is the outcome we wanted anyway.
   }
 }
 
@@ -737,7 +780,14 @@ function walkAndKillDescendants(pid: number, sources: ChildLister[] = DEFAULT_CH
   // were the one we meant, so the later check compared a stranger against
   // itself and passed.
   const identities = new Map<number, string | undefined>();
-  const stopped: number[] = [];
+
+  // What was stopped, and at what scope. Recording only the target pid conflated
+  // three different outcomes -- a whole group stopped, one process stopped,
+  // nothing stopped -- so the compensation could resume a group that was never
+  // stopped, skip one that was, or send SIGCONT twice to the same group. Worse,
+  // a group whose leader was killed had its compensation suppressed entirely,
+  // leaving any other member of that group suspended for good.
+  const stops = new Map<string, { pid: number; scope: 'group' | 'pid' }>();
 
   const freeze = (target: number): void => {
     const identity = identityOf(target);
@@ -746,13 +796,15 @@ function walkAndKillDescendants(pid: number, sources: ChildLister[] = DEFAULT_CH
     // Nothing is stopped that we could not identify: freezing a number that may
     // already belong to someone else is the same mistake as killing it, and a
     // stopped stranger is worse than a running one -- it never finishes.
-    if (mayStillSignal(target, identity)) {
-      stopProcessGroup(target);
-      stopped.push(target);
+    if (!mayStillSignal(target, identity)) {
+      return;
+    }
+
+    const scope = stopProcessGroup(target);
+    if (scope !== 'none') {
+      stops.set(`${scope}:${target}`, { pid: target, scope });
     }
   };
-
-  const killed = new Set<number>();
 
   for (const descendant of listDescendants(pid, sources, freeze).reverse()) {
     if (!mayStillSignal(descendant, identities.get(descendant))) {
@@ -762,27 +814,17 @@ function walkAndKillDescendants(pid: number, sources: ChildLister[] = DEFAULT_CH
 
     try {
       process.kill(descendant, 'SIGKILL');
-      killed.add(descendant);
     } catch {
       // Already gone.
     }
   }
 
-  // Anything frozen but not killed is let go again. Between the freeze and the
-  // kill a pid can be reused, and the check above then -- correctly -- refuses
-  // to kill it; but it has already been stopped, and leaving a stranger
-  // suspended indefinitely is a worse outcome than the one being avoided.
-  for (const target of stopped) {
-    if (!killed.has(target)) {
-      try {
-        process.kill(-target, 'SIGCONT');
-      } catch {
-        try {
-          process.kill(target, 'SIGCONT');
-        } catch {
-          // Gone, which is the outcome we wanted anyway.
-        }
-      }
-    }
+  // Every stop is paired, at the scope it was made. A group stop is resumed as
+  // a group even when its leader was killed, because the other members of that
+  // group -- including anything reparented into it that the walk never saw --
+  // are still stopped and nothing else will ever wake them.
+  for (const { pid: target, scope } of stops.values()) {
+    resumeStopped(target, scope);
   }
 }
+

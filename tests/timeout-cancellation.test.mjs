@@ -15,7 +15,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -1279,6 +1279,61 @@ describe('where a trusted command may come from', () => {
       '/usr/bin/pgrep',
     ];
 
+  it('accepts a global npm install, whose bin is a symlink into node_modules', {
+    skip: process.platform === 'win32' && 'the npm global layout on Windows is a shim, not a symlink',
+  }, () => {
+    // `npm install -g @anthropic-ai/claude-code` -- what this project's own
+    // README tells people to run -- puts a symlink in a system bin directory
+    // pointing into lib/node_modules. Asking the node_modules question *after*
+    // resolving that symlink therefore refused the ordinary global install, and
+    // would have disabled the Claude layer on every POSIX machine that followed
+    // the documented instructions. Measured before the fix: rejected.
+    //
+    // The question belongs to the entry on PATH, which is the thing an attacker
+    // plants; where it points is the package's own business.
+    const id = Math.random().toString(36).slice(2);
+    const prefix = join(scratch, `npm-global-${id}`);
+    const pkg = join(prefix, 'lib', 'node_modules', '@anthropic-ai', 'claude-code');
+    const bin = join(prefix, 'bin');
+
+    mkdirSync(pkg, { recursive: true });
+    mkdirSync(bin, { recursive: true });
+
+    const target = join(pkg, 'cli.js');
+    const link = join(bin, 'claude');
+    writeFileSync(target, '#!/usr/bin/env node' + NEWLINE, { mode: 0o755 });
+    symlinkSync(target, link);
+
+    assert.equal(
+      isUntrustedBinaryLocation(link), false,
+      'the documented global install must remain usable'
+    );
+
+    // And the thing it is not: a shim inside a project.
+    const projectShim = join(scratch, `proj-${id}`, 'node_modules', '.bin', 'claude');
+    mkdirSync(join(scratch, `proj-${id}`, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(projectShim, '#!/bin/sh' + NEWLINE, { mode: 0o755 });
+
+    assert.equal(
+      isUntrustedBinaryLocation(projectShim), true,
+      'a shim committed to a project must still be refused'
+    );
+  });
+
+  it('refuses a node_modules whatever its casing, where the filesystem ignores case', {
+    skip: process.platform !== 'win32' && 'path casing only matters where the filesystem ignores it',
+  }, () => {
+    // Windows resolves paths without regard to case, so a directory actually
+    // named NODE_MODULES walked straight past a case-sensitive comparison.
+    for (const spelling of ['NODE_MODULES', 'Node_Modules', 'node_Modules']) {
+      const candidate = `C:${SEP}repo${SEP}${spelling}${SEP}.bin${SEP}claude.cmd`;
+      assert.equal(
+        isUntrustedBinaryLocation(candidate), true,
+        `casing must not defeat the rule: ${candidate}`
+      );
+    }
+  });
+
   it('refuses anything under a node_modules, wherever it is', () => {
     for (const candidate of rejected) {
       assert.equal(
@@ -1303,52 +1358,32 @@ describe('where a trusted command may come from', () => {
 describe('what the Windows tree kill is allowed to run', {
   skip: process.platform !== 'win32' && 'taskkill is Windows-only',
 }, () => {
-  it('will not take its executable from a SystemRoot of the wrong shape', () => {
-    // The path is built from SystemRoot, which is an ordinary environment
-    // variable: a relative path, a UNC share, a device path or an 8.3 short
-    // name all point somewhere else, and whatever sits at System32\taskkill.exe
-    // under it would run at this process's privileges.
-    //
-    // The real root must still be accepted. The first version of this check was
-    // a regex whose backslash did not survive being written, so it matched only
-    // forward slashes -- `C:\Windows` was rejected, taskkill was never used,
-    // and Windows lost its tree kill entirely. Three suites failed before
-    // anything noticed, which is the only reason it was caught.
-    const saved = process.env.SystemRoot;
+  const SEP = String.fromCharCode(92);
 
-    // Built from character codes, not typed. A single backslash in a JS string
-    // literal is an escape -- 'C:\Windows' is the seven characters C:Windows --
-    // and an earlier version of this asserted against exactly that, then failed
-    // because no such directory exists.
-    const SEP = String.fromCharCode(92);
-    const accepted = [saved, `C:${SEP}Windows`, 'D:/Windows'];
-    const rejected = [
-      `relative${SEP}path`,
-      `${SEP}${SEP}server${SEP}share`,        // UNC
-      `${SEP}${SEP}?${SEP}C:${SEP}Windows`,   // device path
-      'C:',                                   // no directory at all
-      `C:${SEP}PROGRA~1`,                     // 8.3 short name
-      '',
-    ];
+  it('does not consult SystemRoot at all', () => {
+    // Two versions tried to validate this variable and neither could. Requiring
+    // it to be drive-absolute let a path under a user profile through;
+    // requiring drive-plus-Windows still lets anyone who can write to a drive
+    // create their own Windows/System32/where.exe, or point a junction there,
+    // and set the variable. It is attacker-controllable in exactly the
+    // scenarios the check exists for, so it is not consulted -- the tool is
+    // looked for where it actually lives, and not found means not used.
+    const saved = process.env.SystemRoot;
+    const expected = resolveSystemTaskkill();
 
     try {
-      for (const root of rejected) {
+      for (const root of [
+        `C:${SEP}Users${SEP}attacker${SEP}payload`,
+        `D:${SEP}Windows`,
+        `C:${SEP}Users${SEP}a${SEP}Windows`,
+        '.',
+        '',
+      ]) {
         process.env.SystemRoot = root;
         assert.equal(
-          resolveSystemTaskkill(), undefined,
-          `a SystemRoot of ${JSON.stringify(root)} must not be used to find taskkill`
+          resolveSystemTaskkill(), expected,
+          `SystemRoot=${JSON.stringify(root)} must make no difference`
         );
-      }
-
-      for (const root of accepted) {
-        if (root === undefined) { continue; }
-        process.env.SystemRoot = root;
-        const resolved = resolveSystemTaskkill();
-        // Only asserted where that root actually exists on this machine; the
-        // point is that a well-formed root is not rejected out of hand.
-        if (existsSync(join(root, 'System32', 'taskkill.exe'))) {
-          assert.ok(resolved, `a real SystemRoot must be usable: ${root}`);
-        }
       }
     } finally {
       if (saved === undefined) {
