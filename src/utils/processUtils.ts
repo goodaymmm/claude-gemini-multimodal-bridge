@@ -63,11 +63,64 @@ function quoteForCmd(value: string): string {
   return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
 }
 
+/**
+ * The Windows system directory, or undefined if SystemRoot is not a shape we
+ * are willing to execute out of.
+ *
+ * SystemRoot is an ordinary environment variable. Building an executable path
+ * from it unchecked moves the trust boundary rather than closing it: a relative
+ * path, a UNC share, a device path or an 8.3 short name all point somewhere
+ * else, and whatever sits at System32\<tool>.exe under it runs with this
+ * process's privileges. `SystemRoot='.'` was enough to have where.exe taken
+ * from the working directory -- before any candidate had been trust-checked,
+ * since where.exe is what does the checking.
+ *
+ * Checked with character comparisons rather than a regex, because a backslash
+ * in one did not survive being written: an earlier version compiled to a class
+ * matching only forward slashes, rejected `C:` + separator + `Windows`, and so
+ * silently removed the Windows tree kill entirely. Three suites failed, which
+ * is the only reason it was noticed.
+ */
+function windowsSystemDirectory(): string | undefined {
+  // Built from a character code for the same reason: a single backslash in a
+  // JavaScript string literal is an escape, so a hand-typed 'C:\Windows'
+  // default is the seven characters C:Windows -- which is exactly what it was,
+  // and it made every SystemRoot-less environment fail the check below.
+  const SEP = String.fromCharCode(92);
+  const root = process.env.SystemRoot ?? `C:${SEP}Windows`;
+
+  const separator = root[2];
+  const usable = /^[A-Za-z]:$/.test(root.slice(0, 2))
+    && (separator === SEP || separator === '/')
+    && root.length > 3
+    && !root.includes('~');         // 8.3 short name
+
+  if (!usable) {
+    logger.warn('SystemRoot does not look like a local Windows directory; not using it', { root });
+    return undefined;
+  }
+
+  return join(root, 'System32');
+}
+
+/** A Windows system tool, by absolute path, or undefined if none is trustworthy. */
+function windowsSystemTool(name: string): string | undefined {
+  const directory = windowsSystemDirectory();
+  if (directory === undefined) {
+    return undefined;
+  }
+
+  const candidate = join(directory, name);
+  try {
+    return statSync(candidate).isFile() ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Absolute path to the platform's command-lookup helper. */
-function lookupHelper(): string {
-  return isWindows()
-    ? join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'where.exe')
-    : '/usr/bin/which';
+function lookupHelper(): string | undefined {
+  return isWindows() ? windowsSystemTool('where.exe') : '/usr/bin/which';
 }
 
 /**
@@ -88,12 +141,24 @@ export function resolveTrustedCommand(command: string): string | undefined {
     return isUntrustedBinaryLocation(command) ? undefined : command;
   }
 
+  const helper = lookupHelper();
+  if (helper === undefined) {
+    // No trustworthy way to look anything up, so nothing is trustworthy.
+    return undefined;
+  }
+
   try {
-    const output = execFileSync(lookupHelper(), [command], {
+    const output = execFileSync(helper, [command], {
       encoding: 'utf8',
       timeout: 5000,
       stdio: 'pipe',
       windowsHide: true,
+      // The environment is *not* stripped here, unlike for taskkill: `where`
+      // and `which` search PATH, so taking it away does not harden the lookup,
+      // it stops it working -- and with it the discovery of claude and agy.
+      // What makes this safe is that the helper itself is now an absolute path
+      // from a validated system directory, and every candidate it returns is
+      // still filtered by isUntrustedBinaryLocation below.
     });
 
     for (const line of output.split('\n')) {
@@ -216,37 +281,7 @@ export function resolveSystemTaskkill(): string | undefined {
 }
 
 function systemTaskkill(): string | undefined {
-  const root = process.env.SystemRoot ?? 'C:\Windows';
-
-  // SystemRoot is an ordinary environment variable, so building the executable
-  // path from it unchecked moved the problem rather than solving it: a relative
-  // path, a UNC share, a \\?\ device path or an 8.3 short name all point
-  // somewhere else, and whatever sits at System32\taskkill.exe under it would
-  // run with this process's privileges. Shape is checked before it is used, and
-  // an unrecognisable one fails closed rather than guessing.
-  // Checked without a regex, because a backslash in one is exactly the kind of
-  // escape that does not survive being written through tooling: the first
-  // version of this compiled to a class matching only forward slashes, so
-  // `C:\Windows` was rejected, taskkill was never used, and Windows quietly
-  // lost its tree kill entirely. Character comparisons cannot collapse.
-  const separator = root[2];
-  const looksLikeALocalRoot = /^[A-Za-z]:$/.test(root.slice(0, 2))
-    && (separator === '\\' || separator === '/')
-    && root.length > 3
-    && !root.includes('~');         // 8.3 short name
-
-  if (!looksLikeALocalRoot) {
-    logger.warn('SystemRoot does not look like a local Windows directory; not using it', { root });
-    return undefined;
-  }
-
-  const candidate = join(root, 'System32', 'taskkill.exe');
-
-  try {
-    return statSync(candidate).isFile() ? candidate : undefined;
-  } catch {
-    return undefined;
-  }
+  return windowsSystemTool('taskkill.exe');
 }
 
 /**
@@ -269,7 +304,7 @@ export function windowsTerminateTree(pid: number | undefined): boolean {
       timeout: 10000,
       windowsHide: true,
       // A process-ending tool needs none of this process's environment.
-      env: { SystemRoot: process.env.SystemRoot ?? 'C:/Windows' },
+      env: { SystemRoot: process.env.SystemRoot ?? '' },
     });
     return true;
   } catch {
@@ -576,15 +611,29 @@ export function terminateProcessTree(
  * Returns undefined where there is no /proc, in which case the pid is all there
  * is and the check simply does not apply.
  */
-function startTimeOf(pid: number): string | undefined {
+function identityOf(pid: number): string | undefined {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     const afterComm = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    // fields from 3 onwards; starttime is field 22, so index 19 here.
-    return afterComm[19];
+    // Fields from 3 onwards: ppid is field 4 (index 1) and starttime field 22
+    // (index 19). Both together, because a pid reused by a child of the same
+    // parent would otherwise look unchanged for the first few ticks.
+    const ppid = afterComm[1];
+    const startedAt = afterComm[19];
+    return ppid !== undefined && startedAt !== undefined ? `${ppid}:${startedAt}` : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** True when this pid is still the process we identified earlier. */
+function isStillTheSameProcess(pid: number, identity: string | undefined): boolean {
+  if (identity === undefined) {
+    // /proc could not answer when we found it -- either there is none, or the
+    // process was already gone. Nothing to compare against.
+    return true;
+  }
+  return identityOf(pid) === identity;
 }
 
 /**
@@ -629,19 +678,23 @@ function walkAndKillDescendants(pid: number, sources: ChildLister[] = DEFAULT_CH
     return;
   }
 
+  // Identity is taken at the moment of discovery, not afterwards.
+  //
+  // A pid on its own is not an identity: a descendant can exit between being
+  // listed and being signalled, and the number is then reused. Reading identity
+  // after the whole walk was too late in two ways -- the reused process had
+  // already been SIGSTOPped by then, and its start time was recorded as if it
+  // were the one we meant, so the later check compared a stranger against
+  // itself and passed.
+  const identities = new Map<number, string | undefined>();
+
   const freeze = (target: number): void => {
+    identities.set(target, identityOf(target));
     stopProcessGroup(target);
   };
 
-  // Identity is captured with the pid and re-checked immediately before the
-  // signal. Between the walk and the kill a descendant can exit and its number
-  // be reused by something else of the same user; killing that would destroy an
-  // unrelated process, which is a worse outcome than missing one of ours.
-  const identified = listDescendants(pid, sources, freeze)
-    .map(descendant => ({ pid: descendant, startedAt: startTimeOf(descendant) }));
-
-  for (const { pid: descendant, startedAt } of identified.reverse()) {
-    if (startedAt !== undefined && startTimeOf(descendant) !== startedAt) {
+  for (const descendant of listDescendants(pid, sources, freeze).reverse()) {
+    if (!isStillTheSameProcess(descendant, identities.get(descendant))) {
       logger.debug('Skipping a pid that is no longer the process we found', { pid: descendant });
       continue;
     }

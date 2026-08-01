@@ -1298,6 +1298,29 @@ describe('what the Windows tree kill is allowed to run', {
     }
   });
 
+  it('still finds taskkill when SystemRoot is not set at all', () => {
+    // The fallback was written as a plain string literal, and a single
+    // backslash in one is an escape -- so the default was the seven characters
+    // C:Windows, which fails the shape check, which means no taskkill, which
+    // means no tree kill. Exactly the failure that had just been fixed, waiting
+    // in the branch nothing exercised. The accepted-shapes case above skips
+    // when SystemRoot is undefined, so it did not cover this.
+    const saved = process.env.SystemRoot;
+    try {
+      delete process.env.SystemRoot;
+      const resolved = resolveSystemTaskkill();
+
+      assert.ok(resolved, 'a machine with no SystemRoot must still get the default');
+      assert.ok(existsSync(resolved), `and it must exist: ${resolved}`);
+    } finally {
+      if (saved === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = saved;
+      }
+    }
+  });
+
   it('does not run a taskkill from PATH or the current directory', () => {
     // cmd.exe searches the current directory before PATH, and every call was
     // `execSync('taskkill /pid ...')` -- so a taskkill.cmd in a checkout, or
@@ -1411,16 +1434,25 @@ describe('what the tree walk is allowed to run', () => {
     }
   });
 
-  it('says so rather than pretending, when there is no pgrep at all', () => {
-    // "no children" and "there is no pgrep here" used to be the same answer, so
-    // on a POSIX system without procps every tree kill silently became a
-    // single-process kill and reported success.
+  it('takes pgrep only from a system directory, whatever PATH says', () => {
+    // This used to assert on resolveTrustedCommand, which is no longer how
+    // pgrep is found -- so it was describing a path production does not take.
+    // What matters now is that PATH cannot influence the answer at all.
     const savedPath = process.env.PATH;
     try {
       process.env.PATH = join(scratch, 'definitely-empty');
       resetPgrepResolution();
+      const withoutPath = resolveSystemPgrep();
 
-      assert.equal(resolveTrustedCommand('pgrep'), undefined, 'nothing trustworthy must be found');
+      process.env.PATH = savedPath;
+      resetPgrepResolution();
+      const withPath = resolveSystemPgrep();
+
+      assert.equal(withoutPath, withPath, 'PATH must make no difference to where pgrep comes from');
+      if (withPath !== undefined) {
+        assert.ok(withPath.startsWith('/'), `pgrep must be an absolute system path: ${withPath}`);
+        assert.ok(!withPath.includes('node_modules'), 'and never from a project directory');
+      }
     } finally {
       process.env.PATH = savedPath;
       resetPgrepResolution();
