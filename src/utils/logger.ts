@@ -217,6 +217,24 @@ class Logger {
     });
   }
 
+  /**
+   * Raise or lower the level of the logger that already exists.
+   *
+   * getInstance() reads the environment once, and the singleton is built when
+   * the first module imports it -- which happens while the CLI's own imports
+   * are still being resolved, long before argv is parsed. So `cgmb serve
+   * --debug` set LOG_LEVEL and CGMB_DEBUG into an environment nobody would read
+   * again: measured, a --debug run emitted not one line above info. The flag
+   * has to reach the instance, not the environment it was built from.
+   */
+  public setLevel(level: string): void {
+    this.logger.level = level;
+
+    for (const transport of this.logger.transports) {
+      transport.level = level;
+    }
+  }
+
   // Debug helpers for development and troubleshooting
   public debugConfig(): void {
     if (process.env.CGMB_DEBUG === 'true') {

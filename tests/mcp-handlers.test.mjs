@@ -582,3 +582,55 @@ describe('layer requirements', () => {
     );
   });
 });
+
+describe('a preformatted request goes to the layer it names', () => {
+  // preformatted is a shortcut, not a route. Only the Antigravity layer ever
+  // had a payload format built for it; an aistudioFormat was accepted, logged
+  // and then ignored. What must not happen is the request quietly ending up on
+  // a different layer -- the caller would get an answer from somewhere else and
+  // no reason to suspect their formatting had been dropped.
+
+  it('uses the Antigravity payload when one is supplied', async () => {
+    const server = makeServer();
+
+    await server.processPreformattedRequest({
+      prompt: 'ignored when a payload is present',
+      targetLayer: 'antigravity',
+      preformatted: true,
+      formattedData: { geminiFormat: { stdin: 'the formatted prompt', args: ['--flag'] } },
+    });
+
+    assert.deepEqual(server.stubCalls.map(c => c.layer), ['antigravity']);
+    assert.equal(server.stubCalls[0].task.prompt, 'the formatted prompt', 'the payload must be used');
+  });
+
+  it('still runs on AI Studio when its payload cannot be used', async () => {
+    const server = makeServer();
+
+    await server.processPreformattedRequest({
+      prompt: 'analyse this',
+      targetLayer: 'aistudio',
+      preformatted: true,
+      formattedData: { aistudioFormat: { apiData: { anything: true }, files: [] } },
+    });
+
+    assert.deepEqual(
+      server.stubCalls.map(c => c.layer), ['aistudio'],
+      'an unusable payload must not silently reroute the request to another layer'
+    );
+    assert.equal(server.stubCalls[0].task.prompt, 'analyse this', 'the ordinary prompt must be used instead');
+  });
+
+  it('honours the deprecated gemini spelling of the target', async () => {
+    const server = makeServer();
+
+    await server.processPreformattedRequest({
+      prompt: 'search for something',
+      targetLayer: 'gemini',
+      preformatted: true,
+      formattedData: { geminiFormat: { stdin: 'search for something', args: [] } },
+    });
+
+    assert.deepEqual(server.stubCalls.map(c => c.layer), ['antigravity']);
+  });
+});

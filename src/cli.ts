@@ -142,6 +142,11 @@ program
       if (options.verbose || options.debug) {
         process.env.LOG_LEVEL = 'debug';
         process.env.CGMB_DEBUG = 'true';
+        // And to the logger that already exists: it is built during module
+        // import, before argv is parsed, so setting the environment here is on
+        // its own too late. Measured before this: a --debug run emitted not one
+        // line above info.
+        logger.setLevel('debug');
       }
 
       // Load environment variables with smart discovery

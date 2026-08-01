@@ -217,6 +217,134 @@ describe('claude layer: running the CLI', () => {
   });
 });
 
+describe('what the claude child does not inherit', () => {
+  // CGMB is commonly registered as an MCP server inside Claude Code, so the
+  // process that shells out to `claude` is itself running under a Claude Code
+  // session. Everything in that session's environment was passed straight
+  // down: the child presented itself as part of a conversation it is not in,
+  // and it held CGMB's Google API keys, which it has no use for.
+
+  const parentEnv = {
+    PATH: '/usr/bin',
+    HOME: '/home/someone',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_SESSION_ID: 'parent-session-1234',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_SSE_PORT: '54321',
+    ANTHROPIC_MODEL: 'claude-something-remapped',
+    CLAUDE_CODE_SUBAGENT_MODEL: 'claude-something-else',
+    AI_STUDIO_API_KEY: 'a-google-key',
+    GOOGLE_AI_STUDIO_API_KEY: 'another-google-key',
+    GEMINI_API_KEY: 'a-third-google-key',
+    ANTHROPIC_API_KEY: 'how the user authenticates',
+  };
+
+  it('drops the parent session identity', () => {
+    const env = ClaudeCodeLayer.childEnvFrom(parentEnv);
+
+    for (const name of [
+      'CLAUDECODE',
+      'CLAUDE_CODE_SESSION_ID',
+      'CLAUDE_CODE_ENTRYPOINT',
+      'CLAUDE_CODE_SSE_PORT',
+    ]) {
+      assert.equal(env[name], undefined, `${name} must not reach the child`);
+    }
+  });
+
+  it('drops the model overrides', () => {
+    const env = ClaudeCodeLayer.childEnvFrom(parentEnv);
+
+    assert.equal(env.ANTHROPIC_MODEL, undefined);
+    assert.equal(env.CLAUDE_CODE_SUBAGENT_MODEL, undefined);
+  });
+
+  it('drops CGMB credentials the child has no use for', () => {
+    const env = ClaudeCodeLayer.childEnvFrom(parentEnv);
+
+    assert.equal(env.AI_STUDIO_API_KEY, undefined);
+    assert.equal(env.GOOGLE_AI_STUDIO_API_KEY, undefined);
+    assert.equal(env.GEMINI_API_KEY, undefined);
+  });
+
+  it('keeps what the child needs to run and to authenticate', () => {
+    // Stripping is not the goal; not carrying the session over is. A child with
+    // no PATH cannot find its own tools, and a user who authenticates with an
+    // Anthropic key must keep working.
+    const env = ClaudeCodeLayer.childEnvFrom(parentEnv);
+
+    assert.equal(env.PATH, '/usr/bin');
+    assert.equal(env.HOME, '/home/someone');
+    assert.equal(env.ANTHROPIC_API_KEY, 'how the user authenticates');
+  });
+
+  it('does not modify the environment it was given', () => {
+    const source = { ...parentEnv };
+    ClaudeCodeLayer.childEnvFrom(source);
+
+    assert.deepEqual(source, parentEnv, 'process.env must survive building a child environment');
+  });
+});
+
+describe('a synthesis step is given something to synthesise', () => {
+  // A workflow's last step is almost always synthesize_response, and it arrives
+  // carrying its text as `prompt` -- LayerManager spreads the step input into
+  // the task. buildSynthesisPrompt read only `request`, so what reached Claude
+  // was two sentences of instructions with no content between them, and
+  // whatever came back was reported as the workflow's answer.
+
+  it('carries the step prompt through to the command', async () => {
+    const dir = makeStubDir('synthesis-prompt', ECHO_STUB);
+    const text = 'Tokyo is sunny today, per the search step.';
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({ action: 'synthesize_response', prompt: text });
+    });
+
+    assert.equal(result.success, true);
+    assert.ok(
+      String(result.data).includes(text),
+      'the synthesis prompt reached Claude with the step content missing'
+    );
+  });
+
+  it('carries the upstream answers a step depends on', async () => {
+    // `inputs` is how resolved @step.output references are handed over. An
+    // object there used to stringify as [object Object].
+    const dir = makeStubDir('synthesis-inputs', ECHO_STUB);
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({
+        action: 'synthesize_response',
+        prompt: 'Summarise the findings.',
+        inputs: { search: { output: 'the weather is fine' } },
+      });
+    });
+
+    assert.equal(result.success, true);
+    assert.match(String(result.data), /the weather is fine/, 'an upstream answer must survive');
+    assert.doesNotMatch(String(result.data), /\[object Object\]/, 'structured output must be serialised');
+  });
+
+  it('still prefers an explicit request when both are present', async () => {
+    const dir = makeStubDir('synthesis-request', ECHO_STUB);
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({
+        action: 'synthesize_response',
+        request: 'the explicit request',
+        prompt: 'the fallback prompt',
+      });
+    });
+
+    assert.match(String(result.data), /the explicit request/);
+    assert.doesNotMatch(String(result.data), /the fallback prompt/, 'the fallback must not double up');
+  });
+});
+
 describe('the configured path reaches the auth probe on both init paths', () => {
   // Codex review, P2. initialize() was fixed to hand the resolved executable to
   // verifyClaudeCodeAuth, but initializeLightweight was not -- and that is the

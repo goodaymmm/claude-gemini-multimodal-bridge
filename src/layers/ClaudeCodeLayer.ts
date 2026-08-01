@@ -566,16 +566,55 @@ export class ClaudeCodeLayer implements LayerInterface {
    * internal reasoning calls with whatever model the host developer happened
    * to configure, so they are stripped and the child picks its own defaults.
    */
-  private buildChildEnv(): NodeJS.ProcessEnv {
-    const env = { ...process.env };
+  static readonly STRIPPED_CHILD_VARS = [
+    // Model overrides. A parent that has remapped the aliases would silently
+    // remap the child's model too.
+    'ANTHROPIC_MODEL',
+    'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    'ANTHROPIC_DEFAULT_SONNET_MODEL',
+    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+    'CLAUDE_CODE_SUBAGENT_MODEL',
 
-    delete env.ANTHROPIC_MODEL;
-    delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
-    delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
-    delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-    delete env.CLAUDE_CODE_SUBAGENT_MODEL;
+    // The parent session's identity. CGMB is commonly registered as an MCP
+    // server inside Claude Code, so when it shells out to `claude` the child
+    // inherited the session it was launched from: the same session id, the same
+    // entrypoint, the same IDE socket. The child then presents itself as part
+    // of a conversation it is not in.
+    'CLAUDECODE',
+    'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_ENTRYPOINT',
+    'CLAUDE_CODE_SSE_PORT',
+    'CLAUDE_CODE_IDE_HOST',
+    'CLAUDE_CODE_IDE_PORT',
+
+    // CGMB's own Google credentials. `claude` has no use for them, and the
+    // narrower the set of processes that hold a key, the fewer places it can
+    // leak from. The Antigravity layer already builds its child environment
+    // from an allowlist for the same reason; this is the same rule stated as a
+    // denylist, because unlike agy, `claude` legitimately needs a broad
+    // environment to find its own config and credentials.
+    'AI_STUDIO_API_KEY',
+    'GOOGLE_AI_STUDIO_API_KEY',
+    'GEMINI_API_KEY',
+  ] as const;
+
+  /**
+   * The environment the `claude` child gets: this process's, minus what it
+   * must not carry over. Exposed as a static so what is stripped can be
+   * checked without spawning anything.
+   */
+  static childEnvFrom(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const env = { ...source };
+
+    for (const name of ClaudeCodeLayer.STRIPPED_CHILD_VARS) {
+      delete env[name];
+    }
 
     return env;
+  }
+
+  private buildChildEnv(): NodeJS.ProcessEnv {
+    return ClaudeCodeLayer.childEnvFrom(process.env);
   }
 
   /**
@@ -761,21 +800,36 @@ export class ClaudeCodeLayer implements LayerInterface {
    */
   private buildSynthesisPrompt(task: ClaudeCodeTask): string {
     let prompt = 'Please synthesize and respond to the following:\n\n';
-    
-    if (task.request) {
-      prompt += `Request: ${task.request}\n\n`;
+
+    // `request` is what a direct caller sends; a workflow step carries the same
+    // thing as `prompt`, and some callers as `input`. Only `request` was read,
+    // so every synthesis step of a workflow -- the last step of the analysis,
+    // conversion and orchestration flows -- reached Claude as two sentences of
+    // instructions with nothing to synthesise, and whatever came back was
+    // reported as the workflow's answer.
+    const request = task.request
+      ?? (typeof task.prompt === 'string' ? task.prompt : undefined)
+      ?? (typeof task.input === 'string' ? task.input : undefined);
+
+    if (request) {
+      prompt += `Request: ${request}\n\n`;
     }
-    
-    if (task.inputs && typeof task.inputs === 'object') {
+
+    const inputs = task.inputs as Record<string, unknown> | undefined;
+    if (inputs && typeof inputs === 'object') {
       prompt += 'Input Sources:\n';
-      Object.entries(task.inputs).forEach(([source, content], index) => {
-        prompt += `${index + 1}. ${source}: ${content}\n`;
+      Object.entries(inputs).forEach(([source, content], index) => {
+        // Upstream answers arrive as objects when a step published structured
+        // data; "[object Object]" is not something to synthesise from.
+        prompt += `${index + 1}. ${source}: ${
+          typeof content === 'string' ? content : JSON.stringify(content)
+        }\n`;
       });
       prompt += '\n';
     }
-    
+
     prompt += 'Please provide a comprehensive, well-structured response that synthesizes all the information.';
-    
+
     return prompt;
   }
 

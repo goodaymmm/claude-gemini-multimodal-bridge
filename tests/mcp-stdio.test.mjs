@@ -20,6 +20,9 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(HERE, '..', 'dist', 'cli.js');
+// Built, not written by hand: an escape spliced into a string literal is how
+// a generated fixture elsewhere in this suite became invalid JavaScript.
+const NEWLINE = String.fromCharCode(10);
 
 /** How long to wait for the milestone before giving up and letting a test fail. */
 const READY_TIMEOUT_MS = 60000;
@@ -271,11 +274,22 @@ describe('MCP stdio channel', () => {
     // --debug set LOG_LEVEL but not CGMB_DEBUG, and the console transport was
     // gated on the latter -- so the flag was silently inert exactly where it
     // was needed.
-    // Both runs stop at the same milestone -- the initialize response plus the
-    // same settle window -- so the comparison is between what the two
-    // configurations wrote, not between how long each was allowed to run.
-    // Stopping each as soon as its own condition was met would make the sizes
-    // a function of timing.
+    // Judged by content, not by volume. Comparing stderr lengths made the case
+    // a race: the two runs differ by two lines out of thirty, and under WSL the
+    // extra ones did not always arrive inside the settle window, so this failed
+    // roughly one run in three with nothing wrong.
+    //
+    // The marker is written while the environment is being loaded, long before
+    // the milestone either run stops at, so its presence does not depend on
+    // timing at all.
+    // A line at a level a plain run cannot emit. The earlier marker --
+    // "Environment loading completed" -- was passed to envLoader as a
+    // parameter, so it appeared whether or not the flag reached the logger at
+    // all, and the logger is where --debug was still inert: the singleton is
+    // built during module import, before argv is parsed, so a --debug run
+    // emitted not one line above info.
+    const debugLevelLines = text => text.split(NEWLINE).filter(line => /"level":"debug"/.test(line));
+
     const plain = await runServe({ env: { NODE_ENV: 'production' } });
     const debug = await runServe({ env: { NODE_ENV: 'production' }, args: ['--debug'] });
 
@@ -285,8 +299,13 @@ describe('MCP stdio channel', () => {
       `debug: ${whyItEnded(debug)})`
     );
     assert.ok(
-      debug.stderr.length > plain.stderr.length,
-      '--debug must produce more output than a plain run'
+      debugLevelLines(debug.stderr).length > 0,
+      `--debug must produce debug-level output; stderr had none:
+${debug.stderr.slice(-600)}`
+    );
+    assert.deepEqual(
+      debugLevelLines(plain.stderr), [],
+      'and a plain run must not -- otherwise the marker proves nothing about the flag'
     );
     assert.deepEqual(nonProtocolLines(debug.stdout), [], '--debug must not reach stdout either');
   });
