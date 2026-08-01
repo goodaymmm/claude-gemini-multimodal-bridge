@@ -24,6 +24,7 @@ import { AIStudioLayer, shutdownAIStudio } from '../dist/layers/AIStudioLayer.js
 import {
   PGREP_SOURCE,
   PROC_SOURCE,
+  isUntrustedBinaryLocation,
   listDescendants,
   resetPgrepResolution,
   resolveSystemPgrep,
@@ -1235,6 +1236,51 @@ describe('the process group carries it when the walk cannot', {
       assert.equal(isAlive(grandPid), false, 'the group must have carried it without any walk');
     } finally {
       try { process.kill(grandPid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+});
+
+describe('where a trusted command may come from', () => {
+  // resolveTrustedCommand is what finds claude and agy. Its rule was "not
+  // inside the current working directory", which npm and npx walk straight
+  // around: both put every *ancestor* node_modules/.bin on PATH, and from a
+  // subdirectory of a project those are outside cwd. A shim committed to a
+  // repository was therefore trusted and executed with this process's
+  // environment -- the same hole that was closed for pgrep, still open for the
+  // two binaries that actually get run.
+
+  const SEP = String.fromCharCode(92);
+
+  it('refuses anything under a node_modules, wherever it is', () => {
+    const rejected = [
+      `C:${SEP}repo${SEP}node_modules${SEP}.bin${SEP}claude.cmd`,
+      '/repo/node_modules/.bin/agy',
+      `C:${SEP}a${SEP}b${SEP}node_modules${SEP}x${SEP}y${SEP}claude.cmd`,
+      '/home/u/project/node_modules/.bin/pgrep',
+    ];
+
+    for (const candidate of rejected) {
+      assert.equal(
+        isUntrustedBinaryLocation(candidate), true,
+        `a binary under node_modules must never be trusted: ${candidate}`
+      );
+    }
+  });
+
+  it('still accepts an ordinary installed location', () => {
+    // The rule has to stay usable: rejecting everything would be safe and
+    // useless, and these are where the real binaries live.
+    const accepted = [
+      `C:${SEP}Program Files${SEP}nodejs${SEP}claude.cmd`,
+      '/usr/local/bin/agy',
+      '/usr/bin/pgrep',
+    ];
+
+    for (const candidate of accepted) {
+      assert.equal(
+        isUntrustedBinaryLocation(candidate), false,
+        `an ordinary install location must remain usable: ${candidate}`
+      );
     }
   });
 });

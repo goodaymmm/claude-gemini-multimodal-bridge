@@ -44,8 +44,28 @@ const isWindows = (): boolean => process.platform === 'win32';
  * canonicalised first so a symlink or junction cannot point back inside.
  */
 export function isUntrustedBinaryLocation(candidate: string): boolean {
-  const cwd = realpathOrSelf(resolve(process.cwd()));
   const resolved = realpathOrSelf(resolve(candidate));
+
+  // Anything under a node_modules, wherever it is.
+  //
+  // The rule used to be "inside the current working directory", which npm and
+  // npx walk straight around: both put every *ancestor* node_modules/.bin on
+  // PATH, and from a subdirectory of a project those are outside cwd, so a
+  // `claude` or `agy` shim committed to a repository was trusted and executed
+  // with this process's environment. A project-local .bin is never where a
+  // system tool lives, so the segment itself is the rule.
+  // No regex. Inside a character class a backslash escapes the next character,
+  // so `[<backslash>/]` is a class containing only `/` -- the fourth time in
+  // this file that a backslash written into a pattern has not meant what it
+  // looked like. Backslashes are turned into slashes first, then the string is
+  // split on a plain '/', which has no escaping rules to get wrong.
+  const segments = resolved.split(String.fromCharCode(92)).join('/').split('/');
+  if (segments.includes('node_modules')) {
+    return true;
+  }
+
+  // And still anything inside the working directory.
+  const cwd = realpathOrSelf(resolve(process.cwd()));
   const rel = relative(cwd, resolved);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
@@ -89,14 +109,20 @@ function windowsSystemDirectory(): string | undefined {
   const SEP = String.fromCharCode(92);
   const root = process.env.SystemRoot ?? `C:${SEP}Windows`;
 
-  const separator = root[2];
-  const usable = /^[A-Za-z]:$/.test(root.slice(0, 2))
-    && (separator === SEP || separator === '/')
-    && root.length > 3
-    && !root.includes('~');         // 8.3 short name
+  // The shape has to be the Windows directory *itself*, not merely something
+  // drive-absolute. Checking only for a drive letter let a path like
+  // C:\Users\attacker\payload through, and whatever sat at System32
+  // under it was then executed -- where.exe with this process's environment,
+  // and before any candidate had been trust-checked, since where.exe is what
+  // does the checking. A legitimate SystemRoot is a drive followed by one
+  // directory named Windows; nothing else is accepted.
+  const parts = root.split(SEP).join('/').replace(/[/]+$/, '').split('/');
+  const usable = parts.length === 2
+    && /^[A-Za-z]:$/.test(parts[0] ?? '')
+    && (parts[1] ?? '').toLowerCase() === 'windows';
 
   if (!usable) {
-    logger.warn('SystemRoot does not look like a local Windows directory; not using it', { root });
+    logger.warn('SystemRoot is not a recognised Windows directory; not using it', { root });
     return undefined;
   }
 
@@ -626,14 +652,38 @@ function identityOf(pid: number): string | undefined {
   }
 }
 
-/** True when this pid is still the process we identified earlier. */
-function isStillTheSameProcess(pid: number, identity: string | undefined): boolean {
-  if (identity === undefined) {
-    // /proc could not answer when we found it -- either there is none, or the
-    // process was already gone. Nothing to compare against.
-    return true;
+/**
+ * Whether a pid may still be signalled as the process we found.
+ *
+ * Three states, not two. "No identity available" used to mean "go ahead", and
+ * on a system that *does* have /proc that is exactly the dangerous case: the
+ * read fails because the process has already exited, and by the time the signal
+ * goes out the number may belong to somebody else. Where identity is
+ * obtainable in principle, an unobtainable one is a refusal.
+ */
+function mayStillSignal(pid: number, recorded: string | undefined): boolean {
+  if (!hasProcFilesystem()) {
+    return true; // no way to tell here; the pid is all there is
   }
-  return identityOf(pid) === identity;
+
+  if (recorded === undefined) {
+    return false; // it was already gone when we looked -- do not signal a number
+  }
+
+  return identityOf(pid) === recorded;
+}
+
+let procAvailable: boolean | undefined;
+
+function hasProcFilesystem(): boolean {
+  if (procAvailable === undefined) {
+    try {
+      procAvailable = statSync('/proc/self').isDirectory();
+    } catch {
+      procAvailable = false;
+    }
+  }
+  return procAvailable;
 }
 
 /**
@@ -687,22 +737,52 @@ function walkAndKillDescendants(pid: number, sources: ChildLister[] = DEFAULT_CH
   // were the one we meant, so the later check compared a stranger against
   // itself and passed.
   const identities = new Map<number, string | undefined>();
+  const stopped: number[] = [];
 
   const freeze = (target: number): void => {
-    identities.set(target, identityOf(target));
-    stopProcessGroup(target);
+    const identity = identityOf(target);
+    identities.set(target, identity);
+
+    // Nothing is stopped that we could not identify: freezing a number that may
+    // already belong to someone else is the same mistake as killing it, and a
+    // stopped stranger is worse than a running one -- it never finishes.
+    if (mayStillSignal(target, identity)) {
+      stopProcessGroup(target);
+      stopped.push(target);
+    }
   };
 
+  const killed = new Set<number>();
+
   for (const descendant of listDescendants(pid, sources, freeze).reverse()) {
-    if (!isStillTheSameProcess(descendant, identities.get(descendant))) {
+    if (!mayStillSignal(descendant, identities.get(descendant))) {
       logger.debug('Skipping a pid that is no longer the process we found', { pid: descendant });
       continue;
     }
 
     try {
       process.kill(descendant, 'SIGKILL');
+      killed.add(descendant);
     } catch {
       // Already gone.
+    }
+  }
+
+  // Anything frozen but not killed is let go again. Between the freeze and the
+  // kill a pid can be reused, and the check above then -- correctly -- refuses
+  // to kill it; but it has already been stopped, and leaving a stranger
+  // suspended indefinitely is a worse outcome than the one being avoided.
+  for (const target of stopped) {
+    if (!killed.has(target)) {
+      try {
+        process.kill(-target, 'SIGCONT');
+      } catch {
+        try {
+          process.kill(target, 'SIGCONT');
+        } catch {
+          // Gone, which is the outcome we wanted anyway.
+        }
+      }
     }
   }
 }
