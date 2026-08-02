@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.1-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.2-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -50,7 +50,7 @@ Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生�
 
 ### 🎯 MCP標準対応
 
-Anthropic Model Context Protocol準拠。178件のテストを Linux / Windows / macOS の CI で push ごとに実行
+Anthropic Model Context Protocol準拠。179件のテストを Linux / Windows / macOS の CI で push ごとに実行
 
 </td>
 </tr>
@@ -58,7 +58,18 @@ Anthropic Model Context Protocol準拠。178件のテストを Linux / Windows /
 
 ---
 
-## ✨ v1.2.1 の修正
+## ✨ v1.2.2 の変更
+
+整理のみのリリースです。利用者から到達できる挙動は何も変わりません
+（削除したコードはいずれも到達不能でした）。
+
+| 変更 | 説明 |
+|------|------|
+| 🧹 **到達不能な 4 経路を削除** | サーバに実装のない MCP ツールを呼んでいました。現在は到達不能ですが、`--script` も同じ状態からでした |
+| 🗑️ **未使用モジュール 740 行を削除** | `PromptOptimizer` と `quotaMonitor`。参照ゼロのまま同梱されていました |
+| 🔒 **レイヤーとサーバの突き合わせを自動化** | サーバを起動して実装ツールを問い合わせ、レイヤーがそれ以外を名指しできる場合に失敗するテストを追加 |
+
+### v1.2.1 の修正
 
 | 修正 | 説明 |
 |------|------|
@@ -482,6 +493,31 @@ src/
 ---
 
 ## 📜 バージョン履歴
+
+### v1.2.2 (2026-08-03)
+
+整理のみのリリースです。利用者から到達できる挙動は何も変わりません。
+削除したものはいずれも到達不能でした。
+
+- 🧹 **到達不能な 4 経路を削除**: レイヤーは 9 つの MCP ツールを名指ししますが、
+  サーバの実装は 8 つで、重なるのは 5 つでした。`analyze_audio_advanced` /
+  `convert_file` / `convert_pdf` / `transcribe_audio` はサーバに存在したことがなく、
+  呼べば `MCP error -32601` を返します。到達手段はありません —
+  `task.type` に `'convert'` や `'audio_analysis_advanced'` を設定するコードはどこにもなく、
+  `taskType` は MCP ツールのスキーマに無く、うち 2 つは呼び出し元自体がありませんでした。
+  これは `generate_text` が `generate-audio --script` という入口を得て
+  実害のある欠陥になる前とまったく同じ状態です。入口が付くのを待たせず削除しました
+- 🔒 **レイヤーとサーバの突き合わせを自動化**: MCP サーバを起動して `tools/list` を問い合わせ、
+  レイヤーがそこに無いツールを名指しできる場合に失敗するテストを追加しました。
+  本リリース前は上記 4 件を検出します
+- 🗑️ **未使用モジュール 740 行を削除**: `PromptOptimizer` と `quotaMonitor`。
+  自身以外からの参照がなく、パッケージのエントリポイントからも export されていないまま
+  `dist` に含まれて公開されていました
+- 1.2.1 で「既知・未修正」としていた `analyze_audio_advanced` は 1 点目で解消しました
+
+`AudioAnalysisResult` は `core/types.js` から引き続き export されます。
+返していたメソッドは無くなりましたが、型自体は公開されている面の一部であり、
+パッチリリースで落とすのは筋が悪いためです。
 
 ### v1.2.1 (2026-08-02)
 

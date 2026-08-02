@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.1-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.2-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 178 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 179 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -58,7 +58,18 @@ Follows the Anthropic Model Context Protocol. 178 tests run on Linux, Windows an
 
 ---
 
-## ✨ What's New in v1.2.1
+## ✨ What's New in v1.2.2
+
+Housekeeping. Nothing users can reach behaves differently — the code removed
+could not be reached at all.
+
+| Change | Description |
+|--------|-------------|
+| 🧹 **Four dead call paths removed** | The layer asked the MCP server for tools it has never implemented. Unreachable today, but that is what `--script` was too |
+| 🗑️ **740 lines of unused modules removed** | `PromptOptimizer` and `quotaMonitor` had no reference anywhere and were still being shipped |
+| 🔒 **The layer and its server are now checked against each other** | A test starts the server, asks what it implements, and fails if the layer can name anything else |
+
+### Previously, in v1.2.1
 
 | Fix | Description |
 |-----|-------------|
@@ -484,6 +495,34 @@ src/
 ---
 
 ## 📜 Version History
+
+### v1.2.2 (2026-08-03)
+
+Housekeeping. Nothing a user can reach behaves differently: everything removed
+here could not be reached at all.
+
+- 🧹 **Four dead call paths removed**: the layer named nine MCP tools and the
+  server implements eight, of which five overlapped. `analyze_audio_advanced`,
+  `convert_file`, `convert_pdf` and `transcribe_audio` have never existed on the
+  server, so any call to them returned `MCP error -32601`. Nothing could reach
+  them — `task.type` is never set to `'convert'` or `'audio_analysis_advanced'`
+  anywhere, `taskType` is not in any MCP tool's schema, and two of the methods
+  had no callers at all. That is exactly the state `generate_text` was in until
+  `generate-audio --script` gave it an entrance and made it a defect users hit,
+  which is why these are removed rather than left waiting for one
+- 🔒 **The layer and its server are now checked against each other**: a test
+  starts the MCP server, asks it for `tools/list`, and fails if the layer can
+  name a tool that is not on it. It named all four of the above before this
+  release
+- 🗑️ **740 lines of unused modules removed**: `PromptOptimizer` and
+  `quotaMonitor` had no reference outside themselves and no export from the
+  package entry point, and were being built into `dist` and published
+- The `analyze_audio_advanced` path listed as known-unfixed in 1.2.1 is resolved
+  by the first item
+
+`AudioAnalysisResult` remains exported from `core/types.js`. The method that
+returned it is gone, but the type is part of the published surface and a patch
+release is the wrong place to drop it.
 
 ### v1.2.1 (2026-08-02)
 
