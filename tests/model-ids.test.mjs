@@ -24,6 +24,10 @@ import { AI_MODELS } from '../dist/core/types.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = join(HERE, '..', 'src');
+const SEP = String.fromCharCode(92);
+const NEWLINE = String.fromCharCode(10);
+/** Any model from the shut-down 2.0 generation, in a string literal. */
+const RETIRED_2_0 = /['"`](gemini-2[.]0-[a-z0-9.-]*)['"`]/g;
 
 /** Every .ts file under src/. */
 function sourceFiles(dir = SRC, found = []) {
@@ -78,18 +82,25 @@ describe('no source file hardcodes a retired model', () => {
     // the TTS script step, and Google has shut that whole generation down --
     // so audio generation failed at its first step, every time. Any 2.0 model
     // is a request that cannot succeed, whatever the suffix.
+    // No escapes anywhere in this check. A backslash written into a generated
+    // string or regex has been lost five times in this work; here it turned
+    // `^\s*` into `^s*` and the pattern into a SyntaxError, so the case
+    // failed without ever looking at a model name -- a red that proved nothing,
+    // which is the same problem as a green that proves nothing.
     const offenders = [];
-    const COMMENT = new RegExp('^\s*(//|\*|/\*)');
-    const LITERAL = /['"`](gemini-2\.0-[a-z0-9.-]*)['"`]/g;
+    const isComment = line => {
+      const t = line.trimStart();
+      return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+    };
 
     for (const file of sourceFiles()) {
-      const relative = file.replace(/.*[\/]src[\/]/, 'src/');
+      const relative = file.split(SEP).join('/').replace(/.*\/src\//, 'src/');
 
-      readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
+      readFileSync(file, 'utf8').split(NEWLINE).forEach((line, index) => {
         // A comment explaining the removal is fine; a string literal is not.
-        if (COMMENT.test(line)) { return; }
+        if (isComment(line)) { return; }
 
-        for (const match of line.matchAll(LITERAL)) {
+        for (const match of line.matchAll(RETIRED_2_0)) {
           offenders.push(`${relative}:${index + 1}  ${match[1]}`);
         }
       });

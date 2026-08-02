@@ -1119,14 +1119,21 @@ export class LayerManager {
     options: ExecutionOptions
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
-    
+
+    // What later steps see. Passing `results` straight in looked equivalent and
+    // was not: a LayerResult has no `output`, so every `@step.output` reference
+    // in a parallel workflow resolved to undefined and the downstream step ran
+    // with no upstream data -- then reported success, because it returned
+    // something of its own. Only sequential ever published the right shape.
+    const stepOutputs: Record<string, Record<string, unknown>> = {};
+
     // Group steps by dependency level
     const dependencyLevels = this.groupStepsByDependencies(workflow.steps);
-    
+
     for (const level of dependencyLevels) {
       const promises = level.map(async (step) => {
         try {
-          const stepInput = this.resolveStepInput(step.input, results, inputData);
+          const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
           const result = await this.executeStep(step, stepInput, options);
           return { stepId: step.id, result };
         } catch (error) {
@@ -1148,6 +1155,7 @@ export class LayerManager {
       const levelResults = await Promise.all(promises);
       levelResults.forEach(({ stepId, result }) => {
         results[stepId] = result;
+        stepOutputs[stepId] = this.publishedOutput(result);
       });
     }
 
@@ -1307,51 +1315,72 @@ export class LayerManager {
   /**
    * Execute workflow using hybrid strategy
    */
+  /**
+   * What a finished step publishes for `@step.output` references.
+   *
+   * A failed step publishes its failure rather than nothing: resolveStepInput
+   * turns `success: false` into an explicit marker for the downstream step, and
+   * a step that published nothing at all was indistinguishable from one that
+   * had not run -- so the reference silently resolved to the literal
+   * `@step.output` string.
+   */
+  private publishedOutput(result: LayerResult): Record<string, unknown> {
+    return result.success
+      ? { output: result.data }
+      : { success: false, error: result.error };
+  }
+
   private async executeHybrid(
     workflow: ExecutionPlan,
     inputData: Record<string, unknown>,
     options: ExecutionOptions,
     analysis: WorkloadAnalysis
   ): Promise<Record<string, LayerResult>> {
-    // Group steps by recommended layer and execute accordingly
-    const stepGroups = this.groupStepsByRecommendedLayer(workflow.steps, analysis);
+    // Dependency order first, layer grouping second.
+    //
+    // Grouping by layer alone ignored dependsOn entirely: with a recommended
+    // layer of aistudio, a Claude step landed in `medium` and a search step in
+    // `low`, and medium runs first -- so a synthesis step declaring
+    // dependsOn: ['search'] started before search had begun, and its
+    // @step.output reference resolved against an empty map. The run then
+    // reported success, because the step returned something of its own.
+    //
+    // Each dependency level is still grouped by layer inside itself, which is
+    // what hybrid is for.
     const results: Record<string, LayerResult> = {};
 
     // Dependency references use `@step.output`, so every execution mode has to
-    // publish the same shape. Only sequential did: hybrid and parallel passed
-    // the raw LayerResult, so `@step.output` resolved to undefined and a
-    // downstream synthesis or quality check ran with no upstream data -- then
-    // reported success because it returned something of its own.
+    // publish the same shape. Only sequential did.
     const stepOutputs: Record<string, Record<string, unknown>> = {};
 
-    // Execute high-priority steps first
-    for (const [_priority, steps] of Object.entries(stepGroups)) {
-      const [first] = steps;
-      if (steps.length === 1 && first) {
-        // Single step - execute directly
-        const step = first;
-        const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
-        const result = await this.executeStep(step, stepInput, options);
-        results[step.id] = result;
-        if (result.success) {
-          stepOutputs[step.id] = { output: result.data };
-        }
-      } else {
-        // Multiple steps - execute in parallel if possible
-        const promises = steps.map(async (step) => {
-          const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
-          return {
-            stepId: step.id,
-            result: await this.executeStep(step, stepInput, options),
-          };
-        });
+    for (const level of this.groupStepsByDependencies(workflow.steps)) {
+      const stepGroups = this.groupStepsByRecommendedLayer(level, analysis);
 
-        const stepResults = await Promise.all(promises);
+      // Within a level, the recommended layer goes first; steps that share a
+      // priority run together.
+      for (const [_priority, steps] of Object.entries(stepGroups)) {
+        const [first] = steps;
+
+        if (steps.length === 1 && first) {
+          const stepInput = this.resolveStepInput(first.input, stepOutputs, inputData);
+          const result = await this.executeStep(first, stepInput, options);
+          results[first.id] = result;
+          stepOutputs[first.id] = this.publishedOutput(result);
+          continue;
+        }
+
+        const stepResults = await Promise.all(steps.map(async (step) => ({
+          stepId: step.id,
+          result: await this.executeStep(
+            step,
+            this.resolveStepInput(step.input, stepOutputs, inputData),
+            options
+          ),
+        })));
+
         stepResults.forEach(({ stepId, result }) => {
           results[stepId] = result;
-          if (result.success) {
-            stepOutputs[stepId] = { output: result.data };
-          }
+          stepOutputs[stepId] = this.publishedOutput(result);
         });
       }
     }

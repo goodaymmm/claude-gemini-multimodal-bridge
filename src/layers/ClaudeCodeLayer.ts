@@ -390,7 +390,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get estimated duration for a task
    */
-  getEstimatedDuration(task: ClaudeCodeTask): number {
+  getEstimatedDuration(task: ClaudeCodeTask, prompt?: string): number {
     const baseTime = 5000; // 5 seconds base
     
     if (task.type === 'workflow' || task.action === 'workflow') {
@@ -401,7 +401,11 @@ export class ClaudeCodeLayer implements LayerInterface {
       return baseTime * 2; // Complex reasoning takes longer
     }
     
-    if (task.prompt && task.prompt.length > 1000) {
+    // The prompt that will actually be sent, when the caller knows it. Reading
+    // only task.prompt missed every step whose text is assembled from its
+    // fields -- which is the case this budget kept cutting short.
+    const text = prompt ?? task.prompt;
+    if (text && text.length > 1000) {
       return baseTime * 1.5; // Longer prompts take more time
     }
     
@@ -411,11 +415,45 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Execute general Claude Code task
    */
+  /**
+   * A prompt built from a task that carries no prose.
+   *
+   * Workflow steps addressed to this layer often carry structure rather than a
+   * sentence: the analysis workflow's `analyze_requirements` step arrives as
+   * {documents, analysisType, outputRequirements}. None of those is prompt,
+   * request or input, so both fell through to the literal "Please help with
+   * this task." -- measured against a live run, Claude answered "no specific
+   * task has been described in this conversation", and that was folded into the
+   * workflow result as though it were work.
+   */
+  private describeTask(task: ClaudeCodeTask): string {
+    const action = typeof task.action === 'string' ? task.action : task.type;
+    const skip = new Set(['action', 'type', 'files', 'options', 'workflow', 'depth', 'timeout']);
+
+    const fields = Object.entries(task)
+      .filter(([key, value]) => !skip.has(key) && value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+
+    if (fields.length === 0) {
+      return action
+        ? `Perform the "${action}" step of a CGMB workflow. No further input was supplied.`
+        : 'Please help with this task.';
+    }
+
+    const heading = action
+      ? `Perform the "${action}" step of a CGMB workflow, using the following input:`
+      : 'Please act on the following input:';
+
+    return `${heading}\n\n${fields.join('\n')}`;
+  }
+
   private async executeGeneral(task: ClaudeCodeTask): Promise<string> {
-    const prompt = task.prompt || task.request || task.input || 'Please help with this task.';
-    
+    const prompt = task.prompt || task.request || task.input || this.describeTask(task);
+
+    // Sized from the prompt that is actually sent, not from task.prompt: a step
+    // whose text is built here has no task.prompt at all.
     return await this.executeClaudeCommand(prompt, {
-      timeout: this.getTaskTimeout(task),
+      timeout: this.getTaskTimeout(task, prompt),
     });
   }
 
@@ -762,8 +800,17 @@ export class ClaudeCodeLayer implements LayerInterface {
   private buildSynthesisPrompt(task: ClaudeCodeTask): string {
     let prompt = 'Please synthesize and respond to the following:\n\n';
     
-    if (task.request) {
-      prompt += `Request: ${task.request}\n\n`;
+    // `request` is what a direct caller sends; a workflow step carries the
+    // same thing as `prompt`, and some callers as `input`. Reading only
+    // `request` meant every synthesis step of a workflow reached Claude as
+    // two sentences of instructions with nothing between them, and whatever
+    // came back was reported as the workflow's answer.
+    const request = task.request
+      ?? (typeof task.prompt === 'string' ? task.prompt : undefined)
+      ?? (typeof task.input === 'string' ? task.input : undefined);
+
+    if (request) {
+      prompt += `Request: ${request}\n\n`;
     }
     
     if (task.inputs && typeof task.inputs === 'object') {
@@ -868,12 +915,18 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Get task timeout
    */
-  private getTaskTimeout(task: ClaudeCodeTask): number {
+  private getTaskTimeout(task: ClaudeCodeTask, prompt?: string): number {
     if (typeof task.timeout === 'number') {
       return task.timeout;
     }
-    
-    return this.getEstimatedDuration(task) + 30000; // Add 30s buffer
+
+    // A floor, not a guess. The estimate below is 5 seconds for anything that
+    // is not a workflow or complex reasoning, so an ordinary step got 35
+    // seconds to run an interactive `claude` answering a real question.
+    // Measured: one analyze_requirements step takes 85 seconds to do the work
+    // properly, and 12 seconds through `claude --print` directly. 35 fitted
+    // only while the step was answering a placeholder.
+    return Math.max(this.getEstimatedDuration(task, prompt) + 30000, this.DEFAULT_TIMEOUT);
   }
 
   /**
