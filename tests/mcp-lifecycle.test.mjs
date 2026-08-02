@@ -22,7 +22,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -60,11 +60,20 @@ const textOf = r => (r?.content ?? []).map(c => c.text ?? '').join('');
  *   reorder - hold two, then answer them in reverse order
  *   echo    - answer each immediately, tagged with its marker
  *   silent  - never answer
+ *
+ * Returns the script path and the file the stand-in writes its own pid to.
+ * That pid is the point: on Windows the layer spawns through cmd.exe, so the
+ * ChildProcess it holds is the shell, and the shell's pid says nothing about
+ * whether the server is still running. Asserting on it passes while an orphaned
+ * server keeps running -- which is exactly what was happening.
  */
 function standIn(mode) {
-  const script = join(scratch, `standin-${mode}-${Math.random().toString(36).slice(2)}.cjs`);
+  const name = `standin-${mode}-${Math.random().toString(36).slice(2)}`;
+  const script = join(scratch, `${name}.cjs`);
+  const pidFile = join(scratch, `${name}.pid`);
 
   const common = [
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
     "let buf = '';",
     "const held = [];",
     "process.stdin.setEncoding('utf8');",
@@ -93,10 +102,30 @@ function standIn(mode) {
     ],
     echo: ["function handle(req) { send(answer(req)); }"],
     silent: ["function handle(req) { /* never answers */ }"],
+    // Outlives its stdin. A server that exits when its pipes close cannot tell
+    // "shutdown ended it" from "the pipe went away and it noticed", and the
+    // second proves nothing about shutdown. The timer also bounds this process
+    // so a failing run cannot leave it behind.
+    stubborn: [
+      "function handle(req) { /* never answers */ }",
+      "setTimeout(() => process.exit(0), 60000);",
+    ],
   };
 
   writeFileSync(script, [...common, ...handlers[mode]].join(NEWLINE), 'utf8');
-  return script;
+  return { script, pidFile };
+}
+
+/** The pid the stand-in reported for itself, once it has started. */
+async function servingPid(pidFile, budgetMs = 20000) {
+  for (let waited = 0; waited < budgetMs; waited += 100) {
+    if (existsSync(pidFile)) {
+      const written = readFileSync(pidFile, 'utf8').trim();
+      if (written) { return Number(written); }
+    }
+    await settle(100);
+  }
+  return null;
 }
 
 describe('the shared MCP process answers the caller who asked', () => {
@@ -104,8 +133,8 @@ describe('the shared MCP process answers the caller who asked', () => {
     // The stand-in answers the second request first. A router that matches ids
     // gets both right; one that takes the first line gets both wrong.
     const layer = new AIStudioLayer();
-    const script = standIn('reorder');
-    layer.resolveMCPServerPath = () => script;
+    const server = standIn('reorder');
+    layer.resolveMCPServerPath = () => server.script;
 
     const first = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'alpha' });
     const second = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'beta' });
@@ -137,7 +166,7 @@ describe('the shared MCP process answers the caller who asked', () => {
     // third spawn -- and a router that fails "all waiting requests" fails the
     // ones already sent to the replacement.
     const layer = new AIStudioLayer();
-    layer.resolveMCPServerPath = () => standIn('echo');
+    layer.resolveMCPServerPath = () => standIn('echo').script;
 
     const first = await layer.executeMCPCommandOptimized('analyze_documents', { marker: 'one' });
     const original = layer.persistentMCPProcess;
@@ -174,7 +203,8 @@ describe('the shared MCP process can be ended', () => {
     // stdio pipes attached -- and those pipes keep the parent's event loop
     // alive: `cgmb` had nothing left to do and would not exit.
     const layer = new AIStudioLayer();
-    layer.resolveMCPServerPath = () => standIn('silent');
+    const server = standIn('silent');
+    layer.resolveMCPServerPath = () => server.script;
 
     const inFlight = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'late' });
     inFlight.catch(() => {});
@@ -186,12 +216,50 @@ describe('the shared MCP process can be ended', () => {
     }
 
     assert.ok(child?.pid, 'a server must have started to prove anything');
-    assert.equal(isAlive(child.pid), true, 'and be running when shutdown is asked for');
+
+    // The process that is actually serving, as reported by itself. Measured on
+    // Windows: the layer spawned `cmd.exe /d /s /c "node <script>"`, the tracked
+    // pid was the shell, and shutdown killed the shell while the node server
+    // kept running with the pipes it had inherited. Checking the tracked pid
+    // passed throughout.
+    const serving = await servingPid(server.pidFile);
+    assert.ok(serving, 'the stand-in must have reported its pid');
+    assert.equal(isAlive(serving), true, 'and be running when shutdown is asked for');
 
     await layer.shutdown();
-    await settle();
+    await settle(1500);
 
-    assert.equal(isAlive(child.pid), false, 'the server outlived the shutdown that was meant to end it');
+    assert.equal(isAlive(serving), false, 'the server outlived the shutdown that was meant to end it');
+  });
+
+  it('ends a server that does not exit when its pipes close', async () => {
+    // The Windows spawn used `shell: true`, so the ChildProcess the layer held
+    // was cmd.exe and the node server was its child. kill('SIGKILL') ended the
+    // shell; the server was left running, reparented, holding the stdio handles
+    // it had inherited. Measured: `cmd.exe /d /s /c "node <script>"` at pid A,
+    // node at pid B with parent A; after shutdown A was gone and B was not.
+    //
+    // The previous case does not catch this. Killing the shell closes the pipe,
+    // a server whose only reason to stay alive is stdin then exits on its own,
+    // and the assertion passes without shutdown having ended anything.
+    const layer = new AIStudioLayer();
+    const server = standIn('stubborn');
+    layer.resolveMCPServerPath = () => server.script;
+
+    const inFlight = layer.executeMCPCommandOptimized('analyze_documents', { marker: 'stubborn' });
+    inFlight.catch(() => {});
+
+    const serving = await servingPid(server.pidFile);
+    assert.ok(serving, 'the stand-in must have reported its pid');
+    assert.equal(isAlive(serving), true, 'and be running when shutdown is asked for');
+
+    await layer.shutdown();
+    await settle(2000);
+
+    assert.equal(
+      isAlive(serving), false,
+      'shutdown ended the process it was holding, not the server that was running'
+    );
   });
 
   it('can be asked to shut down twice without failing', async () => {

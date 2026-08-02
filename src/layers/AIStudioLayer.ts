@@ -1606,12 +1606,23 @@ export class AIStudioLayer implements LayerInterface {
         throw new Error(`AI Studio MCP server not found at: ${mcpServerPath}`);
       }
       
-      // Windows requires shell: true for proper path resolution and process spawning
-      const isWindowsSpawn = process.platform === 'win32';
-      this.persistentMCPProcess = spawn('node', [mcpServerPath], {
+      // No shell, and this interpreter rather than whatever `node` resolves to.
+      //
+      // `shell: true` on Windows made the spawn `cmd.exe /d /s /c "node <path>"`,
+      // so the ChildProcess held here was the shell and the server was its
+      // child. kill() then ended the shell and left the server running,
+      // reparented, still holding the stdio handles it had inherited. Measured:
+      // cmd.exe at pid A, node at pid B with parent A; after shutdown A was gone
+      // and B was not.
+      //
+      // The shell was there for path resolution, which process.execPath answers
+      // outright -- it is an absolute path, needs no PATH lookup, and pins the
+      // server to the interpreter already running rather than a different node
+      // that happens to come first.
+      this.persistentMCPProcess = spawn(process.execPath, [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
-        shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
+        shell: false,
         env: {
           ...process.env,
           AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
@@ -1816,10 +1827,12 @@ export class AIStudioLayer implements LayerInterface {
         paramKeys: params ? Object.keys(params) : []
       });
 
-      const child = spawn('node', [mcpServerPath], {
+      // Same reasoning as the persistent spawn above: no shell, and this
+      // interpreter, so that the process tracked here is the server itself.
+      const child = spawn(process.execPath, [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
-        shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
+        shell: false,
         env: {
           ...process.env,
           // New preferred environment variable name
