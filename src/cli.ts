@@ -1659,7 +1659,13 @@ program
   .description('Generate audio/speech from text using AI Studio')
   .option('-v, --voice <voice>', 'Voice name (Kore, Puck, etc.)', 'Kore')
   .option('-o, --output <path>', 'Output audio file path')
-  .option('--script', 'Generate script first then convert to audio')
+  // `--script` was offered here and could not be carried out. It ran a
+  // two-step path whose first step asked the AI Studio MCP server for a tool
+  // named generate_text; the server has never had one, so the request came back
+  // `MCP error -32601: Unknown tool: generate_text` -- in 1.2.0 and every
+  // version before it. It appeared in --help and nowhere else: no README entry,
+  // nothing in docs/, no MCP tool. Offering it only promised something that did
+  // not exist. Removed rather than left as a trap; see tests/cli-surface.
   .action(async (text, options) => {
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
@@ -1688,13 +1694,11 @@ program
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        () => options.script ? 
-          aiStudioLayer.generateAudioWithScript(text) :
-          aiStudioLayer.generateAudio(text, {
-            voice: options.voice,
-            format: 'wav',
-            quality: 'hd'
-          }),
+        () => aiStudioLayer.generateAudio(text, {
+          voice: options.voice,
+          format: 'wav',
+          quality: 'hd'
+        }),
         'generate-audio',
         90000 // 1.5 minutes base, automatically adjusted for environment
       );

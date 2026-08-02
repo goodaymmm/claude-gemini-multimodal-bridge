@@ -855,49 +855,17 @@ export class AIStudioLayer implements LayerInterface {
     }
   }
 
-  /**
-   * Generate audio with script generation (2-step process)
-   */
-  async generateAudioWithScript(prompt: string, options: any = {}): Promise<MediaGenResult> {
-    logger.info('Generating audio with script generation', {
-      prompt: prompt.substring(0, 100),
-      hasMultipleSpeakers: !!options.speakers
-    });
-
-    try {
-      // Step 1: Generate the script.
-      //
-      // This was hardcoded to gemini-2.0-flash, a generation Google has shut
-      // down, so the request could only be rejected -- audio generation failed
-      // at its first step, every time.
-      const scriptPrompt = options.scriptPrompt || 
-        `Generate a script for the following request: ${prompt}. ` +
-        (options.speakers ? 
-          `Include dialogue for speakers: ${options.speakers.map((s: any) => s.name).join(', ')}.` : 
-          'Write it as a single narrator script.');
-      
-      const scriptResult = await this.executeMCPCommandOptimized('generate_text', {
-        prompt: scriptPrompt,
-        model: AI_MODELS.GEMINI_FLASH,
-        maxOutputTokens: 1000
-      });
-
-      const script = scriptResult.text || scriptResult.content?.[0]?.text || 'No script generated';
-      logger.info('Script generated successfully', { scriptLength: script.length });
-
-      // Step 2: Convert script to audio
-      const audioOptions = {
-        ...options,
-        script // Pass the generated script for reference
-      };
-      
-      return await this.generateAudio(script, audioOptions);
-      
-    } catch (error) {
-      logger.error('Failed to generate audio with script', error as Error);
-      throw error;
-    }
-  }
+  // generateAudioWithScript lived here: write a script with an LLM, then read
+  // it aloud. Its first step asked the AI Studio MCP server for a `generate_text`
+  // tool, and the server has never implemented one, so the path returned
+  // `MCP error -32601` on every call it ever received. Its only caller was the
+  // CLI's `--script` option, which is gone for the same reason.
+  //
+  // A hard-coded `gemini-2.0-flash` on that request was replaced with
+  // AI_MODELS.GEMINI_FLASH earlier in this branch. That change had no effect
+  // the user could see: the request was refused for the missing tool before the
+  // model was ever read. Reinstating the two-step path means building it, not
+  // restoring it -- which belongs in a release that can verify it.
 
   /**
    * Advanced audio analysis with enhanced features
