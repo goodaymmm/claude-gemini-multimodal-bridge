@@ -1,5 +1,5 @@
 import { config } from 'dotenv';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { logger } from './logger.js';
 
@@ -63,8 +63,15 @@ export class SmartEnvLoader {
 
     // Try loading from each search path in order
     for (const searchPath of searchPaths) {
-      const envPath = join(searchPath, '.env');
-      
+      // An entry may name the file to read or the directory holding it. Always
+      // appending '.env' turned a path that ended in .env into <file>/.env,
+      // which exists nowhere -- and a search that finds nothing is silent, so
+      // the only symptom was a key that appeared to be missing.
+      //
+      // The named file is used as given rather than via dirname(), so that
+      // CGMB_ENV_PATH=<dir>/prod.env reads prod.env and not the .env beside it.
+      const envPath = this.namesAFile(searchPath) ? searchPath : join(searchPath, '.env');
+
       if (verbose) {
         logger.debug('Checking for .env file', { path: envPath });
       }
@@ -140,6 +147,21 @@ export class SmartEnvLoader {
   }
 
   /**
+   * Does this path name the file to read, rather than a directory to look in?
+   *
+   * statSync rather than the name: a path ending in `.env` is the usual case
+   * but not the only one, and a directory that happens to be called `.env`
+   * would otherwise be read as a file.
+   */
+  private namesAFile(path: string): boolean {
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Get default search paths for .env files
    */
   private async getDefaultSearchPaths(): Promise<string[]> {
@@ -158,17 +180,24 @@ export class SmartEnvLoader {
     //
     // Those locations are still usable, but they have to be asked for --
     // CGMB_ENV_PATH names a file or directory explicitly.
-    paths.push(process.cwd());
-
-    const projectRoot = await this.findProjectRoot();
-    if (projectRoot && projectRoot !== process.cwd()) {
-      paths.push(projectRoot);
+    //
+    // It goes first. Loading stops at the first file that parses, so an opt-in
+    // placed after the defaults is only consulted when the working directory
+    // happens to hold no .env -- which makes it look like it works in a clean
+    // directory and do nothing everywhere else. Something named outright
+    // outranks something inferred.
+    const explicit = process.env.CGMB_ENV_PATH?.trim();
+    if (explicit) {
+      paths.push(explicit);
     }
 
-    // Opt-in, and only what was named.
-    const explicit = process.env.CGMB_ENV_PATH?.trim();
-    if (explicit && !paths.includes(explicit)) {
-      paths.push(explicit);
+    if (!paths.includes(process.cwd())) {
+      paths.push(process.cwd());
+    }
+
+    const projectRoot = await this.findProjectRoot();
+    if (projectRoot && !paths.includes(projectRoot)) {
+      paths.push(projectRoot);
     }
 
     return paths;

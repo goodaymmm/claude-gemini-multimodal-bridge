@@ -1,6 +1,6 @@
 {
   "name": "claude-gemini-multimodal-bridge",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "MCP bridge connecting Claude Code, Antigravity CLI and Google AI Studio, routing each request to the layer that can answer it: web search, complex reasoning, or image/audio/document processing",
   "type": "module",
   "main": "dist/index.js",
