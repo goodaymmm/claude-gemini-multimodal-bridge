@@ -13,7 +13,6 @@ const __dirname = dirname(__filename);
 import { GoogleGenAI /*, Modality */ } from '@google/genai';
 import { 
   AI_MODELS, 
-  AudioAnalysisResult, 
   AudioGenOptions, 
   FileReference, 
   GenerationType, 
@@ -425,13 +424,11 @@ export class AIStudioLayer implements LayerInterface {
           case 'generate_audio':
             result = await this.generateAudio(task.prompt || task.text, task.options || {});
             break;
-          case 'audio_analysis_advanced':
-          case 'analyze_audio_advanced':
-            result = await this.analyzeAudioAdvanced(task.audioPath || task.files?.[0]?.path);
-            break;
-          case 'convert':
-            result = await this.convertFiles(task.files, task.outputFormat);
-            break;
+          // 'audio_analysis_advanced', 'analyze_audio_advanced' and 'convert'
+          // were handled here by methods that asked the MCP server for tools it
+          // does not implement. They now fall to the default arm, like any
+          // other unrecognised type. Nothing set these types, so nothing
+          // reached those arms; see tests/mcp-tool-parity.
           case 'generate_content':
             result = await this.processGeneral(task);
             break;
@@ -515,33 +512,6 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
-   * Convert PDF to Markdown
-   */
-  async convertPDFToMarkdown(pdfPath: string): Promise<string> {
-    return retry(
-      async () => {
-        logger.debug('Converting PDF to Markdown', { pdfPath });
-
-        const result = await this.executeMCPCommand('convert_pdf', {
-          input: pdfPath,
-          output_format: 'markdown',
-          options: {
-            preserve_formatting: true,
-            extract_images: false,
-          },
-        });
-
-        return result.content || result.markdown || '';
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 5000,
-        operationName: 'convert-pdf-markdown',
-      }
-    );
-  }
-
-  /**
    * Analyze image
    * Supports OCR mode for enhanced text extraction
    */
@@ -585,33 +555,6 @@ export class AIStudioLayer implements LayerInterface {
       }
     );
   }
-
-  /**
-   * Transcribe audio
-   */
-  async transcribeAudio(audioPath: string): Promise<string> {
-    return retry(
-      async () => {
-        logger.debug('Transcribing audio', { audioPath });
-
-        const result = await this.executeMCPCommand('transcribe_audio', {
-          audio: audioPath,
-          options: {
-            language: 'auto',
-            include_timestamps: false,
-          },
-        });
-
-        return result.transcription || result.text || '';
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 5000,
-        operationName: 'transcribe-audio',
-      }
-    );
-  }
-
 
   /**
    * Generate image using AI Studio with Gemini 2.0 Flash for cost efficiency
@@ -868,48 +811,6 @@ export class AIStudioLayer implements LayerInterface {
   // restoring it -- which belongs in a release that can verify it.
 
   /**
-   * Advanced audio analysis with enhanced features
-   */
-  async analyzeAudioAdvanced(audioPath: string): Promise<AudioAnalysisResult> {
-    return retry(
-      async () => {
-        logger.debug('Performing advanced audio analysis', { audioPath });
-
-        const result = await this.executeMCPCommand('analyze_audio_advanced', {
-          audio: audioPath,
-          options: {
-            include_transcription: true,
-            include_sentiment: true,
-            include_emotions: true,
-            include_speaker_detection: true,
-            include_metadata: true,
-          },
-        });
-
-        return {
-          transcription: result.transcription || '',
-          language: result.language,
-          confidence: result.confidence,
-          sentiment: result.sentiment,
-          emotions: result.emotions || [],
-          speakers: result.speakers || [],
-          metadata: {
-            duration: result.metadata?.duration || 0,
-            sampleRate: result.metadata?.sampleRate,
-            channels: result.metadata?.channels,
-            format: result.metadata?.format || 'unknown',
-          },
-        };
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 5000,
-        operationName: 'analyze-audio-advanced',
-      }
-    );
-  }
-
-  /**
    * Download generated media and save to local filesystem
    */
   private async downloadGeneratedMedia(
@@ -1127,36 +1028,6 @@ export class AIStudioLayer implements LayerInterface {
     });
 
     return result.analysis || result.content || 'Document analysis completed';
-  }
-
-  /**
-   * Convert files
-   */
-  private async convertFiles(files: FileReference[], outputFormat: string): Promise<any[]> {
-    logger.debug('Converting files', {
-      fileCount: files.length,
-      outputFormat,
-    });
-
-    const results = [];
-    
-    for (const file of files) {
-      const result = await this.executeMCPCommand('convert_file', {
-        input: file.path,
-        output_format: outputFormat,
-        options: {
-          preserve_quality: true,
-        },
-      });
-      
-      results.push({
-        original: file.path,
-        converted: result.output_path || result.content,
-        format: outputFormat,
-      });
-    }
-
-    return results;
   }
 
   /**
