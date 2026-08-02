@@ -4,6 +4,7 @@ import { config } from 'dotenv';
 import { createRequire } from 'module';
 import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
+import { shutdownAIStudio } from './layers/AIStudioLayer.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -53,11 +54,13 @@ async function main() {
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
       logger.info('Received SIGINT, shutting down MCP server...');
+      await shutdownAIStudio();
       process.exit(0);
     });
 
     process.on('SIGTERM', async () => {
       logger.info('Received SIGTERM, shutting down MCP server...');
+      await shutdownAIStudio();
       process.exit(0);
     });
 

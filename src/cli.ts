@@ -6,6 +6,7 @@ import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } fro
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
+import { shutdownAIStudio } from './layers/AIStudioLayer.js';
 import { getEnvironmentStatus, loadEnvironmentSmart } from './utils/envLoader.js';
 import { getManualSetupInstructions, getMCPStatus, setupCGMBMCP } from './utils/mcpConfigManager.js';
 import path from 'path';
@@ -180,6 +181,10 @@ program
         } catch (error) {
           logger.error('Error during server shutdown', error as Error);
         }
+
+        // The MCP child this server started while it was running. Its stdio
+        // pipes keep this process alive, and nothing else ends it.
+        await shutdownAIStudio();
         process.exit(0);
       };
 
@@ -2266,6 +2271,14 @@ program.on('option:*', function(this: any) {
     console.error(`\nGemini will automatically use web search when beneficial.\n`);
     process.exit(1);
   }
+});
+
+// The ordinary end of a one-shot command. 'beforeExit' fires when the event
+// loop empties -- which is what a finished command does, and what a running
+// server never does -- so this ends the MCP child for `cgmb search` and friends
+// without touching `serve`.
+process.on('beforeExit', () => {
+  void shutdownAIStudio();
 });
 
 // Parse command line arguments

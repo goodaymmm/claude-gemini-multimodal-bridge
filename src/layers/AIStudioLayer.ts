@@ -89,6 +89,39 @@ function detectLanguage(text: string): string | null {
  * AIStudioLayer handles AI Studio MCP integration with enhanced authentication support
  * Provides multimodal file processing for PDF, images, audio, and documents
  */
+
+/**
+ * The persistent MCP servers this process started, so an entry point can end
+ * them without holding a reference to every layer instance.
+ */
+const livePersistentProcesses = new Set<any>();
+
+/** End every persistent MCP server this process started. */
+export async function shutdownAIStudio(timeoutMs = 5000): Promise<void> {
+  const children = [...livePersistentProcesses];
+  livePersistentProcesses.clear();
+
+  for (const child of children) {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
+
+  await Promise.all(children.map(child => new Promise<void>(resolve => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    const done = setTimeout(resolve, timeoutMs);
+    child.once('close', () => {
+      clearTimeout(done);
+      resolve();
+    });
+  })));
+}
+
 export class AIStudioLayer implements LayerInterface {
   private readonly instanceId: string;
   private authVerifier: AuthVerifier;
@@ -101,6 +134,35 @@ export class AIStudioLayer implements LayerInterface {
   private mcpServerProcess?: any;
   private persistentMCPProcess?: any; // Persistent MCP process for better performance
   private mcpProcessStartTime = 0; // Track when MCP process was started
+
+  /**
+   * Requests waiting on the shared MCP process, keyed by the id they sent.
+   *
+   * The shared process answers several callers, so an answer has to be matched
+   * to the caller who asked for it. Before this, each call added its own stdout
+   * listener and settled on the first line carrying a result or an error --
+   * whatever id it held -- so two concurrent requests both took the first
+   * answer and one caller was handed the other's output, with nothing to
+   * indicate it.
+   *
+   * Each entry also records which process generation it was sent to. The TTL
+   * replaces the process without waiting, so an answer (or an exit) from the
+   * outgoing one must not settle or fail a request already re-sent to its
+   * replacement.
+   */
+  private pendingOptimized = new Map<
+    number,
+    {
+      child: unknown;
+      settle: (response: { result?: unknown; error?: { message?: string } }) => void;
+    }
+  >();
+
+  /** Monotonic, so two requests in the same millisecond cannot collide. */
+  private optimizedRequestSeq = 0;
+
+  /** The tail of the MCP server's stderr, for explaining a timeout. */
+  private recentMCPStderr = '';
   private readonly MCP_PROCESS_TTL = 10 * 60 * 1000; // 10 minutes MCP process lifetime
   private isInitialized = false;
   private isLightweightInitialized = false; // Fast initialization for simple tasks
@@ -1379,6 +1441,128 @@ export class AIStudioLayer implements LayerInterface {
     throw new Error(errorMessage);
   }
 
+  /** A request id no other in-flight request on this process can share. */
+  private nextOptimizedRequestId(): number {
+    this.optimizedRequestSeq += 1;
+    return this.optimizedRequestSeq;
+  }
+
+  /**
+   * Attach the single reader that routes answers to the requests waiting on
+   * them, and fail this generation's waiters if the process goes away.
+   */
+  private attachResponseRouter(child: any): void {
+    let buffered = '';
+
+    // setEncoding before the listener, so Node's decoder holds partial
+    // multi-byte sequences across chunk boundaries rather than turning one
+    // character into two U+FFFD.
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+
+    child.stdout?.on('data', (chunk: string) => {
+      buffered += chunk;
+
+      // Complete lines only; the tail may be half an answer.
+      const lines = buffered.split(/\r?\n/);
+      buffered = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+
+        let response: { id?: unknown; result?: unknown; error?: { message?: string } };
+        try {
+          response = JSON.parse(line);
+        } catch {
+          continue; // not a frame; the server logs prose here too
+        }
+
+        if (response.result === undefined && response.error === undefined) {
+          continue; // a notification, not an answer
+        }
+
+        const entry = typeof response.id === 'number'
+          ? this.pendingOptimized.get(response.id)
+          : undefined;
+
+        // Only from the generation it was sent to: ids restart with each
+        // process, so an answer from an outgoing one must not settle a request
+        // already re-sent to its replacement.
+        if (entry && entry.child === child) {
+          entry.settle(response);
+        } else {
+          logger.debug('MCP answer with no caller waiting', { id: response.id });
+        }
+      }
+    });
+
+    child.stderr?.on('data', (chunk: string) => {
+      // Kept for the timeout message, bounded so a chatty server cannot grow it.
+      this.recentMCPStderr = (this.recentMCPStderr + chunk).slice(-4000);
+    });
+
+    const failThisGeneration = (why: string): void => {
+      // This generation's requests only. Clearing the whole map would fail
+      // everything registered against the replacement too, so a TTL rollover
+      // under load rejected requests that were running perfectly well.
+      const mine = [...this.pendingOptimized.entries()].filter(([, e]) => e.child === child);
+      for (const [id] of mine) {
+        this.pendingOptimized.delete(id);
+      }
+      for (const [, e] of mine) {
+        e.settle({ error: { message: why } });
+      }
+    };
+
+    child.on('exit', (code: number) => failThisGeneration(
+      `the AI Studio MCP process exited (code ${code}) before answering`
+    ));
+    child.on('error', (error: Error) => failThisGeneration(
+      `the AI Studio MCP process failed: ${error.message}`
+    ));
+  }
+
+  /**
+   * End the persistent MCP process this layer owns, and wait for it.
+   *
+   * Nothing ever ended one. It is reused across requests and replaced only on a
+   * TTL, so a run that used the optimized path left a node server running with
+   * its stdio pipes attached -- and those pipes keep the parent's event loop
+   * alive: `cgmb` had nothing left to do and would not exit.
+   *
+   * Safe to call when nothing is running, and safe to call twice: a signal
+   * handler and the ordinary end of a command can both arrive.
+   */
+  async shutdown(timeoutMs = 5000): Promise<void> {
+    const child = this.persistentMCPProcess;
+    if (!child) {
+      return;
+    }
+
+    this.persistentMCPProcess = undefined;
+    livePersistentProcesses.delete(child);
+
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone.
+    }
+
+    await new Promise<void>(resolve => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      const done = setTimeout(resolve, timeoutMs);
+      child.once('close', () => {
+        clearTimeout(done);
+        resolve();
+      });
+    });
+  }
+
   /**
    * Get or create persistent MCP process for better performance
    */
@@ -1436,17 +1620,33 @@ export class AIStudioLayer implements LayerInterface {
         },
       });
       
+      // Pinned to this generation. The handlers below outlive it: when the TTL
+      // replaces the process, the outgoing one's exit arrives after the field
+      // has already been reassigned, so reading `this.persistentMCPProcess`
+      // there would delete the *new* process and force a third spawn, orphaning
+      // a healthy server.
+      const child = this.persistentMCPProcess;
+
       this.mcpProcessStartTime = now;
-      
-      // Set up error handling
-      this.persistentMCPProcess.on('error', (error: Error) => {
+      this.recentMCPStderr = '';
+      livePersistentProcesses.add(child);
+      this.attachResponseRouter(child);
+
+      const forget = (): void => {
+        livePersistentProcesses.delete(child);
+        if (this.persistentMCPProcess === child) {
+          this.persistentMCPProcess = undefined;
+        }
+      };
+
+      child.on('error', (error: Error) => {
         logger.warn('Persistent MCP process error', { error: error.message });
-        this.persistentMCPProcess = undefined;
+        forget();
       });
-      
-      this.persistentMCPProcess.on('exit', (code: number) => {
+
+      child.on('exit', (code: number) => {
         logger.debug('Persistent MCP process exited', { code });
-        this.persistentMCPProcess = undefined;
+        forget();
       });
     }
     
@@ -1461,151 +1661,68 @@ export class AIStudioLayer implements LayerInterface {
     if (command === 'multimodal_process' && this.canUseDirectAPI(params)) {
       return await this.executeDirectAPI(command, params);
     }
-    
-    // Use persistent MCP process for complex operations
-    const process = await this.getPersistentMCPProcess();
-    
+
+    const mcpProcess = await this.getPersistentMCPProcess();
+    const timeout = this.calculateOptimizedTimeout(command, params);
+    const id = this.nextOptimizedRequestId();
+
+    logger.debug(`[${this.instanceId}] Executing optimized MCP command`, {
+      instanceId: this.instanceId,
+      command,
+      id,
+      timeout,
+      usesPersistentProcess: true,
+    });
+
     return new Promise<any>((resolve, reject) => {
-      const timeout = this.calculateOptimizedTimeout(command, params);
-      
-      logger.debug(`[${this.instanceId}] Executing optimized MCP command`, {
-        instanceId: this.instanceId,
-        command,
-        hasParams: !!params,
-        timeout,
-        timeoutMinutes: Math.round(timeout / 60000),
-        usesPersistentProcess: true,
-        paramKeys: params ? Object.keys(params) : []
-      });
+      let settled = false;
 
-      let output = '';
-      let errorOutput = '';
-
-      // Send MCP request
-      const mcpRequest = {
-        jsonrpc: '2.0',
-        id: Date.now(),
-        method: 'tools/call',
-        params: {
-          name: command,
-          arguments: params
+      const finish = (act: () => void): void => {
+        if (settled) {
+          return;
         }
+        settled = true;
+        this.pendingOptimized.delete(id);
+        clearTimeout(timeoutId);
+        act();
       };
 
-      // Create cleanup function to ensure proper timeout clearing
-      let isResolved = false;
-      // Must stay `let`, declared here. cleanup() below closes over it and is
-      // defined before setTimeout runs, so moving the declaration down to a
-      // `const` would make cleanup reference a block-scoped binding ahead of
-      // its declaration. The rule's analysis does not see the closure.
-      // eslint-disable-next-line prefer-const
-      let timeoutId: NodeJS.Timeout;
-      
-      const cleanup = () => {
-        if (!isResolved) {
-          isResolved = true;
-          if (timeoutId) {
-            clearTimeout(timeoutId);
+      const timeoutId = setTimeout(() => finish(() => {
+        // Attach whatever the server wrote to stderr. It was collected and then
+        // dropped, so a timeout reported only "timed out" while the reason -- a
+        // missing key, a quota refusal -- sat unread in the buffer.
+        const stderr = this.recentMCPStderr.trim();
+        const hint = stderr ? ` Server stderr: ${stderr.slice(-500)}` : '';
+        reject(new Error(
+          `AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully.${hint}`
+        ));
+      }), timeout);
+
+      // Registered by id, against this process generation, and answered only by
+      // the response carrying that id. Every call used to add its own stdout
+      // listener and settle on the first line with a result or an error --
+      // whatever id it held.
+      this.pendingOptimized.set(id, {
+        child: mcpProcess,
+        settle: (response) => finish(() => {
+          if (response.error) {
+            reject(new Error(`MCP Error: ${response.error.message || 'Unknown error'}`));
+          } else {
+            resolve(response.result);
           }
-          try {
-            process.stdout.removeListener('data', dataHandler);
-            process.stderr.removeListener('data', errorHandler);
-          } catch (error) {
-            // Ignore cleanup errors
-          }
-        }
-      };
-      
-      logger.debug(`[${this.instanceId}] Sending optimized MCP request`, {
-        instanceId: this.instanceId,
-        command,
-        requestId: mcpRequest.id,
-        requestLength: JSON.stringify(mcpRequest).length
+        }),
       });
-      
+
       try {
-        process.stdin.write(JSON.stringify(mcpRequest) + '\n');
+        mcpProcess.stdin.write(JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: { name: command, arguments: params },
+        }) + '\n');
       } catch (error) {
-        cleanup();
-        reject(new Error(`Failed to send MCP request: ${(error as Error).message}`));
-        return;
+        finish(() => reject(new Error(`Failed to send MCP request: ${(error as Error).message}`)));
       }
-      
-      const dataHandler = (data: Buffer) => {
-        const chunk = data.toString();
-        output += chunk;
-        
-        logger.debug(`[${this.instanceId}] Optimized MCP stdout chunk received`, {
-          instanceId: this.instanceId,
-          command,
-          chunkLength: chunk.length,
-          totalOutputLength: output.length
-        });
-        
-        // Try to parse complete responses (handle both Unix \n and Windows \r\n)
-        const lines = output.split(/\r?\n/);
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const mcpResponse = JSON.parse(line);
-              if (mcpResponse.result || mcpResponse.error) {
-                if (!isResolved) {
-                  cleanup(); // Immediate cleanup and timeout clear
-                  
-                  logger.debug(`[${this.instanceId}] MCP response received - immediate resolution`, {
-                    instanceId: this.instanceId,
-                    command,
-                    hasResult: !!mcpResponse.result,
-                    hasError: !!mcpResponse.error,
-                    responseId: mcpResponse.id
-                  });
-                  
-                  if (mcpResponse.error) {
-                    reject(new Error(`MCP Error: ${mcpResponse.error.message || 'Unknown error'}`));
-                  } else {
-                    resolve(mcpResponse.result); // Immediate resolve (timeout issue fix)
-                  }
-                }
-                return;
-              }
-            } catch {
-              // Continue parsing other lines
-              continue;
-            }
-          }
-        }
-      };
-
-      const errorHandler = (data: Buffer) => {
-        const chunk = data.toString();
-        errorOutput += chunk;
-        logger.debug(`[${this.instanceId}] Optimized MCP stderr chunk received`, {
-          instanceId: this.instanceId,
-          command,
-          chunkLength: chunk.length,
-          errorContent: chunk.substring(0, 200)
-        });
-      };
-      
-      // Set up timeout with immediate cleanup
-      timeoutId = setTimeout(() => {
-        if (!isResolved) {
-          cleanup();
-          // Attach whatever the server wrote to stderr. It was being collected
-          // and then dropped, so a timeout reported only "timed out" while the
-          // reason -- a missing key, a quota refusal -- sat unread in the
-          // buffer. Trimmed because it can be long and is only a hint.
-          const stderrHint = errorOutput.trim()
-            ? ` Server stderr: ${errorOutput.trim().slice(-500)}`
-            : '';
-          reject(new Error(
-            `AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully.${stderrHint}`
-          ));
-        }
-      }, timeout);
-
-      process.stdout.on('data', dataHandler);
-      process.stderr.on('data', errorHandler);
     });
   }
 
