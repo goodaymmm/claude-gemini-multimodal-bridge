@@ -538,17 +538,24 @@ process.on('SIGTERM', () => {
   process.exit(1);
 });
 
-// Skip postinstall in CI environments
-if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
-  log('🔄 CI environment detected, skipping interactive setup', 'info');
-  process.exit(0);
-}
-
 // Only run the installer when executed as a script.
 //
 // Without this guard, `require()`ing the file to test its version check ran the
 // whole setup -- npm installs and all.
 if (require.main === module) {
+  // Skip postinstall in CI environments.
+  //
+  // This sat above the guard, at module scope, so requiring the file under CI
+  // ended the process that required it -- and a test file that imports it is
+  // that process. On GitHub Actions, which sets CI,
+  // postinstall-node-version.test.mjs reported one case where a local run
+  // reported six, and exited 0: five cases silently absent, the run green, and
+  // nothing proven by it.
+  if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
+    log('🔄 CI environment detected, skipping interactive setup', 'info');
+    process.exit(0);
+  }
+
   // Skip postinstall during npm publish
   if (process.env.npm_lifecycle_event === 'prepublish' || process.env.npm_lifecycle_event === 'prepare') {
     log('📦 Publish process detected, skipping setup', 'info');
