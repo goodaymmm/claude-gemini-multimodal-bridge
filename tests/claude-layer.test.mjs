@@ -81,6 +81,79 @@ const ECHO_STUB = `
   });
 `;
 
+describe('a workflow step reaches Claude with its content', () => {
+  // A workflow's last step is almost always synthesize_response, and
+  // LayerManager spreads the step input into the task -- so its text arrives as
+  // `prompt`. buildSynthesisPrompt reads only `request`, so what reaches Claude
+  // is two sentences of instructions with nothing between them, and whatever
+  // comes back is reported as the workflow's answer.
+
+  it('carries the step prompt through to the command', async () => {
+    const dir = makeStubDir('synthesis-prompt', ECHO_STUB);
+    const text = 'Tokyo is sunny today, per the search step.';
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({ action: 'synthesize_response', prompt: text });
+    });
+
+    assert.equal(result.success, true);
+    assert.ok(
+      String(result.data).includes(text),
+      'the synthesis prompt reached Claude with the step content missing'
+    );
+  });
+
+  it('describes a step that carries structure instead of prose', async () => {
+    // analyze_requirements arrives as {documents, analysisType, ...} -- none of
+    // which is prompt, request or input -- so executeGeneral fell through to the
+    // literal "Please help with this task." Measured against a live run: Claude
+    // answered "no specific task has been described in this conversation", and
+    // that answer was folded into the workflow result as though it were work.
+    const dir = makeStubDir('structured-step', ECHO_STUB);
+
+    const result = await withStub(dir, async () => {
+      const layer = new ClaudeCodeLayer();
+      return layer.execute({
+        action: 'analyze_requirements',
+        documents: ['/tmp/report.pdf'],
+        analysisType: 'summary',
+      });
+    });
+
+    const sent = String(result.data);
+    assert.equal(result.success, true);
+    assert.ok(!sent.includes('Please help with this task.'), 'the placeholder must be gone');
+    assert.ok(sent.includes('analyze_requirements'), 'the step must say what it is');
+    assert.ok(sent.includes('/tmp/report.pdf'), 'and carry its input');
+  });
+});
+
+describe('how long a claude step is given', () => {
+  // The estimate is 5 seconds for anything that is not a workflow or complex
+  // reasoning, plus a 30-second buffer -- so an ordinary step gets 35 seconds to
+  // run an interactive `claude` answering a real question. Measured: one
+  // analyze_requirements step takes 85 seconds to do the work properly, and 12
+  // seconds through `claude --print` directly. 35 could only ever have been
+  // enough for a placeholder.
+
+  it('gives a general step the same budget as any other claude call', () => {
+    const layer = new ClaudeCodeLayer();
+
+    assert.equal(
+      layer.getTaskTimeout({ action: 'analyze_requirements', documents: ['a.pdf'] }),
+      layer.DEFAULT_TIMEOUT,
+      'a step is not a different kind of call from any other claude invocation'
+    );
+  });
+
+  it('honours a timeout the caller set', () => {
+    const layer = new ClaudeCodeLayer();
+
+    assert.equal(layer.getTaskTimeout({ prompt: 'x', timeout: 5000 }), 5000, 'an explicit budget wins');
+  });
+});
+
 describe('claude layer: task routing decisions', () => {
   // canHandle decides whether this layer is offered a task at all, and it is
   // pure -- no process, no credentials.

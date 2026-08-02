@@ -73,6 +73,35 @@ describe('AI Studio model constants', () => {
 });
 
 describe('no source file hardcodes a retired model', () => {
+  it('names no model from the shut-down 2.0 generation at all', () => {
+    // The -exp check below was too narrow. A plain `gemini-2.0-flash` sat in
+    // the TTS script step, and Google has shut that whole generation down --
+    // so audio generation failed at its first step, every time. Any 2.0 model
+    // is a request that cannot succeed, whatever the suffix.
+    const offenders = [];
+    const COMMENT = new RegExp('^\s*(//|\*|/\*)');
+    const LITERAL = /['"`](gemini-2\.0-[a-z0-9.-]*)['"`]/g;
+
+    for (const file of sourceFiles()) {
+      const relative = file.replace(/.*[\/]src[\/]/, 'src/');
+
+      readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
+        // A comment explaining the removal is fine; a string literal is not.
+        if (COMMENT.test(line)) { return; }
+
+        for (const match of line.matchAll(LITERAL)) {
+          offenders.push(`${relative}:${index + 1}  ${match[1]}`);
+        }
+      });
+    }
+
+    assert.deepEqual(
+      offenders, [],
+      `a shut-down generation cannot answer; these calls always fail:\n${offenders.join('\n')}`
+    );
+  });
+
+
   it('has removed every gemini-2.0-flash-exp literal', () => {
     const offenders = [];
 

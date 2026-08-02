@@ -580,7 +580,10 @@ describe('workflow execution modes', () => {
         initialize: async () => {},
         isAvailable: async () => true,
         execute: async task => {
-          const entry = { layer: name, action: task.action, startedAt: Date.now() };
+          // The task itself is kept, not just its name: what a step was given
+          // is the only way to tell a resolved @step.output reference from the
+          // literal string.
+          const entry = { layer: name, action: task.action, task, startedAt: Date.now() };
           calls.push(entry);
           await new Promise(resolve => setTimeout(resolve, 40));
           entry.endedAt = Date.now();
@@ -613,6 +616,51 @@ describe('workflow execution modes', () => {
       { id: 'b', layer: 'antigravity', action: 'grounded_search', input: { prompt: 'b' } },
     ],
   };
+
+  const chained = {
+    steps: [
+      { id: 'search', layer: 'antigravity', action: 'search', input: { prompt: 'a' } },
+      { id: 'wrap', layer: 'claude', action: 'synthesize_response', input: { prompt: '@search.output' }, dependsOn: ['search'] },
+    ],
+  };
+
+  it('gives a parallel step the output of the step it depends on', async () => {
+    // `@step.output` is the only way a step reads an earlier answer. Parallel
+    // hands resolveStepInput the raw LayerResults, which have no `output`, so
+    // the reference resolves to undefined and the downstream step runs with
+    // nothing -- then reports success, because it returned something of its own.
+    const manager = managerWithTimedStubs();
+
+    const result = await manager.executeWorkflow(chained, {}, { executionMode: 'parallel' });
+
+    assert.equal(result.success, true, JSON.stringify(result.results));
+    const wrap = manager.stubCalls.find(c => c.action === 'synthesize_response');
+    assert.equal(
+      wrap.task.prompt, 'did:search',
+      'a parallel step must see its dependency answer, not the literal @search.output'
+    );
+  });
+
+  it('gives a hybrid step the output of the step it depends on', async () => {
+    // Hybrid groups by layer and ignores dependsOn entirely: with a recommended
+    // layer of aistudio, a Claude step lands in `medium` and a search in `low`,
+    // and medium runs first -- so a synthesis step declaring dependsOn started
+    // before the step it named had begun.
+    const manager = managerWithTimedStubs();
+
+    const result = await manager.executeWorkflow(
+      chained,
+      { prompt: 'generate a summary poster' },   // medium complexity -> hybrid
+      { executionMode: 'adaptive' }
+    );
+
+    assert.equal(result.success, true, JSON.stringify(result.results));
+    const wrap = manager.stubCalls.find(c => c.action === 'synthesize_response');
+    const search = manager.stubCalls.find(c => c.action === 'search');
+    assert.ok(search, 'the dependency must have run');
+    assert.ok(search.endedAt <= wrap.startedAt, 'and it must run before the step that depends on it');
+    assert.equal(wrap.task.prompt, 'did:search', 'the reference must carry the upstream answer');
+  });
 
   it('runs a dependent chain in order under adaptive', async () => {
     const manager = managerWithTimedStubs();
