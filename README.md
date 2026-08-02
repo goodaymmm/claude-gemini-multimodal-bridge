@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 148 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 178 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -312,6 +312,23 @@ directories explicitly:
 CGMB_ALLOWED_ROOTS=C:\Users\me\Documents;D:\shared
 ```
 
+### 📍 Where `.env` is read from
+
+CGMB reads `.env` from the directory you run it in. Up to 1.2.0 it also read
+CGMB's own installation directory, the global npm directory and `~/.cgmb`, so a
+file left in any of those was picked up by every project on the machine — along
+with its `AI_STUDIO_API_KEY` and its `CGMB_ALLOWED_ROOTS`, which is what decides
+the boundary above. Since 1.2.1 those locations have to be named:
+
+```bash
+# A file, or the directory holding one. Consulted before the working directory.
+CGMB_ENV_PATH=/home/me/.cgmb/.env
+```
+
+**Upgrading from 1.2.0 or earlier**: if your key lived in one of those
+locations, set this to keep using it — otherwise CGMB will report the key as
+missing.
+
 `.env.example` carries the full list, including the keys that are parsed but
 that nothing reads back — worth checking before assuming a setting has an effect.
 
@@ -471,7 +488,7 @@ src/
 ### v1.2.1 (2026-08-02)
 
 A fix-only release. Every change addresses a defect measured in 1.2.0; no
-features were added, and the whole release is 18 files.
+features were added, and it touches 18 files of code and tests.
 
 - 🎯 **Concurrent AI Studio requests no longer take each other's answers**: the
   shared MCP server got one stdout listener per call, each settling on the first
