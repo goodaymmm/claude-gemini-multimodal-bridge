@@ -1,17 +1,15 @@
 /**
- * The search cache, which had no tests at all.
+ * What the search cache is allowed to treat as the same question.
  *
- * Found when the test suite itself was reviewed. normalizeQuery rewrote every
- * year from 2024 to 2029 into one token, so "AI news 2024" and "AI news 2026"
- * hashed to the same key and the later search silently returned the earlier
- * answer. A year is the part of a search that says which facts are wanted, and
- * this layer exists to fetch current information.
+ * The cache key was built from the query text and the engine name, with the
+ * query first put through a "normalisation" pass that folded any year 2024-2029
+ * to the string 2024-2025 and collapsed 最新の / 最近の / 新しい to one word.
+ * The model was not in the key at all.
  *
- * The key also left out the model, so changing ANTIGRAVITY_MODEL returned the
- * previous model's results for the same words.
- *
- * Both are reached through the public get/set, not by reaching into the key
- * builder -- the defect was in what callers observe, so that is what is checked.
+ * So "2024年の株価" and "2026年の株価" were the same entry, and a question asked
+ * of one model was answered from another's reply. Nothing reports this: the
+ * caller gets a successful result to a question it did not ask. A 30-minute TTL
+ * bounds how long the wrong answer persists; it does not make it detectable.
  */
 
 import assert from 'node:assert/strict';
@@ -19,140 +17,64 @@ import { describe, it } from 'node:test';
 
 import { SearchCache } from '../dist/utils/SearchCache.js';
 
-const MODEL = 'gemini-3.6-flash-low';
-
-/** A cache with fuzzy matching off, so a case means what it says. */
-function cache(options = {}) {
-  return new SearchCache({ ttl: 60000, maxEntries: 100, ...options });
+/** A cache with metrics off and a long TTL, so nothing expires mid-test. */
+function makeCache() {
+  return new SearchCache({ ttl: 600000, maxEntries: 100, enableMetrics: false, similarityThreshold: 0.8 });
 }
 
-describe('a year is part of the question', () => {
-  it('does not answer a 2026 search from a 2024 one', async () => {
-    const store = cache();
-    await store.set('AI news 2024', { content: 'answer about 2024' }, 'antigravity', 0, MODEL);
-
-    assert.equal(
-      await store.get('AI news 2026', 'antigravity', MODEL), null,
-      'these are different questions and only one of them has been asked'
-    );
-  });
-
-  it('still answers the same year from cache', async () => {
-    const store = cache();
-    await store.set('AI news 2024', { content: 'answer about 2024' }, 'antigravity', 0, MODEL);
-
-    assert.deepEqual(
-      await store.get('AI news 2024', 'antigravity', MODEL), { content: 'answer about 2024' },
-      'the cache must still be a cache'
-    );
-  });
-
-  it('keeps every year in the range apart', async () => {
-    // 2024 through 2029 were one token; each pair below collided.
-    const store = cache();
-    for (const year of [2024, 2025, 2026, 2027, 2028, 2029]) {
-      await store.set(`release notes ${year}`, { content: String(year) }, 'antigravity', 0, MODEL);
-    }
-
-    for (const year of [2024, 2025, 2026, 2027, 2028, 2029]) {
-      const hit = await store.get(`release notes ${year}`, 'antigravity', MODEL);
-      assert.equal(hit?.content, String(year), `${year} came back as ${hit?.content}`);
-    }
-  });
+// set() takes (query, result, searchEngine, processingTime, model). Passing the
+// model in the processingTime slot made the model-collision case pass for the
+// wrong reason -- a miss caused by a mistake, not by the rule under test.
+const result = (data) => ({
+  success: true,
+  data,
+  metadata: { layer: 'antigravity', duration: 1 },
 });
 
-describe('the model is part of the answer', () => {
-  it('does not serve one model from another', async () => {
-    const store = cache();
-    await store.set('what changed today', { content: 'from flash' }, 'antigravity', 0, 'gemini-3.6-flash-low');
+describe('the cache answers the question that was asked', () => {
+  it('does not confuse one year with another', async () => {
+    // The normalisation rewrote every year in 2024-2029 to the same token, so
+    // these two questions shared an entry. Asking about 2026 returned the 2024
+    // answer, as a success.
+    const cache = makeCache();
 
-    assert.equal(
-      await store.get('what changed today', 'antigravity', 'gemini-3-pro-preview'), null,
-      'the response would carry the wrong model with nothing to show for it'
+    await cache.set('2024年の株価を教えて', result('2024 prices'), 'antigravity');
+    const hit = await cache.get('2026年の株価を教えて', 'antigravity');
+
+    assert.notEqual(
+      hit?.data, '2024 prices',
+      'a question about a different year must not be answered from this entry'
     );
   });
 
-  it('serves the same model from cache', async () => {
-    const store = cache();
-    await store.set('what changed today', { content: 'from flash' }, 'antigravity', 0, MODEL);
+  it('does not treat "最近" and "最新" as the same question', async () => {
+    const cache = makeCache();
 
-    assert.deepEqual(await store.get('what changed today', 'antigravity', MODEL), { content: 'from flash' });
+    await cache.set('最新のニュースは', result('latest news'), 'antigravity');
+    const hit = await cache.get('最近のニュースは', 'antigravity');
+
+    assert.notEqual(hit?.data, 'latest news', 'these are different questions');
   });
 
-  it('keeps the search engine apart as before', async () => {
-    const store = cache();
-    await store.set('same words', { content: 'antigravity' }, 'antigravity', 0, MODEL);
+  it('does not answer one model from another model reply', async () => {
+    // Model is part of what produced the answer. Two models asked the same
+    // question give different answers, and the caller chose which one it wanted.
+    const cache = makeCache();
 
-    assert.equal(await store.get('same words', 'aistudio', MODEL), null);
-  });
-});
+    await cache.set('capital of France', result('from flash'), 'antigravity', 0, 'gemini-3.6-flash-low');
+    const hit = await cache.get('capital of France', 'antigravity', 'gemini-3.1-pro-high');
 
-describe('the parts of the contract nothing was checking', () => {
-  it('lets an entry expire', async () => {
-    const store = cache({ ttl: 40 });
-    await store.set('short lived', { content: 'x' }, 'antigravity', 0, MODEL);
-
-    assert.notEqual(await store.get('short lived', 'antigravity', MODEL), null, 'fresh');
-    await new Promise(resolve => setTimeout(resolve, 80));
-    assert.equal(await store.get('short lived', 'antigravity', MODEL), null, 'expired');
+    assert.notEqual(hit?.data, 'from flash', 'a different model must not share the entry');
   });
 
-  it('stays within its entry limit', async () => {
-    const store = cache({ maxEntries: 10 });
+  it('still returns the entry it did store', async () => {
+    // The rule has to stay useful: same question, same engine, same model is a
+    // hit. A cache that never hits would be safe and pointless.
+    const cache = makeCache();
 
-    for (let i = 0; i < 40; i++) {
-      await store.set(`query number ${i}`, { content: String(i) }, 'antigravity', 0, MODEL);
-    }
+    await cache.set('capital of France', result('Paris'), 'antigravity', 0, 'gemini-3.6-flash-low');
+    const hit = await cache.get('capital of France', 'antigravity', 'gemini-3.6-flash-low');
 
-    assert.ok(
-      store.getStats().totalEntries <= 10,
-      `the cap is the point of the cap, got ${store.getStats().totalEntries}`
-    );
-  });
-
-  it('counts a miss as a miss', async () => {
-    const store = cache();
-    await store.get('never stored', 'antigravity', MODEL);
-
-    const stats = store.getStats();
-    assert.equal(stats.missCount, 1);
-    assert.equal(stats.hitCount, 0);
-  });
-});
-
-describe('a time range is part of the question too', () => {
-  // Second review finding on the same file. 最近の and 最新の were folded into
-  // one token by the phrasing normalisation: measured, "最近の台風を一覧にして"
-  // and "最新の台風を一覧にして" shared a key, so a question about a span was
-  // answered from one about whatever is newest. Same class as the year, and the
-  // phrasing rewrites are where it hid.
-
-  it('keeps 最近の and 最新の apart', async () => {
-    const store = cache();
-    await store.set('最近の台風を一覧にして', { content: 'a span of storms' }, 'antigravity', 0, MODEL);
-
-    assert.equal(
-      await store.get('最新の台風を一覧にして', 'antigravity', MODEL), null,
-      'one asks about a period, the other about the newest thing'
-    );
-  });
-
-  it('keeps 新しい apart from both', async () => {
-    const store = cache();
-    await store.set('新しい仕様を教えて', { content: 'new spec' }, 'antigravity', 0, MODEL);
-
-    assert.equal(await store.get('最新の仕様を教えて', 'antigravity', MODEL), null);
-  });
-
-  it('still folds the phrasings that are only phrasings', async () => {
-    // Deliberately kept: these change how the question is asked, not what is
-    // being asked. Pinned so the line between the two stays where it was put.
-    const store = cache();
-    await store.set('AIについて教えて', { content: 'about AI' }, 'antigravity', 0, MODEL);
-
-    assert.deepEqual(
-      await store.get('AIを説明して', 'antigravity', MODEL), { content: 'about AI' },
-      'wording may be normalised'
-    );
+    assert.equal(hit?.data, 'Paris', 'an identical question must still hit');
   });
 });

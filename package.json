@@ -10,8 +10,8 @@
   },
   "mcp": {
     "name": "cgmb",
-    "description": "CGMB MCP Server v1.2.1 - 3-layer AI integration (Claude Code / Antigravity CLI / AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
-    "version": "1.2.1",
+    "description": "CGMB MCP Server v1.2.0 - 3-layer AI integration (Claude Code / Antigravity CLI / AI Studio). Main tool 'cgmb' handles: chat, search, analyze, generate (image/audio), process files. Features: OAuth authentication, automatic translation, URL routing, path resolution. Commands: analyze PDFs/docs, generate images/audio, search web, process multimodal. Use 'CGMB' keyword.",
+    "version": "1.2.0",
     "command": "cgmb",
     "args": [
       "serve"

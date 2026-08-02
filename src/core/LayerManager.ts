@@ -116,17 +116,6 @@ export class LayerManager {
   }
 
   /**
-   * Stop in-flight work in whichever layers have been created.
-   *
-   * Deliberately does not go through the lazy getters: creating a layer in
-   * order to cancel it would start the very thing being cancelled. A layer that
-   * was never built has nothing running.
-   */
-  public abortActiveOperations(reason: string = 'cancelled'): number {
-    return this.aiStudioLayer ? this.aiStudioLayer.abortActiveOperations(reason) : 0;
-  }
-
-  /**
    * Get Claude layer with lazy initialization
    */
   public getClaudeLayer(): ClaudeCodeLayer {
@@ -452,8 +441,7 @@ export class LayerManager {
    */
   public async executeWithLayer(
     layerType: LayerType,
-    task: any,
-    signal?: AbortSignal
+    task: any
   ): Promise<LayerResult> {
     // Checked before routing, for every layer.
     //
@@ -467,27 +455,19 @@ export class LayerManager {
     // not be contingent on which step happens to run first.
     assertNoCredentialFiles(task);
 
-    // The cancellation goes to every layer, not only to the one that spawns a
-    // billed child. A short workflow timeout used to return failure to the
-    // caller -- which then fell back, or moved on -- while the Claude or agy
-    // subprocess it had given up on ran to its own much longer budget: a
-    // duplicate external call, and a `claude` child still writing somewhere
-    // after nobody was reading.
     switch (layerType) {
       case 'claude':
         const claudeLayer = await this.getClaudeLayerAsync();
-        return await claudeLayer.execute(task, signal);
+        return await claudeLayer.execute(task);
 
       case 'gemini': // deprecated alias
       case 'antigravity':
         const antigravityLayer = await this.getAntigravityLayerAsync();
-        return await antigravityLayer.execute(task, signal);
+        return await antigravityLayer.execute(task);
 
       case 'aistudio':
         const aiStudioLayer = await this.getAIStudioLayerAsync();
-        // The one layer that spawns a billed child. Cancellation has to reach
-        // the process, not just the promise waiting on it.
-        return await aiStudioLayer.execute(task, signal);
+        return await aiStudioLayer.execute(task);
 
       default:
         throw new Error(`Unknown layer type: ${layerType}`);
@@ -1339,10 +1319,10 @@ export class LayerManager {
    * What a finished step publishes for `@step.output` references.
    *
    * A failed step publishes its failure rather than nothing: resolveStepInput
-   * turns `success: false` into an explicit _stepFailed marker for the
-   * downstream step, and a step that published nothing at all was
-   * indistinguishable from one that had not run, so the reference silently
-   * resolved to the literal string `@step.output`.
+   * turns `success: false` into an explicit marker for the downstream step, and
+   * a step that published nothing at all was indistinguishable from one that
+   * had not run -- so the reference silently resolved to the literal
+   * `@step.output` string.
    */
   private publishedOutput(result: LayerResult): Record<string, unknown> {
     return result.success
@@ -1359,10 +1339,10 @@ export class LayerManager {
     // Dependency order first, layer grouping second.
     //
     // Grouping by layer alone ignored dependsOn entirely: with a recommended
-    // layer of aistudio, two Claude steps landed in `medium` and a search step
-    // in `low`, and medium runs first -- so a synthesis step declaring
-    // dependsOn: ['search', 'reason'] started before either had begun, and its
-    // @step.output references resolved against an empty map. The run then
+    // layer of aistudio, a Claude step landed in `medium` and a search step in
+    // `low`, and medium runs first -- so a synthesis step declaring
+    // dependsOn: ['search'] started before search had begun, and its
+    // @step.output reference resolved against an empty map. The run then
     // reported success, because the step returned something of its own.
     //
     // Each dependency level is still grouped by layer inside itself, which is
@@ -1370,10 +1350,7 @@ export class LayerManager {
     const results: Record<string, LayerResult> = {};
 
     // Dependency references use `@step.output`, so every execution mode has to
-    // publish the same shape. Only sequential did: hybrid and parallel passed
-    // the raw LayerResult, so `@step.output` resolved to undefined and a
-    // downstream synthesis or quality check ran with no upstream data -- then
-    // reported success because it returned something of its own.
+    // publish the same shape. Only sequential did.
     const stepOutputs: Record<string, Record<string, unknown>> = {};
 
     for (const level of this.groupStepsByDependencies(workflow.steps)) {
@@ -2042,7 +2019,7 @@ export class LayerManager {
       // including the Antigravity quality check in conversion workflows and the
       // fallback used when AI Studio fails.
       const result = await safeExecute(
-        (signal) => this.executeWithLayer(step.layer, executionParams, signal),
+        () => this.executeWithLayer(step.layer, executionParams),
         {
           operationName: `execute-step-${step.id}`,
           layer: step.layer,

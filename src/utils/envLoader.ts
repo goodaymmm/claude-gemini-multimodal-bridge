@@ -1,11 +1,7 @@
 import { config } from 'dotenv';
-import { existsSync, realpathSync, statSync } from 'fs';
-import { findExecutable } from './platformUtils.js';
-import { homedir, userInfo } from 'os';
-import { dirname, isAbsolute, join, resolve } from 'path';
-import { fileURLToPath } from 'url';
+import { existsSync, statSync } from 'fs';
+import { dirname, join } from 'path';
 import { logger } from './logger.js';
-import { probeCommand } from './processUtils.js';
 
 /**
  * Smart environment loader that finds .env files from multiple locations
@@ -67,8 +63,15 @@ export class SmartEnvLoader {
 
     // Try loading from each search path in order
     for (const searchPath of searchPaths) {
-      const envPath = join(searchPath, '.env');
-      
+      // An entry may name the file to read or the directory holding it. Always
+      // appending '.env' turned a path that ended in .env into <file>/.env,
+      // which exists nowhere -- and a search that finds nothing is silent, so
+      // the only symptom was a key that appeared to be missing.
+      //
+      // The named file is used as given rather than via dirname(), so that
+      // CGMB_ENV_PATH=<dir>/prod.env reads prod.env and not the .env beside it.
+      const envPath = this.namesAFile(searchPath) ? searchPath : join(searchPath, '.env');
+
       if (verbose) {
         logger.debug('Checking for .env file', { path: envPath });
       }
@@ -120,15 +123,9 @@ export class SmartEnvLoader {
         this.loadResult.loadedFrom = 'environment variables';
         
         if (verbose) {
-          // Reports the keys the decision above actually consulted. It used to
-          // log hasClaudeKey, which no longer takes part in that decision --
-          // and never named AI_STUDIO_API_KEY, so the diagnostic could not have
-          // explained why the verdict came out the way it did.
           logger.info('Using environment variables (no .env file needed)', {
-            hasAiStudioKey: !!process.env.AI_STUDIO_API_KEY,
-            usingDeprecatedFallback:
-              !process.env.AI_STUDIO_API_KEY &&
-              (!!process.env.GOOGLE_AI_STUDIO_API_KEY || !!process.env.GEMINI_API_KEY),
+            hasGeminiKey: !!process.env.GEMINI_API_KEY,
+            hasClaudeKey: !!process.env.CLAUDE_API_KEY
           });
         }
       }
@@ -150,272 +147,60 @@ export class SmartEnvLoader {
   }
 
   /**
+   * Does this path name the file to read, rather than a directory to look in?
+   *
+   * statSync rather than the name: a path ending in `.env` is the usual case
+   * but not the only one, and a directory that happens to be called `.env`
+   * would otherwise be read as a file.
+   */
+  private namesAFile(path: string): boolean {
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Get default search paths for .env files
    */
   private async getDefaultSearchPaths(): Promise<string[]> {
     const paths: string[] = [];
 
-    // 1. Current working directory
-    paths.push(process.cwd());
-
-    // Without a home directory, stop here.
+    // Where the user is, and the project they are in. Nothing else by default.
     //
-    // Everything below this line is CGMB going looking on the user's behalf --
-    // up the tree, into its own package, into the global install prefix. The
-    // home directory is what bounds the first of those, and returning an empty
-    // ancestor list while letting the rest proceed was a half-measure: in a
-    // container running as an arbitrary UID with no passwd entry and no HOME,
-    // the host project's .env was correctly excluded and the .env sitting in
-    // CGMB's own install directory was read instead. Same class of mistake,
-    // different directory. If the boundary cannot be established, the only
-    // directory CGMB may read a credential from is the one it was pointed at.
+    // The list used to include the package's own installation directory, the
+    // global npm directory and ~/.cgmb unconditionally -- measured on WSL, that
+    // meant ~/.nvm/versions/node/v22/lib/node_modules/claude-gemini-multimodal-bridge
+    // was read on every run of every project. A .env left in an installation
+    // directory therefore supplied AI_STUDIO_API_KEY, billed to whoever owns
+    // that key, and CGMB_ALLOWED_ROOTS, which decides which files this process
+    // is willing to send to Google. Widening that silently is the serious half:
+    // the user is never told the boundary moved.
     //
-    // Explicit configuration is unaffected: variables already in the
-    // environment are checked by the caller regardless of what this returns.
-    const homes = this.homeDirectories();
-    if (homes.length === 0) {
-      logger.debug('No home directory could be resolved; limiting the .env search to the working directory');
-      return paths;
+    // Those locations are still usable, but they have to be asked for --
+    // CGMB_ENV_PATH names a file or directory explicitly.
+    //
+    // It goes first. Loading stops at the first file that parses, so an opt-in
+    // placed after the defaults is only consulted when the working directory
+    // happens to hold no .env -- which makes it look like it works in a clean
+    // directory and do nothing everywhere else. Something named outright
+    // outranks something inferred.
+    const explicit = process.env.CGMB_ENV_PATH?.trim();
+    if (explicit) {
+      paths.push(explicit);
     }
 
-    // 2. Ancestors of the working directory, up to the project root.
-    //
-    // Running a CLI from a subdirectory of your project is ordinary, and the
-    // .env belongs at the root. Without this, a run from <proj>/subdir skipped
-    // straight past <proj>/.env and -- measured -- landed on step 3, CGMB's own
-    // package directory, quietly using whatever credential lived there. Not
-    // finding the file would have been better than finding a different one.
-    //
-    // findProjectRoot below cannot serve here: it only returns a directory
-    // whose package.json is CGMB itself, so a host project's root is invisible
-    // to it. Different question, different answer.
-    // Wrapped like steps 3-5: one leg of the search failing should narrow the
-    // search, not stop the environment from loading at all.
-    try {
-      for (const ancestor of this.ancestorsUpToProjectRoot(process.cwd())) {
-        if (!paths.includes(ancestor)) {
-          paths.push(ancestor);
-        }
-      }
-    } catch (error) {
-      // Ignore errors walking up from the working directory
+    if (!paths.includes(process.cwd())) {
+      paths.push(process.cwd());
     }
 
-    // 3. Look for package.json to find project root
     const projectRoot = await this.findProjectRoot();
-    if (projectRoot && projectRoot !== process.cwd()) {
+    if (projectRoot && !paths.includes(projectRoot)) {
       paths.push(projectRoot);
     }
 
-    // 3. Look for CGMB installation directory (from current file location)
-    try {
-      const currentFileUrl = import.meta.url;
-      const currentFilePath = fileURLToPath(currentFileUrl);
-      const projectFromFile = this.findProjectRootFromPath(currentFilePath);
-      if (projectFromFile && !paths.includes(projectFromFile)) {
-        paths.push(projectFromFile);
-      }
-    } catch (error) {
-      // Ignore errors in finding file-based project root
-    }
-
-    // 4. Global npm installation directory
-    try {
-      const globalDir = await this.findGlobalNpmInstallation();
-      if (globalDir && !paths.includes(globalDir)) {
-        paths.push(globalDir);
-      }
-    } catch (error) {
-      // Ignore errors in finding global installation
-    }
-
-    // 5. User home directory with .cgmb subdirectory
-    try {
-      const homeDir = process.env.HOME || process.env.USERPROFILE;
-      if (homeDir) {
-        const cgmbHome = join(homeDir, '.cgmb');
-        paths.push(cgmbHome);
-      }
-    } catch (error) {
-      // Ignore errors in home directory detection
-    }
-
     return paths;
-  }
-
-  /**
-   * One path, in the form comparisons can be made on.
-   *
-   * Symlinks are resolved because a home directory is often one, and Windows
-   * comparisons ignore case because C:\Users\x and c:\users\x are the same
-   * directory. A path that does not exist is left as resolved -- realpath
-   * cannot answer for it, and it cannot be the home directory either.
-   */
-  private static canonical(target: string): string {
-    let path = resolve(target);
-    try {
-      path = realpathSync(path);
-    } catch {
-      // not on disk; the resolved form is the best available
-    }
-    return process.platform === 'win32' ? path.toLowerCase() : path;
-  }
-
-  /**
-   * Whether two paths name the same directory on disk.
-   *
-   * Comparing canonical paths is not enough. realpath resolves symlinks but
-   * says nothing about bind mounts: mount /home/u at /mnt/u and the two paths
-   * stay distinct while being one directory. Reproduced in a user namespace --
-   * a walk entered through the alias put the home directory on the search list
-   * and read its .env, which is the credential boundary this ceiling exists to
-   * hold.
-   *
-   * The inode identity is POSIX-only on purpose. Windows fs.Stats does not
-   * populate dev/ino dependably, and the aliases Windows does offer --
-   * junctions and symlinks -- are already collapsed by realpath.
-   */
-  static sameDirectory(a: string, b: string): boolean {
-    if (SmartEnvLoader.canonical(a) === SmartEnvLoader.canonical(b)) {
-      return true;
-    }
-
-    if (process.platform === 'win32') {
-      return false;
-    }
-
-    const left = SmartEnvLoader.statIdentity(a);
-    const right = SmartEnvLoader.statIdentity(b);
-    return left !== undefined && right !== undefined
-      && SmartEnvLoader.sameFileIdentity(left, right);
-  }
-
-  /**
-   * A directory's filesystem identity, or undefined if it is not on disk.
-   *
-   * Read as BigInt. The default statSync hands dev and ino back as JavaScript
-   * numbers, which cannot hold every 64-bit inode: this machine already reports
-   * inodes around 6.2e15 against a safe-integer ceiling of 9.0e15, so two
-   * distinct inodes on a filesystem that numbers them higher would round to the
-   * same value. That failure is the dangerous direction -- it would declare an
-   * ordinary ancestor to be the home directory and drop the project root from
-   * the search entirely.
-   */
-  private static statIdentity(path: string): { dev: bigint; ino: bigint } | undefined {
-    try {
-      const stats = statSync(path, { bigint: true });
-      return { dev: stats.dev, ino: stats.ino };
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** Whether two filesystem identities are the same one. Split out to be tested exactly. */
-  static sameFileIdentity(a: { dev: bigint; ino: bigint }, b: { dev: bigint; ino: bigint }): boolean {
-    return a.dev === b.dev && a.ino === b.ino;
-  }
-
-  /**
-   * The home directory to use as a ceiling, or undefined if there is none.
-   *
-   * homedir() used to be a default parameter, which meant it ran before the
-   * function body and its result went unchecked. Two ways that hurt: with
-   * HOME='' it returns '', and resolve('') is the working directory -- so the
-   * ceiling became cwd and the walk stopped before it started, losing a real
-   * project's .env one level up. And in a container running as an arbitrary UID
-   * with no passwd entry, homedir() throws outright, which took down the whole
-   * environment load before it could even look at the variables already set.
-   *
-   * Anything relative or blank is rejected for the same reason: it would
-   * resolve against cwd.
-   *
-   * Every usable candidate is kept, not just the first. $HOME and the effective
-   * user's home are different facts and both are ceilings: under sudo, a
-   * service manager or a container, HOME=/root while the real home is
-   * /home/u -- measured, taking only the first left /home/u on the search list,
-   * which is precisely what a ceiling is for.
-   *
-   * An empty result means no ceiling could be established at all, and the
-   * caller must not walk anywhere on its own.
-   */
-  homeDirectories(
-    explicit?: string,
-    sources: Array<() => string | undefined> = [() => homedir(), () => userInfo().homedir]
-  ): string[] {
-    const found: string[] = [];
-    const seen = new Set<string>();
-
-    for (const source of [() => explicit, ...sources]) {
-      let value: string | undefined;
-      try {
-        value = source();
-      } catch {
-        continue; // no passwd entry, or no HOME to fall back on
-      }
-
-      const trimmed = value?.trim();
-      if (!trimmed || !isAbsolute(trimmed)) {
-        continue; // blank or relative would resolve against the working directory
-      }
-
-      const key = SmartEnvLoader.canonical(trimmed);
-      if (!seen.has(key)) {
-        seen.add(key);
-        found.push(trimmed);
-      }
-    }
-
-    return found;
-  }
-
-  /**
-   * Directories between `start` and the project root that contains it.
-   *
-   * A project root holds package.json or .git -- the markers every other tool
-   * uses. The walk stops there rather than continuing upward, and returns
-   * nothing when it finds none: without a marker there is nothing to say where
-   * a project would even begin.
-   *
-   * The home directory is a hard ceiling, checked before the marker. Stopping
-   * at "the first marker" alone was not enough, because that marker can be the
-   * home directory itself -- ~/.git is an ordinary dotfiles setup, and measured
-   * with it in place, a run from ~/scratch/subdir put ~ on the search list and
-   * loaded ~/.env. That crosses a credential boundary: another project's
-   * AI_STUDIO_API_KEY would be billed silently, and its CGMB_ALLOWED_ROOTS
-   * would widen which files may be uploaded to Google. A project that genuinely
-   * lives at ~ gets nothing from this walk, which is the safe direction to
-   * fail: the working directory is still searched, and the path can be set
-   * explicitly.
-   *
-   * `start` itself is excluded; the caller already searched it.
-   */
-  ancestorsUpToProjectRoot(start: string, home?: string): string[] {
-    const ceilings = this.homeDirectories(home);
-    if (ceilings.length === 0) {
-      return [];
-    }
-
-    const from = resolve(start);
-    const ancestors: string[] = [];
-    let current = from;
-
-    while (current !== dirname(current)) {
-      if (ceilings.some(ceiling => SmartEnvLoader.sameDirectory(current, ceiling))) {
-        return [];
-      }
-
-      if (current !== from) {
-        ancestors.push(current);
-      }
-
-      if (existsSync(join(current, 'package.json')) || existsSync(join(current, '.git'))) {
-        return ancestors;
-      }
-
-      current = dirname(current);
-    }
-
-    return [];
   }
 
   /**
@@ -445,86 +230,25 @@ export class SmartEnvLoader {
   }
 
   /**
-   * Find project root from a specific file path
+   * Removed with the search-path narrowing above: findProjectRootFromPath and
+   * findGlobalNpmInstallation existed only to add the installation and global
+   * npm directories to the default list, which is exactly what must not happen
+   * by default. Nothing else called them.
    */
-  private findProjectRootFromPath(filePath: string): string | null {
-    let currentPath = dirname(filePath);
-    
-    while (currentPath !== dirname(currentPath)) {
-      const packageJsonPath = join(currentPath, 'package.json');
-      if (existsSync(packageJsonPath)) {
-        return currentPath;
-      }
-      currentPath = dirname(currentPath);
-    }
-    
-    return null;
-  }
 
-  /**
-   * Find global npm installation directory
-   */
-  private async findGlobalNpmInstallation(): Promise<string | null> {
-    try {
-      // Try to find global npm directory
-      // Resolved and run by absolute path like every other probe: `npm` via a
-      // shell resolves against PATH -- and on Windows the current directory --
-      // so a repository could supply its own npm here.
-      const npmRoot = (probeCommand('npm', ['root', '-g'], { timeoutMs: 5000 }) ?? '').trim();
-      if (npmRoot === '') {
-        return null;
-      }
-      
-      const cgmbGlobalPath = join(npmRoot, 'claude-gemini-multimodal-bridge');
-      if (existsSync(cgmbGlobalPath)) {
-        return cgmbGlobalPath;
-      }
-    } catch (error) {
-      // npm not available or command failed
-    }
-
-    // Try alternative: look for cgmb binary and trace back
-    try {
-      const cgmbPath = findExecutable('cgmb');
-      
-      if (cgmbPath) {
-        // cgmb binary found, trace back to package directory
-        const binDir = dirname(cgmbPath);
-        const possibleProjectRoot = dirname(binDir);
-        
-        if (existsSync(join(possibleProjectRoot, 'package.json'))) {
-          return possibleProjectRoot;
-        }
-      }
-    } catch (error) {
-      // cgmb binary not found or which command failed
-    }
-
-    return null;
-  }
 
   /**
    * Check if required environment variables are already set
    */
   private checkEnvironmentVariables(): boolean {
-    // The keys AuthVerifier actually resolves, in the order it tries them.
-    //
-    // AI_STUDIO_API_KEY -- the one the README tells everyone to set -- was
-    // missing from this list, so anyone who exported it instead of writing a
-    // .env file was told the environment had not loaded. Measured: with only
-    // that variable set, this returned false.
-    //
-    // CLAUDE_API_KEY used to be here and is gone: nothing in src/ reads it
-    // (Claude Code carries its own session auth) and .env.example dropped it
-    // long ago, yet its presence alone was enough to report a configured
-    // environment while the AI Studio layer had no credential at all.
-    const credentialVars = [
-      'AI_STUDIO_API_KEY',
-      'GOOGLE_AI_STUDIO_API_KEY',  // deprecated fallback
-      'GEMINI_API_KEY',            // deprecated fallback
+    // Check for at least one of the key environment variables
+    const requiredVars = [
+      'GEMINI_API_KEY',
+      'GOOGLE_AI_STUDIO_API_KEY',
+      'CLAUDE_API_KEY'
     ];
 
-    return credentialVars.some(varName => !!process.env[varName]);
+    return requiredVars.some(varName => !!process.env[varName]);
   }
 
   /**
@@ -556,35 +280,20 @@ export class SmartEnvLoader {
     loaded: boolean;
     source: string | null;
     availableVars: Record<string, boolean>;
-    requiredVars: string[];
-    deprecatedVars: string[];
     foundFiles: string[];
     errors: string[];
   } {
-    // What this reports had drifted a whole migration behind what CGMB reads.
-    // AI_STUDIO_API_KEY -- the only credential the README asks for -- was
-    // absent, while GEMINI_CLI_PATH was shown as a healthy entry pointing at
-    // the CLI Google discontinued. Someone checking their setup was told the
-    // wrong things were fine and the right thing was missing.
-    const requiredVars = ['AI_STUDIO_API_KEY'];
-
-    const optionalVars = [
-      'ANTIGRAVITY_MODEL',
-      'ANTIGRAVITY_CLI_PATH',
+    const importantVars = [
+      'GEMINI_API_KEY',
+      'GOOGLE_AI_STUDIO_API_KEY', 
+      'CLAUDE_API_KEY',
       'CLAUDE_CODE_PATH',
-      // Decides which directories may have their contents uploaded to Google,
-      // so it belongs in any account of how this install is configured.
-      'CGMB_ALLOWED_ROOTS',
-      'LOG_LEVEL',
+      'GEMINI_CLI_PATH',
+      'LOG_LEVEL'
     ];
 
-    // Listed only when actually set: naming them unconditionally invites people
-    // to set a deprecated key, which is the opposite of the intent.
-    const deprecatedVars = ['GOOGLE_AI_STUDIO_API_KEY', 'GEMINI_API_KEY']
-      .filter(varName => !!process.env[varName]);
-
     const availableVars: Record<string, boolean> = {};
-    [...requiredVars, ...optionalVars, ...deprecatedVars].forEach(varName => {
+    importantVars.forEach(varName => {
       availableVars[varName] = !!process.env[varName];
     });
 
@@ -592,8 +301,6 @@ export class SmartEnvLoader {
       loaded: this.isLoaded && this.loadResult.success,
       source: this.loadResult.loadedFrom || null,
       availableVars,
-      requiredVars,
-      deprecatedVars,
       foundFiles: [...this.loadResult.foundFiles],
       errors: [...this.loadResult.errors]
     };

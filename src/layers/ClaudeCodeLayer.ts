@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from 'async_hooks';
-import { ChildProcess, execFileSync, spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
@@ -19,8 +18,7 @@ interface ClaudeCodeTask {
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
-import { buildSpawnTarget, resolveTrustedCommand, terminateProcessTree } from '../utils/processUtils.js';
-import { onShutdown } from '../utils/shutdown.js';
+import { buildSpawnTarget, resolveTrustedCommand } from '../utils/processUtils.js';
 
 /**
  * Said by whichever initialisation path fails first.
@@ -39,55 +37,6 @@ const CLAUDE_NOT_FOUND_MESSAGE =
  * ClaudeCodeLayer handles direct Claude Code execution with enhanced authentication support
  * Provides complex reasoning tasks and workflow orchestration capabilities
  */
-
-/**
- * The cancellation in force for the current execute() call.
- *
- * Per-call rather than per-instance: one layer instance serves concurrent
- * requests, so an instance field would have one caller giving up kill another
- * caller's child. Same mechanism as AIStudioLayer.
- */
-const claudeCancellation = new AsyncLocalStorage<AbortSignal>();
-
-/**
- * The `claude` children this process has started.
- *
- * They had no owner at all: no live set, no shutdown step, no exit backstop.
- * The layer ends a child when its own call is cancelled, which covers the
- * timeout, but says nothing about the process being interrupted -- Ctrl-C ended
- * the parent and left `claude` and its helpers running against packageRoot.
- */
-const liveClaudeChildren = new Set<ChildProcess>();
-
-onShutdown('claude', async () => {
-  const children = [...liveClaudeChildren];
-  liveClaudeChildren.clear();
-
-  for (const child of children) {
-    terminateProcessTree(child);
-  }
-
-  await Promise.all(children.map(child => new Promise<void>(resolve => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve();
-      return;
-    }
-    const done = setTimeout(resolve, 5000);
-    child.once('close', () => {
-      clearTimeout(done);
-      resolve();
-    });
-  })));
-});
-
-// The synchronous backstop, for a process.exit() that awaited nothing.
-process.once('exit', () => {
-  for (const child of liveClaudeChildren) {
-    terminateProcessTree(child);
-  }
-});
-
-
 export class ClaudeCodeLayer implements LayerInterface {
   private authVerifier: AuthVerifier;
   private claudePath?: string;
@@ -260,16 +209,9 @@ export class ClaudeCodeLayer implements LayerInterface {
   /**
    * Execute a task through Claude Code
    */
-  async execute(task: ClaudeCodeTask, signal?: AbortSignal): Promise<LayerResult> {
-    // Nothing is started for a caller that has already given up. Without this,
-    // the work ran and the cancellation then had to undo it -- and an
-    // interactive `claude` is not free to start.
-    if (signal?.aborted) {
-      throw new Error('Claude Code execution cancelled before it started');
-    }
-
+  async execute(task: ClaudeCodeTask): Promise<LayerResult> {
     return safeExecute(
-      async (operationSignal) => claudeCancellation.run(operationSignal, async () => {
+      async () => {
         const startTime = Date.now();
         
         // Use lightweight initialization for simple tasks
@@ -319,10 +261,9 @@ export class ClaudeCodeLayer implements LayerInterface {
             model: 'claude-code',
           },
         };
-      }),
+      },
       {
         operationName: 'execute-claude-code-task',
-        ...(signal ? { signal } : {}),
         layer: 'claude',
         timeout: this.getTaskTimeout(task),
       }
@@ -451,54 +392,43 @@ export class ClaudeCodeLayer implements LayerInterface {
    */
   getEstimatedDuration(task: ClaudeCodeTask, prompt?: string): number {
     const baseTime = 5000; // 5 seconds base
-
+    
     if (task.type === 'workflow' || task.action === 'workflow') {
       return baseTime * 3; // Workflows take longer
     }
-
+    
     if (task.action === 'complex_reasoning') {
       return baseTime * 2; // Complex reasoning takes longer
     }
-
-    // The prompt that will be sent, when the caller knows it. Reading only
-    // task.prompt missed every step whose text is assembled from its fields.
+    
+    // The prompt that will actually be sent, when the caller knows it. Reading
+    // only task.prompt missed every step whose text is assembled from its
+    // fields -- which is the case this budget kept cutting short.
     const text = prompt ?? task.prompt;
     if (text && text.length > 1000) {
       return baseTime * 1.5; // Longer prompts take more time
     }
-
+    
     return baseTime;
   }
 
   /**
    * Execute general Claude Code task
    */
-  private async executeGeneral(task: ClaudeCodeTask): Promise<string> {
-    const prompt = task.prompt || task.request || task.input || this.describeTask(task);
-
-    // Sized from the prompt that is actually sent, not from task.prompt. A step
-    // whose text is built here has no task.prompt at all, so the estimate
-    // scored it as the shortest possible request.
-    return await this.executeClaudeCommand(prompt, {
-      timeout: this.getTaskTimeout(task, prompt),
-    });
-  }
-
   /**
    * A prompt built from a task that carries no prose.
    *
    * Workflow steps addressed to this layer often carry structure rather than a
    * sentence: the analysis workflow's `analyze_requirements` step arrives as
-   * {documents, analysisType, outputRequirements}, and its `synthesize_analysis`
-   * step as {analysisResults, requirements}. None of those is prompt, request
-   * or input, so both fell through to the literal "Please help with this
-   * task." -- measured against a live run, Claude answered "no specific task
-   * has been described in this conversation", twice, and both answers were
-   * folded into the workflow result as though they were work.
+   * {documents, analysisType, outputRequirements}. None of those is prompt,
+   * request or input, so both fell through to the literal "Please help with
+   * this task." -- measured against a live run, Claude answered "no specific
+   * task has been described in this conversation", and that was folded into the
+   * workflow result as though it were work.
    */
   private describeTask(task: ClaudeCodeTask): string {
     const action = typeof task.action === 'string' ? task.action : task.type;
-    const skip = new Set(['action', 'type', 'files', 'options', 'workflow', 'depth']);
+    const skip = new Set(['action', 'type', 'files', 'options', 'workflow', 'depth', 'timeout']);
 
     const fields = Object.entries(task)
       .filter(([key, value]) => !skip.has(key) && value !== undefined && value !== null && value !== '')
@@ -515,6 +445,16 @@ export class ClaudeCodeLayer implements LayerInterface {
       : 'Please act on the following input:';
 
     return `${heading}\n\n${fields.join('\n')}`;
+  }
+
+  private async executeGeneral(task: ClaudeCodeTask): Promise<string> {
+    const prompt = task.prompt || task.request || task.input || this.describeTask(task);
+
+    // Sized from the prompt that is actually sent, not from task.prompt: a step
+    // whose text is built here has no task.prompt at all.
+    return await this.executeClaudeCommand(prompt, {
+      timeout: this.getTaskTimeout(task, prompt),
+    });
   }
 
   /**
@@ -570,15 +510,8 @@ export class ClaudeCodeLayer implements LayerInterface {
         cwd: this.packageRoot,
         env: this.buildChildEnv(),
         windowsHide: true,
-        // Its own process group on POSIX; see terminateProcessTree. Every
-        // child is tracked in liveClaudeChildren and ended by the shutdown
-        // step, so detaching does not make it anyone's orphan.
-        ...(process.platform === 'win32' ? {} : { detached: true }),
         ...target.spawnOptions,
       });
-
-      liveClaudeChildren.add(child);
-      child.once('close', () => liveClaudeChildren.delete(child));
 
       child.stdin.on('error', () => {
         // A child that exits before reading stdin gives us EPIPE; the close
@@ -588,56 +521,18 @@ export class ClaudeCodeLayer implements LayerInterface {
 
       let output = '';
       let errorOutput = '';
-      let settled = false;
-
-      // Cancellation ends the child, not just the waiting. A short workflow
-      // timeout used to return failure to the caller -- which fell back, or
-      // moved on -- while this `claude` ran to its own five-minute budget,
-      // still writing wherever it had been pointed.
-      const signal = claudeCancellation.getStore();
-
-      const stopOnAbort = (): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeoutId);
-        logger.info('Cancelling Claude Code execution', { pid: child.pid });
-        terminateProcessTree(child);
-        reject(new Error('Claude Code execution cancelled'));
-      };
 
       const timeoutId = setTimeout(() => {
-        // The tree is ended from the live parent, not after it.
-        //
-        // Two versions of this were wrong. The first escalated only if the
-        // parent was *still alive* two seconds after SIGTERM, so a `claude`
-        // that exits promptly left its helpers running -- the tidy case was the
-        // leaky one. The second always escalated, but still killed the parent
-        // first: on Windows what this holds is the cmd.exe that launched
-        // claude.cmd, and `taskkill /PID <parent> /T` cannot enumerate a tree
-        // whose root has already exited. Either way the helpers survived.
-        //
-        // So: end the tree while the parent is still there to be walked from,
-        // and let SIGTERM follow for a process that would rather leave tidily.
-        terminateProcessTree(child);
+        child.kill('SIGTERM');
+        // Escalate only if the process is genuinely still alive: `child.killed`
+        // only reports that a signal was delivered.
         setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) {
-            terminateProcessTree(child);
+            child.kill('SIGKILL');
           }
         }, 2000).unref();
-        settled = true;
         reject(new Error(`Claude Code execution timeout after ${timeout}ms`));
       }, timeout);
-
-      if (signal) {
-        if (signal.aborted) {
-          stopOnAbort();
-        } else {
-          signal.addEventListener('abort', stopOnAbort, { once: true });
-          child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
-        }
-      }
 
       child.stdout.on('data', (data) => {
         output += data.toString();
@@ -649,12 +544,7 @@ export class ClaudeCodeLayer implements LayerInterface {
 
       child.on('close', (code) => {
         clearTimeout(timeoutId);
-
-        if (settled) {
-          return; // already timed out or cancelled; the caller has its answer
-        }
-        settled = true;
-
+        
         if (code === 0 && output.trim() !== '') {
           logger.debug('Claude command completed successfully', {
             outputLength: output.length,
@@ -678,10 +568,6 @@ export class ClaudeCodeLayer implements LayerInterface {
 
       child.on('error', (error) => {
         clearTimeout(timeoutId);
-        if (settled) {
-          return;
-        }
-        settled = true;
         logger.error('Claude command process error', { error: error.message });
         reject(error);
       });
@@ -718,55 +604,16 @@ export class ClaudeCodeLayer implements LayerInterface {
    * internal reasoning calls with whatever model the host developer happened
    * to configure, so they are stripped and the child picks its own defaults.
    */
-  static readonly STRIPPED_CHILD_VARS = [
-    // Model overrides. A parent that has remapped the aliases would silently
-    // remap the child's model too.
-    'ANTHROPIC_MODEL',
-    'ANTHROPIC_DEFAULT_OPUS_MODEL',
-    'ANTHROPIC_DEFAULT_SONNET_MODEL',
-    'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-    'CLAUDE_CODE_SUBAGENT_MODEL',
+  private buildChildEnv(): NodeJS.ProcessEnv {
+    const env = { ...process.env };
 
-    // The parent session's identity. CGMB is commonly registered as an MCP
-    // server inside Claude Code, so when it shells out to `claude` the child
-    // inherited the session it was launched from: the same session id, the same
-    // entrypoint, the same IDE socket. The child then presents itself as part
-    // of a conversation it is not in.
-    'CLAUDECODE',
-    'CLAUDE_CODE_SESSION_ID',
-    'CLAUDE_CODE_ENTRYPOINT',
-    'CLAUDE_CODE_SSE_PORT',
-    'CLAUDE_CODE_IDE_HOST',
-    'CLAUDE_CODE_IDE_PORT',
-
-    // CGMB's own Google credentials. `claude` has no use for them, and the
-    // narrower the set of processes that hold a key, the fewer places it can
-    // leak from. The Antigravity layer already builds its child environment
-    // from an allowlist for the same reason; this is the same rule stated as a
-    // denylist, because unlike agy, `claude` legitimately needs a broad
-    // environment to find its own config and credentials.
-    'AI_STUDIO_API_KEY',
-    'GOOGLE_AI_STUDIO_API_KEY',
-    'GEMINI_API_KEY',
-  ] as const;
-
-  /**
-   * The environment the `claude` child gets: this process's, minus what it
-   * must not carry over. Exposed as a static so what is stripped can be
-   * checked without spawning anything.
-   */
-  static childEnvFrom(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-    const env = { ...source };
-
-    for (const name of ClaudeCodeLayer.STRIPPED_CHILD_VARS) {
-      delete env[name];
-    }
+    delete env.ANTHROPIC_MODEL;
+    delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
+    delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
+    delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
+    delete env.CLAUDE_CODE_SUBAGENT_MODEL;
 
     return env;
-  }
-
-  private buildChildEnv(): NodeJS.ProcessEnv {
-    return ClaudeCodeLayer.childEnvFrom(process.env);
   }
 
   /**
@@ -952,13 +799,12 @@ export class ClaudeCodeLayer implements LayerInterface {
    */
   private buildSynthesisPrompt(task: ClaudeCodeTask): string {
     let prompt = 'Please synthesize and respond to the following:\n\n';
-
-    // `request` is what a direct caller sends; a workflow step carries the same
-    // thing as `prompt`, and some callers as `input`. Only `request` was read,
-    // so every synthesis step of a workflow -- the last step of the analysis,
-    // conversion and orchestration flows -- reached Claude as two sentences of
-    // instructions with nothing to synthesise, and whatever came back was
-    // reported as the workflow's answer.
+    
+    // `request` is what a direct caller sends; a workflow step carries the
+    // same thing as `prompt`, and some callers as `input`. Reading only
+    // `request` meant every synthesis step of a workflow reached Claude as
+    // two sentences of instructions with nothing between them, and whatever
+    // came back was reported as the workflow's answer.
     const request = task.request
       ?? (typeof task.prompt === 'string' ? task.prompt : undefined)
       ?? (typeof task.input === 'string' ? task.input : undefined);
@@ -966,22 +812,17 @@ export class ClaudeCodeLayer implements LayerInterface {
     if (request) {
       prompt += `Request: ${request}\n\n`;
     }
-
-    const inputs = task.inputs as Record<string, unknown> | undefined;
-    if (inputs && typeof inputs === 'object') {
+    
+    if (task.inputs && typeof task.inputs === 'object') {
       prompt += 'Input Sources:\n';
-      Object.entries(inputs).forEach(([source, content], index) => {
-        // Upstream answers arrive as objects when a step published structured
-        // data; "[object Object]" is not something to synthesise from.
-        prompt += `${index + 1}. ${source}: ${
-          typeof content === 'string' ? content : JSON.stringify(content)
-        }\n`;
+      Object.entries(task.inputs).forEach(([source, content], index) => {
+        prompt += `${index + 1}. ${source}: ${content}\n`;
       });
       prompt += '\n';
     }
-
+    
     prompt += 'Please provide a comprehensive, well-structured response that synthesizes all the information.';
-
+    
     return prompt;
   }
 
@@ -1081,17 +922,10 @@ export class ClaudeCodeLayer implements LayerInterface {
 
     // A floor, not a guess. The estimate below is 5 seconds for anything that
     // is not a workflow or complex reasoning, so an ordinary step got 35
-    // seconds -- for an interactive `claude` invocation that answers a real
-    // question. Measured: the analysis workflow's first step timed out at
-    // exactly 35000ms as soon as it was given something to think about, having
-    // previously come back fast because it was answering a placeholder.
-    //
-    // The floor is this layer's own budget. A step is not a different kind of
-    // call from any other `claude` invocation, and the estimate is a guess with
-    // no measurement behind it: measured, one analyze_requirements step took 85
-    // seconds to do the work properly, which 120 seconds would clear only
-    // narrowly and 35 not at all. LayerManager bounds the step at the same five
-    // minutes, so this cannot outlive its caller.
+    // seconds to run an interactive `claude` answering a real question.
+    // Measured: one analyze_requirements step takes 85 seconds to do the work
+    // properly, and 12 seconds through `claude --print` directly. 35 fitted
+    // only while the step was answering a placeholder.
     return Math.max(this.getEstimatedDuration(task, prompt) + 30000, this.DEFAULT_TIMEOUT);
   }
 

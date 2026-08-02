@@ -10,7 +10,8 @@ export interface CacheEntry {
   metadata: {
     promptHash: string;
     searchEngine: string;
-    model: string;
+    /** Which model produced this answer; a different one must not reuse it. */
+    model?: string;
     resultCount: number;
     processingTime: number;
   };
@@ -53,11 +54,7 @@ export class SearchCache {
   /**
    * Get search results from cache
    */
-  async get(
-    query: string,
-    searchEngine: string = 'antigravity',
-    model: string = ''
-  ): Promise<any | null> {
+  async get(query: string, searchEngine: string = 'antigravity', model?: string): Promise<any | null> {
     const key = this.generateCacheKey(query, searchEngine, model);
     const entry = this.cache.get(key);
 
@@ -116,7 +113,7 @@ export class SearchCache {
     result: any, 
     searchEngine: string = 'antigravity',
     processingTime: number = 0,
-    model: string = ''
+    model?: string
   ): Promise<void> {
     const key = this.generateCacheKey(query, searchEngine, model);
     const timestamp = Date.now();
@@ -137,7 +134,7 @@ export class SearchCache {
       metadata: {
         promptHash: this.hashString(query),
         searchEngine,
-        model,
+        ...(model !== undefined && { model }),
         resultCount: this.countResults(result),
         processingTime
       }
@@ -158,13 +155,12 @@ export class SearchCache {
   /**
    * Generate cache key via query normalization
    */
-  private generateCacheKey(query: string, searchEngine: string, model: string = ''): string {
-    // The model is part of the key because it is part of the answer. Without
-    // it, changing ANTIGRAVITY_MODEL returned the previous model's results for
-    // the same words, with nothing to show the response had not come from the
-    // model that was asked for.
+  private generateCacheKey(query: string, searchEngine: string, model?: string): string {
+    // The model is part of the key. Two models asked the same question give
+    // different answers, and the caller chose which one it wanted; without it
+    // one model's reply was served as the other's.
     const normalizedQuery = this.normalizeQuery(query);
-    const dataToHash = `${normalizedQuery}:${searchEngine}:${model}`;
+    const dataToHash = `${normalizedQuery}:${searchEngine}:${model ?? 'default'}`;
     return this.hashString(dataToHash);
   }
 
@@ -172,42 +168,33 @@ export class SearchCache {
    * Normalize query
    */
   private normalizeQuery(query: string): string {
-    // There is deliberately no year rewriting here.
+    // Punctuation and whitespace only.
     //
-    // This used to fold 2024 through 2029 into a single token, so "AI news
-    // 2024" and "AI news 2026" hashed to one key and the later search silently
-    // returned the earlier answer. A year is the part of a search that says
-    // which facts are wanted; collapsing it turns a cache into a source of
-    // quietly wrong results, and this layer exists to fetch current
-    // information.
+    // What used to be here folded every year in 2024-2029 to one token and
+    // collapsed 最新の / 最近の / 新しい into a single word -- so "2024年の株価"
+    // and "2026年の株価" shared an entry, and a question about what is recent
+    // was answered from a question about what is newest. The caller got a
+    // success to a question it had not asked, with nothing to indicate it.
+    // Wording that differs is a question that differs.
     return query
       .toLowerCase()
       .trim()
-      // Normalize punctuation and symbols
       .replace(/[。、！？]/g, '')
-      .replace(/\s+/g, ' ')
-      // Normalize similar expressions
-      .replace(/について教えて|を説明して|について知りたい/g, 'について')
-      // 最近の / 最新の are not spellings of one another: the first asks about a
-      // span, the second about whatever is newest. Folding them together served
-      // "最近の台風を一覧にして" from a cached answer to "最新の台風を一覧にして" --
-      // measured, and the same mistake as the year rewrite above. Wording may be
-      // normalised here; a time range may not.
-      .replace(/具体的に|詳しく|詳細に/g, '詳細');
+      .replace(/\s+/g, ' ');
   }
 
   /**
    * Find similar entry
    */
-  private findSimilarEntry(query: string, searchEngine: string, model: string = ''): CacheEntry | null {
+  private findSimilarEntry(query: string, searchEngine: string, model?: string): CacheEntry | null {
     const normalizedQuery = this.normalizeQuery(query);
     const threshold = this.options.similarityThreshold || this.similarityThreshold;
 
     for (const entry of this.cache.values()) {
       if (entry.metadata.searchEngine !== searchEngine) {continue;}
-      // A near-enough question is still a different question when a different
-      // model answered it.
-      if (entry.metadata.model !== model) {continue;}
+      // Same reason the key carries it: a near-enough question asked of one
+      // model must not be answered from another model's reply.
+      if ((entry.metadata.model ?? 'default') !== (model ?? 'default')) {continue;}
       if (Date.now() > entry.expiresAt) {continue;}
 
       const similarity = this.calculateSimilarity(

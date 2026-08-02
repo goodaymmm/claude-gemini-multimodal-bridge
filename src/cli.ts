@@ -6,7 +6,7 @@ import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } fro
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger } from './utils/logger.js';
-import { installShutdownHandlers, onShutdown } from './utils/shutdown.js';
+import { shutdownAIStudio } from './layers/AIStudioLayer.js';
 import { getEnvironmentStatus, loadEnvironmentSmart } from './utils/envLoader.js';
 import { getManualSetupInstructions, getMCPStatus, setupCGMBMCP } from './utils/mcpConfigManager.js';
 import path from 'path';
@@ -143,11 +143,6 @@ program
       if (options.verbose || options.debug) {
         process.env.LOG_LEVEL = 'debug';
         process.env.CGMB_DEBUG = 'true';
-        // And to the logger that already exists: it is built during module
-        // import, before argv is parsed, so setting the environment here is on
-        // its own too late. Measured before this: a --debug run emitted not one
-        // line above info.
-        logger.setLevel('debug');
       }
 
       // Load environment variables with smart discovery
@@ -186,15 +181,15 @@ program
         } catch (error) {
           logger.error('Error during server shutdown', error as Error);
         }
+
+        // The MCP child this server started while it was running. Its stdio
+        // pipes keep this process alive, and nothing else ends it.
+        await shutdownAIStudio();
+        process.exit(0);
       };
 
-      // Registered as a shutdown step rather than as its own signal listener.
-      // Two listeners for the same signal ran concurrently: the central one
-      // started runShutdown().finally(process.exit) while this one was still
-      // awaiting server.stop(), so with a short shutdown the process exited
-      // before the transport had closed -- and which finished first depended on
-      // timing. One handler, one order.
-      onShutdown('cgmb-server', gracefulShutdown);
+      process.on('SIGINT', gracefulShutdown);
+      process.on('SIGTERM', gracefulShutdown);
       
     } catch (error) {
       logger.error('Failed to start CGMB server', error as Error);
@@ -1614,16 +1609,11 @@ program
       
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        (signal) => {
-          // A timeout has to reach the process doing the work, or it only ends
-          // the waiting while the billed request carries on.
-          signal.addEventListener('abort', () => aiStudioLayer.abortActiveOperations('generate-image timeout'), { once: true });
-          return aiStudioLayer.generateImage(safePrompt, {
+        () => aiStudioLayer.generateImage(safePrompt, {
           style: options.style,
           quality: 'high',
           aspectRatio: '1:1'
-          });
-        },
+        }),
         'generate-image',
         120000 // 2 minutes base, automatically adjusted for environment
       );
@@ -1669,7 +1659,13 @@ program
   .description('Generate audio/speech from text using AI Studio')
   .option('-v, --voice <voice>', 'Voice name (Kore, Puck, etc.)', 'Kore')
   .option('-o, --output <path>', 'Output audio file path')
-  .option('--script', 'Generate script first then convert to audio')
+  // `--script` was offered here and could not be carried out. It ran a
+  // two-step path whose first step asked the AI Studio MCP server for a tool
+  // named generate_text; the server has never had one, so the request came back
+  // `MCP error -32601: Unknown tool: generate_text` -- in 1.2.0 and every
+  // version before it. It appeared in --help and nowhere else: no README entry,
+  // nothing in docs/, no MCP tool. Offering it only promised something that did
+  // not exist. Removed rather than left as a trap; see tests/cli-surface.
   .action(async (text, options) => {
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
@@ -1698,16 +1694,11 @@ program
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        (signal) => {
-          signal.addEventListener('abort', () => aiStudioLayer.abortActiveOperations('generate-audio timeout'), { once: true });
-          return options.script ?
-            aiStudioLayer.generateAudioWithScript(text) :
-            aiStudioLayer.generateAudio(text, {
-              voice: options.voice,
-              format: 'wav',
-              quality: 'hd'
-            });
-        },
+        () => aiStudioLayer.generateAudio(text, {
+          voice: options.voice,
+          format: 'wav',
+          quality: 'hd'
+        }),
         'generate-audio',
         90000 // 1.5 minutes base, automatically adjusted for environment
       );
@@ -2009,9 +2000,7 @@ program
       // Execute with immediate response timeout mechanism
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        (signal) => {
-          signal.addEventListener('abort', () => layerManager.abortActiveOperations('cli timeout'), { once: true });
-          return layerManager.executeWithOptimalLayer(
+        () => layerManager.executeWithOptimalLayer(
           {
             prompt: analysisPrompt,
             files: fileReferences,
@@ -2022,8 +2011,7 @@ program
               preferredLayer: userPreferredLayer
             }
           }
-          );
-        },
+        ),
         'analyze-documents',
         240000 // 4 minutes base, automatically adjusted for environment and file count
       );
@@ -2099,9 +2087,7 @@ program
       
       // Execute with unified timeout management for consistent behavior
       const result = await withCLITimeout(
-        (signal) => {
-          signal.addEventListener('abort', () => layerManager.abortActiveOperations('cli timeout'), { once: true });
-          return layerManager.executeWithOptimalLayer(
+        () => layerManager.executeWithOptimalLayer(
           {
             prompt: options.prompt,
             files: fileRefs,
@@ -2111,8 +2097,7 @@ program
               execution_mode: 'adaptive'
             }
           }
-          );
-        },
+        ),
         'multimodal-process',
         300000 // 5 minutes base, automatically adjusted for environment and file count
       );
@@ -2198,21 +2183,14 @@ program
       console.log('🔑 Key Environment Variables');
       console.log('═'.repeat(30));
       Object.entries(envStatus.availableVars).forEach(([key, isSet]) => {
-        // An unset optional setting is not a fault. Marking everything with ❌
-        // made a correctly configured install look broken, which is how the
-        // genuinely missing key went unnoticed.
-        const required = envStatus.requiredVars.includes(key);
-        const icon = isSet ? '✅' : (required ? '❌' : '➖');
-        const note = envStatus.deprecatedVars.includes(key) ? ' (deprecated)' : '';
-
+        const icon = isSet ? '✅' : '❌';
         if (key.includes('KEY') && isSet) {
           const value = process.env[key];
           const masked = value ? `${value.substring(0, 8)}...${value.slice(-4)}` : 'Not set';
-          console.log(`${icon} ${key}: ${masked}${note}`);
+          console.log(`${icon} ${key}: ${masked}`);
         } else {
           const value = process.env[key];
-          const shown = value || (required ? 'Not set' : 'unset (optional)');
-          console.log(`${icon} ${key}: ${shown}${note}`);
+          console.log(`${icon} ${key}: ${value || 'Not set'}`);
         }
       });
 
@@ -2299,21 +2277,16 @@ program.on('option:*', function(this: any) {
   }
 });
 
-// Parse command line arguments.
-//
-// parseAsync, so there is somewhere to wait. The exit hook that sweeps agy
-// workspaces cannot: an 'exit' handler may only do synchronous work, and on
-// Windows a removal issued while the process is still dying fails because the
-// files are still open. Here the children are ended, awaited, and only then are
-// the directories removed. Handlers that call process.exit() themselves still
-// fall back to the hook.
-// Every mode, not just `serve`. A one-shot command spawns `claude`, `agy` and
-// an MCP server too, and Ctrl-C in the middle of one used to end the parent and
-// leave them running. installShutdownHandlers() existed for this and was never
-// called, so it protected nothing.
-installShutdownHandlers();
+// The ordinary end of a one-shot command. 'beforeExit' fires when the event
+// loop empties -- which is what a finished command does, and what a running
+// server never does -- so this ends the MCP child for `cgmb search` and friends
+// without touching `serve`.
+process.on('beforeExit', () => {
+  void shutdownAIStudio();
+});
 
-await program.parseAsync();
+// Parse command line arguments
+program.parse();
 
 // If no command provided, show help
 if (!process.argv.slice(2).length) {

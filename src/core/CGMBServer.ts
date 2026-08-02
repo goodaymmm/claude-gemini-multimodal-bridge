@@ -241,13 +241,13 @@ export class CGMBServer {
                         args: { type: 'array', items: { type: 'string' } }
                       }
                     },
-                    // No aistudioFormat here on purpose. Nothing ever
-                    // consumed one: a request carrying it was logged and then
-                    // routed the ordinary way, so advertising it promised a
-                    // shortcut that does not exist. It is still accepted and
-                    // reported (see processPreformattedRequest) rather than
-                    // silently dropped, for clients written against the old
-                    // schema.
+                    aistudioFormat: {
+                      type: 'object',
+                      properties: {
+                        apiData: { type: 'object' },
+                        files: { type: 'array', items: { type: 'string' } }
+                      }
+                    }
                   }
                 },
                 files: {
@@ -1027,7 +1027,6 @@ export class CGMBServer {
       // ignored.
       logger.warn('Preformatted AI Studio payloads are not supported; routing this request normally', {
         hint: 'Send the request without preformatted/formattedData to use the AI Studio layer.',
-        note: 'The request still runs on the AI Studio layer -- only the preformatted payload is ignored.',
       });
     }
 

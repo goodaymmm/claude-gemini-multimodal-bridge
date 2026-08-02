@@ -233,106 +233,18 @@ function checkClaudeCode() {
   return false;
 }
 
-/**
- * Whether a flag-shaped environment variable means yes.
- *
- * `if (process.env.CI)` treats "false" as set, because every non-empty string
- * is truthy. Measured: CI=false, CI=0, CI=no and CI=off all skipped the setup.
- * Somewhere that sets CI=false to say "this is not CI" got no .env and no MCP
- * registration, and found out at first use.
- */
-function isEnabledFlag(value) {
-  const normalised = String(value ?? '').trim().toLowerCase();
-  if (normalised === '') {
-    return false;
-  }
-  return !['false', '0', 'no', 'off'].includes(normalised);
-}
-
-/** True when this install is running on a CI runner. */
-function isCiEnvironment(env = process.env) {
-  return isEnabledFlag(env.CI) || isEnabledFlag(env.CONTINUOUS_INTEGRATION);
-}
-
-/**
- * True when npm is installing this package globally.
- *
- * Two spellings reach the same place and npm reports them differently:
- * `npm i -g` sets npm_config_global=true, while `npm i --location=global`
- * sets npm_config_location=global and leaves npm_config_global unset.
- * Measured with a probe package on npm 10.9.2. Checking only the first meant
- * the second kept the behaviour this was meant to fix.
- */
-function isGlobalInstall(env = process.env) {
-  return env.npm_config_global === 'true' || env.npm_config_location === 'global';
-}
-
-/**
- * The project root of a local install.
- *
- * npm passes the package root as npm_config_local_prefix. INIT_CWD is the
- * directory npm was *invoked from*, which is only the same thing when the user
- * happened to run npm at the top of the project -- measured, running
- * `npm i <pkg>` from a subdirectory gives INIT_CWD=<proj>/subdir and
- * npm_config_local_prefix=<proj>. INIT_CWD stays as a fallback for npm
- * versions that do not set the former.
- */
-function localInstallRoot(env = process.env) {
-  return env.npm_config_local_prefix || env.INIT_CWD || process.cwd();
-}
-
-/**
- * Whether this copy of CGMB is a source checkout rather than a published one.
- *
- * "Not a global install" was the first attempt and it recommended `npm run
- * build` to anyone installing CGMB as a dependency. The second attempt asked
- * whether dist/cli.js existed, which is wrong in the other direction: dist/ is
- * gitignored, so a checkout that was built and then pulled, or had its branch
- * switched, keeps a stale entry point and reads as up to date. Nothing on disk
- * can distinguish a stale build from a current one.
- *
- * src/ and .git are the reliable signal instead -- `files` ships neither, so a
- * published copy has neither. In a checkout the build step is always offered,
- * regardless of what dist/ holds: rebuilding is cheap and harmless, while
- * running a stale build is neither.
- */
-function isSourceCheckout(packageRoot = path.join(__dirname, '..')) {
-  return fs.existsSync(path.join(packageRoot, 'src'))
-    || fs.existsSync(path.join(packageRoot, '.git'));
-}
-
 // Setup environment file
 function setupEnvironment() {
   log('🔧 Setting up environment configuration...');
-
-  // A global install has no project directory to put this in.
-  //
-  // process.cwd() during `npm install -g` is the package directory npm is
-  // installing into, so the file landed at
-  // <prefix>/lib/node_modules/claude-gemini-multimodal-bridge/.env -- measured
-  // -- while the next-steps text told the user to go and edit ".env". Nobody
-  // was going to find that. INIT_CWD would be wherever `npm i -g` was typed,
-  // which is just as likely to be $HOME, so writing a file is wrong either
-  // way: the right location is whichever directory they later run cgmb from,
-  // and only they know that.
-  if (isGlobalInstall()) {
-    log('ℹ️  Global install: create a .env where you will run cgmb', 'info');
-    log('   cd <your project> && printf "AI_STUDIO_API_KEY=<key>\\n" > .env', 'info');
-    log('   Get a key: https://aistudio.google.com/app/apikey', 'info');
-    log('   Or export AI_STUDIO_API_KEY instead -- no file needed', 'info');
-    return true;
-  }
-
-  // Local install: the project root, which is not necessarily where npm was run.
-  const targetDir = localInstallRoot();
-  const envPath = path.join(targetDir, '.env');
-  const envExamplePath = path.join(targetDir, '.env.example');
-
+  
+  const envPath = path.join(process.cwd(), '.env');
+  const envExamplePath = path.join(process.cwd(), '.env.example');
+  
   if (fs.existsSync(envPath)) {
     log('✅ .env file already exists', 'success');
     return true;
   }
-
+  
   let envContent = '';
   
   if (fs.existsSync(envExamplePath)) {
@@ -487,26 +399,20 @@ function showCompletionSummary(results) {
     console.log(`   ${status} ${component}`);
   });
   
-  // The steps differ by install kind. A global install has no project .env to
-  // edit, and only an unbuilt checkout needs building -- gating the build step
-  // on "not global" still sent it to anyone installing CGMB as a dependency,
-  // whose published copy already ships dist/.
-  const global = isGlobalInstall();
-  const steps = [
-    global
-      ? 'Set your AI Studio API key, in the directory you will run cgmb from:\n' +
-        '   printf "AI_STUDIO_API_KEY=<key>\\n" > .env   (or export it)\n' +
-        '   Get a key: https://aistudio.google.com/app/apikey'
-      : 'Edit .env and add your AI Studio API key:\n' +
-        '   Get a key: https://aistudio.google.com/app/apikey',
-    ...(isSourceCheckout() ? ['Build the project:\n   npm run build'] : []),
-    'Verify installation:\n   cgmb verify',
-    'Set up authentication:\n   cgmb auth --interactive',
-    ...(results['MCP Integration'] ? [] : ['Set up Claude Code MCP integration:\n   cgmb setup-mcp']),
-  ];
-
   console.log('\n📋 Next Steps:');
-  steps.forEach((step, i) => console.log(`${i + 1}. ${step}`));
+  console.log('1. Edit .env file and add your API keys:');
+  console.log('   - Get Gemini API key: https://aistudio.google.com/app/apikey');
+  console.log('2. Build the project (if in development):');
+  console.log('   npm run build');
+  console.log('3. Verify installation:');
+  console.log('   cgmb verify');
+  console.log('4. Set up authentication:');
+  console.log('   cgmb auth --interactive');
+  
+  if (!results['MCP Integration']) {
+    console.log('5. Set up Claude Code MCP integration:');
+    console.log('   cgmb setup-mcp');
+  }
   
   console.log('\n💡 For help and documentation:');
   console.log('   cgmb --help');
@@ -550,15 +456,7 @@ function checkNodeVersion(version, requiredMajor) {
   };
 }
 
-module.exports = {
-  checkNodeVersion,
-  requiredNodeMajor,
-  isCiEnvironment,
-  isGlobalInstall,
-  localInstallRoot,
-  isSourceCheckout,
-  setupEnvironment,
-};
+module.exports = { checkNodeVersion, requiredNodeMajor };
 
 // Main setup function
 async function main() {
@@ -647,15 +545,13 @@ process.on('SIGTERM', () => {
 if (require.main === module) {
   // Skip postinstall in CI environments.
   //
-  // This used to sit above the guard, at module scope, so merely requiring this
-  // file under CI called process.exit(0) before any test could run. Measured on
-  // this repository: `CI=true npm test` reported 152 tests where a local run
-  // reported 165 -- the thirteen missing ones were every case in the two files
-  // that import this module, including the entire regression guard for the
-  // install-kind detection. Exit code 0, so CI stayed green while proving
-  // nothing. Inside the guard the skip still applies to the only situation it
-  // was for: npm running this as a script.
-  if (isCiEnvironment()) {
+  // This sat above the guard, at module scope, so requiring the file under CI
+  // ended the process that required it -- and a test file that imports it is
+  // that process. On GitHub Actions, which sets CI,
+  // postinstall-node-version.test.mjs reported one case where a local run
+  // reported six, and exited 0: five cases silently absent, the run green, and
+  // nothing proven by it.
+  if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
     log('🔄 CI environment detected, skipping interactive setup', 'info');
     process.exit(0);
   }

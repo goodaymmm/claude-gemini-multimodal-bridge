@@ -1,7 +1,4 @@
-import { AsyncLocalStorage } from 'async_hooks';
-import { terminateProcessTree, windowsTerminateTree } from '../utils/processUtils.js';
-import { onShutdown } from '../utils/shutdown.js';
-import { spawn } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { createWriteStream, promises as fsPromises } from 'fs';
 import { mkdir } from 'fs/promises';
 import * as fs from 'fs';
@@ -94,55 +91,22 @@ function detectLanguage(text: string): string | null {
  */
 
 /**
- * The cancellation in force for the current execute() call.
- *
- * Threading a signal parameter through every dispatch branch and on into ten
- * executeMCPCommand call sites would be a wide mechanical change for one fact
- * that is the same everywhere. An instance field cannot hold it: one layer
- * instance serves concurrent requests, so one caller giving up would kill
- * another caller's child. Async context is per-call and follows the awaits.
- */
-const cancellation = new AsyncLocalStorage<AbortSignal>();
-
-
-/**
- * The persistent MCP servers this process has started.
- *
- * Nothing ever ended one. It is reused across requests and replaced on a TTL,
- * so a run that used the optimized path -- general text, multi-PDF analysis --
- * left a node server running with its stdio pipes attached, and those pipes
- * keep the parent's event loop alive: the CLI had nothing left to do and would
- * not exit. Measured under WSL, where a test file whose every case passed then
- * hung until the runner's timeout.
+ * The persistent MCP servers this process started, so an entry point can end
+ * them without holding a reference to every layer instance.
  */
 const livePersistentProcesses = new Set<any>();
 
-onShutdown('aistudio', () => shutdownAIStudio());
-
-// The synchronous backstop, for a process.exit() that did not await anything.
-// It cannot wait for a close, so it kills the tree and leaves it there.
-process.once('exit', () => {
-  for (const child of livePersistentProcesses) {
-    terminateProcessTree(child);
-  }
-});
-
-/**
- * End every persistent MCP server this process started, and wait for them.
- *
- * Called before the CLI exits, and by tests that have driven the optimized
- * path. Safe when there is nothing running.
- */
+/** End every persistent MCP server this process started. */
 export async function shutdownAIStudio(timeoutMs = 5000): Promise<void> {
   const children = [...livePersistentProcesses];
   livePersistentProcesses.clear();
 
-  if (children.length === 0) {
-    return;
-  }
-
   for (const child of children) {
-    terminateProcessTree(child);
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone.
+    }
   }
 
   await Promise.all(children.map(child => new Promise<void>(resolve => {
@@ -169,15 +133,7 @@ export class AIStudioLayer implements LayerInterface {
   private antigravityLayer: AntigravityCLILayer | undefined;
   private mcpServerProcess?: any;
   private persistentMCPProcess?: any; // Persistent MCP process for better performance
-  /**
-   * Children currently doing billed work, so a timeout can actually end it.
-   *
-   * The CLI wraps image, audio, document and multimodal runs in a timeout that
-   * used to end only the waiting: the request kept running in the child, was
-   * still billed, and a retry on top of it paid twice. Cancellation has to
-   * reach a process, and this is the set of processes it has to reach.
-   */
-  private activeChildren = new Set<any>();
+  private mcpProcessStartTime = 0; // Track when MCP process was started
 
   /**
    * Requests waiting on the shared MCP process, keyed by the id they sent.
@@ -185,13 +141,18 @@ export class AIStudioLayer implements LayerInterface {
    * The shared process answers several callers, so an answer has to be matched
    * to the caller who asked for it. Before this, each call added its own stdout
    * listener and settled on the first line carrying a result or an error --
-   * whatever id it had -- so two concurrent requests both took the first
-   * answer and one caller was handed the other's output.
+   * whatever id it held -- so two concurrent requests both took the first
+   * answer and one caller was handed the other's output, with nothing to
+   * indicate it.
+   *
+   * Each entry also records which process generation it was sent to. The TTL
+   * replaces the process without waiting, so an answer (or an exit) from the
+   * outgoing one must not settle or fail a request already re-sent to its
+   * replacement.
    */
   private pendingOptimized = new Map<
     number,
     {
-      /** Which process generation this request was sent to. */
       child: unknown;
       settle: (response: { result?: unknown; error?: { message?: string } }) => void;
     }
@@ -202,7 +163,6 @@ export class AIStudioLayer implements LayerInterface {
 
   /** The tail of the MCP server's stderr, for explaining a timeout. */
   private recentMCPStderr = '';
-  private mcpProcessStartTime = 0; // Track when MCP process was started
   private readonly MCP_PROCESS_TTL = 10 * 60 * 1000; // 10 minutes MCP process lifetime
   private isInitialized = false;
   private isLightweightInitialized = false; // Fast initialization for simple tasks
@@ -397,9 +357,9 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Execute a task through AI Studio
    */
-  async execute(task: any, signal?: AbortSignal): Promise<LayerResult> {
+  async execute(task: any): Promise<LayerResult> {
     return safeExecute(
-      async (operationSignal) => cancellation.run(operationSignal, async () => {
+      async () => {
         const startTime = Date.now();
         
         // Use lightweight initialization for simple tasks
@@ -494,12 +454,11 @@ export class AIStudioLayer implements LayerInterface {
             model: AI_MODELS.MULTIMODAL_DEFAULT,
           },
         };
-      }),
+      },
       {
         operationName: 'execute-aistudio-task',
         layer: 'aistudio',
         timeout: this.getTaskTimeout(task),
-        ...(signal ? { signal } : {}),
       }
     );
   }
@@ -737,7 +696,7 @@ export class AIStudioLayer implements LayerInterface {
               corePrompt: corePrompt.substring(0, 50)
             });
             
-            const translatedCore = await this.antigravityLayer.translateToEnglish(corePrompt, detectedLang, cancellation.getStore());
+            const translatedCore = await this.antigravityLayer.translateToEnglish(corePrompt, detectedLang);
             // Reconstruct prompt with original prefix + translated core
             const originalPrefix = prompt.substring(0, prompt.length - corePrompt.length);
             processedPrompt = originalPrefix + translatedCore;
@@ -896,50 +855,17 @@ export class AIStudioLayer implements LayerInterface {
     }
   }
 
-  /**
-   * Generate audio with script generation (2-step process)
-   */
-  async generateAudioWithScript(prompt: string, options: any = {}): Promise<MediaGenResult> {
-    logger.info('Generating audio with script generation', {
-      prompt: prompt.substring(0, 100),
-      hasMultipleSpeakers: !!options.speakers
-    });
-
-    try {
-      // Step 1: Generate the script.
-      //
-      // This was hardcoded to gemini-2.0-flash, a generation Google has shut
-      // down, so the request could only be rejected -- the same defect as the
-      // gemini-2.0-flash-exp that was removed from six call sites, missed
-      // because the check that found those forbade one exact literal.
-      const scriptPrompt = options.scriptPrompt || 
-        `Generate a script for the following request: ${prompt}. ` +
-        (options.speakers ? 
-          `Include dialogue for speakers: ${options.speakers.map((s: any) => s.name).join(', ')}.` : 
-          'Write it as a single narrator script.');
-      
-      const scriptResult = await this.executeMCPCommandOptimized('generate_text', {
-        prompt: scriptPrompt,
-        model: AI_MODELS.GEMINI_FLASH,
-        maxOutputTokens: 1000
-      });
-
-      const script = scriptResult.text || scriptResult.content?.[0]?.text || 'No script generated';
-      logger.info('Script generated successfully', { scriptLength: script.length });
-
-      // Step 2: Convert script to audio
-      const audioOptions = {
-        ...options,
-        script // Pass the generated script for reference
-      };
-      
-      return await this.generateAudio(script, audioOptions);
-      
-    } catch (error) {
-      logger.error('Failed to generate audio with script', error as Error);
-      throw error;
-    }
-  }
+  // generateAudioWithScript lived here: write a script with an LLM, then read
+  // it aloud. Its first step asked the AI Studio MCP server for a `generate_text`
+  // tool, and the server has never implemented one, so the path returned
+  // `MCP error -32601` on every call it ever received. Its only caller was the
+  // CLI's `--script` option, which is gone for the same reason.
+  //
+  // A hard-coded `gemini-2.0-flash` on that request was replaced with
+  // AI_MODELS.GEMINI_FLASH earlier in this branch. That change had no effect
+  // the user could see: the request was refused for the missing tool before the
+  // model was ever read. Reinstating the two-step path means building it, not
+  // restoring it -- which belongs in a release that can verify it.
 
   /**
    * Advanced audio analysis with enhanced features
@@ -1483,6 +1409,128 @@ export class AIStudioLayer implements LayerInterface {
     throw new Error(errorMessage);
   }
 
+  /** A request id no other in-flight request on this process can share. */
+  private nextOptimizedRequestId(): number {
+    this.optimizedRequestSeq += 1;
+    return this.optimizedRequestSeq;
+  }
+
+  /**
+   * Attach the single reader that routes answers to the requests waiting on
+   * them, and fail this generation's waiters if the process goes away.
+   */
+  private attachResponseRouter(child: any): void {
+    let buffered = '';
+
+    // setEncoding before the listener, so Node's decoder holds partial
+    // multi-byte sequences across chunk boundaries rather than turning one
+    // character into two U+FFFD.
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+
+    child.stdout?.on('data', (chunk: string) => {
+      buffered += chunk;
+
+      // Complete lines only; the tail may be half an answer.
+      const lines = buffered.split(/\r?\n/);
+      buffered = lines.pop() ?? '';
+
+      for (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+
+        let response: { id?: unknown; result?: unknown; error?: { message?: string } };
+        try {
+          response = JSON.parse(line);
+        } catch {
+          continue; // not a frame; the server logs prose here too
+        }
+
+        if (response.result === undefined && response.error === undefined) {
+          continue; // a notification, not an answer
+        }
+
+        const entry = typeof response.id === 'number'
+          ? this.pendingOptimized.get(response.id)
+          : undefined;
+
+        // Only from the generation it was sent to: ids restart with each
+        // process, so an answer from an outgoing one must not settle a request
+        // already re-sent to its replacement.
+        if (entry && entry.child === child) {
+          entry.settle(response);
+        } else {
+          logger.debug('MCP answer with no caller waiting', { id: response.id });
+        }
+      }
+    });
+
+    child.stderr?.on('data', (chunk: string) => {
+      // Kept for the timeout message, bounded so a chatty server cannot grow it.
+      this.recentMCPStderr = (this.recentMCPStderr + chunk).slice(-4000);
+    });
+
+    const failThisGeneration = (why: string): void => {
+      // This generation's requests only. Clearing the whole map would fail
+      // everything registered against the replacement too, so a TTL rollover
+      // under load rejected requests that were running perfectly well.
+      const mine = [...this.pendingOptimized.entries()].filter(([, e]) => e.child === child);
+      for (const [id] of mine) {
+        this.pendingOptimized.delete(id);
+      }
+      for (const [, e] of mine) {
+        e.settle({ error: { message: why } });
+      }
+    };
+
+    child.on('exit', (code: number) => failThisGeneration(
+      `the AI Studio MCP process exited (code ${code}) before answering`
+    ));
+    child.on('error', (error: Error) => failThisGeneration(
+      `the AI Studio MCP process failed: ${error.message}`
+    ));
+  }
+
+  /**
+   * End the persistent MCP process this layer owns, and wait for it.
+   *
+   * Nothing ever ended one. It is reused across requests and replaced only on a
+   * TTL, so a run that used the optimized path left a node server running with
+   * its stdio pipes attached -- and those pipes keep the parent's event loop
+   * alive: `cgmb` had nothing left to do and would not exit.
+   *
+   * Safe to call when nothing is running, and safe to call twice: a signal
+   * handler and the ordinary end of a command can both arrive.
+   */
+  async shutdown(timeoutMs = 5000): Promise<void> {
+    const child = this.persistentMCPProcess;
+    if (!child) {
+      return;
+    }
+
+    this.persistentMCPProcess = undefined;
+    livePersistentProcesses.delete(child);
+
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone.
+    }
+
+    await new Promise<void>(resolve => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      const done = setTimeout(resolve, timeoutMs);
+      child.once('close', () => {
+        clearTimeout(done);
+        resolve();
+      });
+    });
+  }
+
   /**
    * Get or create persistent MCP process for better performance
    */
@@ -1497,13 +1545,16 @@ export class AIStudioLayer implements LayerInterface {
       // Clean up old process if exists
       if (this.persistentMCPProcess && !this.persistentMCPProcess.killed) {
         try {
-          // One helper, which already falls back for itself. Both branches used
-          // to be hand-written here, and the Windows one waited for an
-          // exception that windowsTerminateTree does not throw -- it returns
-          // false. So when taskkill failed (AppLocker, a timeout, a missing
-          // executable) the fallback kill was unreachable and the old server
-          // was orphaned on every TTL rollover.
-          terminateProcessTree(this.persistentMCPProcess);
+          if (isPlatformWindows()) {
+            // Windows: Use taskkill for reliable termination
+            try {
+              execSync(`taskkill /pid ${this.persistentMCPProcess.pid} /T /F`, { stdio: 'ignore' });
+            } catch {
+              this.persistentMCPProcess.kill();
+            }
+          } else {
+            this.persistentMCPProcess.kill('SIGTERM');
+          }
         } catch (error) {
           logger.debug('Error killing old MCP process', { error: (error as Error).message });
         }
@@ -1523,14 +1574,23 @@ export class AIStudioLayer implements LayerInterface {
         throw new Error(`AI Studio MCP server not found at: ${mcpServerPath}`);
       }
       
-      // Windows requires shell: true for proper path resolution and process spawning
-      const isWindowsSpawn = process.platform === 'win32';
-      this.persistentMCPProcess = spawn('node', [mcpServerPath], {
+      // No shell, and this interpreter rather than whatever `node` resolves to.
+      //
+      // `shell: true` on Windows made the spawn `cmd.exe /d /s /c "node <path>"`,
+      // so the ChildProcess held here was the shell and the server was its
+      // child. kill() then ended the shell and left the server running,
+      // reparented, still holding the stdio handles it had inherited. Measured:
+      // cmd.exe at pid A, node at pid B with parent A; after shutdown A was gone
+      // and B was not.
+      //
+      // The shell was there for path resolution, which process.execPath answers
+      // outright -- it is an absolute path, needs no PATH lookup, and pins the
+      // server to the interpreter already running rather than a different node
+      // that happens to come first.
+      this.persistentMCPProcess = spawn(process.execPath, [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
-        shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
-        // Its own process group on POSIX; see terminateProcessTree.
-        ...(isWindowsSpawn ? {} : { detached: true }),
+        shell: false,
         env: {
           ...process.env,
           AI_STUDIO_API_KEY: this.getAIStudioApiKey(),
@@ -1540,17 +1600,16 @@ export class AIStudioLayer implements LayerInterface {
       });
       
       // Pinned to this generation. The handlers below outlive it: when the TTL
-      // replaces the process, the old one's exit arrives after the field has
-      // already been reassigned, so reading `this.persistentMCPProcess` there
-      // deleted the *new* process from the live set and set the field to
-      // undefined -- orphaning a healthy server and forcing a third spawn. Ten
-      // minutes of uptime and one concurrent request is all it takes.
+      // replaces the process, the outgoing one's exit arrives after the field
+      // has already been reassigned, so reading `this.persistentMCPProcess`
+      // there would delete the *new* process and force a third spawn, orphaning
+      // a healthy server.
       const child = this.persistentMCPProcess;
 
       this.mcpProcessStartTime = now;
       this.recentMCPStderr = '';
       livePersistentProcesses.add(child);
-      this.attachMCPResponseRouter(child);
+      this.attachResponseRouter(child);
 
       const forget = (): void => {
         livePersistentProcesses.delete(child);
@@ -1576,23 +1635,13 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Execute MCP command with optimized persistent process
    */
-  private async executeMCPCommandOptimized(
-    command: string,
-    params: any,
-    signal: AbortSignal | undefined = cancellation.getStore()
-  ): Promise<any> {
+  private async executeMCPCommandOptimized(command: string, params: any): Promise<any> {
     // For simple commands, try direct API call first
     if (command === 'multimodal_process' && this.canUseDirectAPI(params)) {
       return await this.executeDirectAPI(command, params);
     }
 
-    if (signal?.aborted) {
-      throw new Error(`AI Studio MCP command cancelled before it started: ${command}`);
-    }
-
-    // Use persistent MCP process for complex operations
     const mcpProcess = await this.getPersistentMCPProcess();
-
     const timeout = this.calculateOptimizedTimeout(command, params);
     const id = this.nextOptimizedRequestId();
 
@@ -1600,11 +1649,8 @@ export class AIStudioLayer implements LayerInterface {
       instanceId: this.instanceId,
       command,
       id,
-      hasParams: !!params,
       timeout,
-      timeoutMinutes: Math.round(timeout / 60000),
       usesPersistentProcess: true,
-      paramKeys: params ? Object.keys(params) : []
     });
 
     return new Promise<any>((resolve, reject) => {
@@ -1617,98 +1663,34 @@ export class AIStudioLayer implements LayerInterface {
         settled = true;
         this.pendingOptimized.delete(id);
         clearTimeout(timeoutId);
-        signal?.removeEventListener('abort', onAbort);
         act();
       };
 
-      // One place that tells the server, whatever ended this request.
-      //
-      // It used to live only in the abort handler, so the internal timeout
-      // removed the pending entry and rejected without telling anyone -- and
-      // the public paths that retry then started a second call with the first
-      // still running inside the server. Sent at most once: `told` guards the
-      // case where the timeout fires and the caller aborts on the way out.
-      let told = false;
-      const tellServerToStop = (why: string): void => {
-        if (told) {
-          return;
-        }
-        told = true;
-
-        logger.info(`[${this.instanceId}] Cancelling optimized MCP command`, { command, id, why });
-        try {
-          mcpProcess.stdin.write(JSON.stringify({
-            jsonrpc: '2.0',
-            method: 'notifications/cancelled',
-            params: { requestId: id, reason: why },
-          }) + '\n');
-        } catch (error) {
-          logger.debug('Could not send cancellation to the MCP server', {
-            error: (error as Error).message,
-          });
-        }
-      };
-
-      const onAbort = (): void => finish(() => {
-        // The process is shared, so it is not killed here: another request is
-        // very likely mid-answer on it, and taking the process out would fail
-        // that caller too. The server is told instead.
-        tellServerToStop('caller cancelled');
-        reject(new Error(`AI Studio MCP command cancelled: ${command}`));
-      });
-
       const timeoutId = setTimeout(() => finish(() => {
-        // Told here too. A timeout is a terminal result for this caller, and
-        // the paths above it retry -- so leaving the server working on the
-        // abandoned request meant the retry ran alongside it.
-        tellServerToStop('caller timed out');
-
-        // Attach whatever the server wrote to stderr. It was being collected
-        // and then dropped, so a timeout reported only "timed out" while the
-        // reason -- a missing key, a quota refusal -- sat unread in the buffer.
+        // Attach whatever the server wrote to stderr. It was collected and then
+        // dropped, so a timeout reported only "timed out" while the reason -- a
+        // missing key, a quota refusal -- sat unread in the buffer.
         const stderr = this.recentMCPStderr.trim();
-        const stderrHint = stderr ? ` Server stderr: ${stderr.slice(-500)}` : '';
+        const hint = stderr ? ` Server stderr: ${stderr.slice(-500)}` : '';
         reject(new Error(
-          `AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully.${stderrHint}`
+          `AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully.${hint}`
         ));
       }), timeout);
 
-      // Registered by id, and answered only by the response carrying that id.
-      //
-      // Every call used to add its own stdout listener to the shared process
-      // and resolve on the first line that had a `result` or an `error`,
-      // whatever id it carried. Two concurrent requests therefore both settled
-      // on whichever answer arrived first -- so a caller could be handed
-      // another caller's document analysis and no error would be raised. The
-      // ids were Date.now(), which two requests in the same millisecond share.
-      this.pendingOptimized.set(id, { child: mcpProcess, settle: (response) => finish(() => {
-        logger.debug(`[${this.instanceId}] MCP response routed`, {
-          instanceId: this.instanceId,
-          command,
-          id,
-          hasResult: !!response.result,
-          hasError: !!response.error,
-        });
-
-        if (response.error) {
-          reject(new Error(`MCP Error: ${response.error.message || 'Unknown error'}`));
-        } else {
-          resolve(response.result);
-        }
-      }) });
-
-      if (signal) {
-        signal.addEventListener('abort', onAbort, { once: true });
-      }
-
-      // Checked again, here. The first check happens before awaiting the
-      // process, and the listener is only attached after -- so a signal that
-      // fired in between was seen by neither, and the request went out on
-      // behalf of a caller who had already given up.
-      if (signal?.aborted) {
-        onAbort();
-        return;
-      }
+      // Registered by id, against this process generation, and answered only by
+      // the response carrying that id. Every call used to add its own stdout
+      // listener and settle on the first line with a result or an error --
+      // whatever id it held.
+      this.pendingOptimized.set(id, {
+        child: mcpProcess,
+        settle: (response) => finish(() => {
+          if (response.error) {
+            reject(new Error(`MCP Error: ${response.error.message || 'Unknown error'}`));
+          } else {
+            resolve(response.result);
+          }
+        }),
+      });
 
       try {
         mcpProcess.stdin.write(JSON.stringify({
@@ -1723,161 +1705,10 @@ export class AIStudioLayer implements LayerInterface {
     });
   }
 
-  /** A request id no other in-flight request on this process can share. */
-  private nextOptimizedRequestId(): number {
-    this.optimizedRequestSeq += 1;
-    return this.optimizedRequestSeq;
-  }
-
-  /**
-   * Attach the single reader that routes responses to the requests waiting on
-   * them, and fail everything still waiting if the process goes away.
-   */
-  private attachMCPResponseRouter(child: any): void {
-    let buffered = '';
-
-    // setEncoding before the listener, so Node's decoder holds partial
-    // multi-byte sequences across chunk boundaries rather than turning one
-    // character into two U+FFFD -- the same defect that corrupted Japanese
-    // answers in the Antigravity layer.
-    child.stdout?.setEncoding('utf8');
-    child.stderr?.setEncoding('utf8');
-
-    child.stdout?.on('data', (chunk: string) => {
-      buffered += chunk;
-
-      // Split on complete lines only; the tail may be half a response.
-      const lines = buffered.split(/\r?\n/);
-      buffered = lines.pop() ?? '';
-
-      for (const line of lines) {
-        if (!line.trim()) {
-          continue;
-        }
-
-        let response: { id?: unknown; result?: unknown; error?: { message?: string } };
-        try {
-          response = JSON.parse(line);
-        } catch {
-          continue; // not a frame; the server logs prose here too
-        }
-
-        if (response.result === undefined && response.error === undefined) {
-          continue; // a notification, not an answer
-        }
-
-        const entry = typeof response.id === 'number'
-          ? this.pendingOptimized.get(response.id)
-          : undefined;
-        // Only from the generation it was sent to: ids restart with each
-        // process, so an answer from a dying one must not settle a request that
-        // has already been re-sent to its replacement.
-        const waiting = entry && entry.child === child ? entry : undefined;
-
-        if (waiting) {
-          waiting.settle(response);
-        } else {
-          logger.debug(`[${this.instanceId}] MCP response with no caller waiting`, { id: response.id });
-        }
-      }
-    });
-
-    child.stderr?.on('data', (chunk: string) => {
-      // Kept for the timeout message, bounded so a chatty server cannot grow it
-      // without limit.
-      this.recentMCPStderr = (this.recentMCPStderr + chunk).slice(-4000);
-    });
-
-    const failAllWaiting = (why: string): void => {
-      // This generation's requests only. Clearing the whole map failed
-      // everything registered against the *replacement* process too, so a TTL
-      // rollover under load rejected requests that were running perfectly well.
-      const mine = [...this.pendingOptimized.entries()].filter(([, entry]) => entry.child === child);
-      for (const [id] of mine) {
-        this.pendingOptimized.delete(id);
-      }
-      for (const [, entry] of mine) {
-        entry.settle({ error: { message: why } });
-      }
-    };
-
-    child.on('exit', (code: number) => failAllWaiting(
-      `the AI Studio MCP process exited (code ${code}) before answering`
-    ));
-    child.on('error', (error: Error) => failAllWaiting(
-      `the AI Studio MCP process failed: ${error.message}`
-    ));
-  }
-
   /**
    * Execute MCP command
    */
-  /**
-   * End a child immediately, by whatever means the platform requires.
-   *
-   * SIGKILL rather than SIGTERM because the point is to stop paying: a server
-   * that installed a SIGTERM handler, or is blocked inside an HTTP call, would
-   * otherwise keep going. Windows has no signals, so taskkill /T /F is the
-   * equivalent -- and /T matters, since the child may itself have spawned one.
-   */
-  static terminateChild(child: { pid?: number | undefined; kill: (signal?: NodeJS.Signals | number) => boolean }): void {
-    if (child.pid === undefined) {
-      return;
-    }
-
-    if (isPlatformWindows()) {
-      try {
-        if (windowsTerminateTree(child.pid)) {
-          return;
-        }
-      } catch {
-        // fall through to the signal attempt below
-      }
-    }
-
-    try {
-      child.kill('SIGKILL');
-    } catch (error) {
-      logger.debug('Could not terminate MCP child', { error: (error as Error).message });
-    }
-  }
-
-  /**
-   * Stop everything this layer currently has running.
-   *
-   * Called when a CLI timeout fires. Returns how many children were ended, so a
-   * caller -- or a test -- can tell the difference between cancelling work and
-   * cancelling nothing. The persistent process is included: killing it costs a
-   * respawn on the next call, which the existing check for a killed process
-   * already handles, and leaving it running costs money.
-   */
-  abortActiveOperations(reason: string = 'cancelled'): number {
-    const children = [...this.activeChildren];
-    if (this.persistentMCPProcess && !this.persistentMCPProcess.killed) {
-      children.push(this.persistentMCPProcess);
-    }
-
-    for (const child of children) {
-      AIStudioLayer.terminateChild(child);
-    }
-
-    this.activeChildren.clear();
-    if (this.persistentMCPProcess) {
-      this.persistentMCPProcess = undefined;
-    }
-
-    if (children.length > 0) {
-      logger.info('Ended in-flight AI Studio work', { reason, processes: children.length });
-    }
-
-    return children.length;
-  }
-
-  private async executeMCPCommand(
-    command: string,
-    params: any,
-    signal: AbortSignal | undefined = cancellation.getStore()
-  ): Promise<any> {
+  private async executeMCPCommand(command: string, params: any): Promise<any> {
     // Normalize file paths in params for cross-platform compatibility
     // This ensures Windows backslashes are converted to forward slashes before MCP transmission
     if (params) {
@@ -1923,13 +1754,6 @@ export class AIStudioLayer implements LayerInterface {
       timeout = Math.max(240000, this.DEFAULT_TIMEOUT * 1.3); // Minimum 4 minutes for complex processing
     }
     
-    // Nothing is spawned for a caller that has already given up. Checking only
-    // inside the promise meant the child was created and registered first, and
-    // the cancellation then had to undo work that never needed doing.
-    if (signal?.aborted) {
-      throw new Error(`AI Studio MCP command cancelled before it started: ${command}`);
-    }
-
     return new Promise<any>((resolve, reject) => {
       logger.debug(`[${this.instanceId}] Executing MCP command`, {
         instanceId: this.instanceId,
@@ -1971,12 +1795,12 @@ export class AIStudioLayer implements LayerInterface {
         paramKeys: params ? Object.keys(params) : []
       });
 
-      const child = spawn('node', [mcpServerPath], {
+      // Same reasoning as the persistent spawn above: no shell, and this
+      // interpreter, so that the process tracked here is the server itself.
+      const child = spawn(process.execPath, [mcpServerPath], {
         stdio: 'pipe',
         cwd: process.cwd(),
-        shell: isWindowsSpawn,  // Windows needs shell for path resolution; Unix works without
-        // Its own process group on POSIX; see terminateProcessTree.
-        ...(isWindowsSpawn ? {} : { detached: true }),
+        shell: false,
         env: {
           ...process.env,
           // New preferred environment variable name
@@ -1987,13 +1811,6 @@ export class AIStudioLayer implements LayerInterface {
         },
       });
 
-      this.activeChildren.add(child);
-      child.once('close', () => this.activeChildren.delete(child));
-
-      // Cancellation reaches this process, not just the promise waiting on it.
-      // safeExecute aborts on any terminal outcome, so a retry that has already
-      // given up on attempt one no longer leaves attempt one generating -- the
-      // MCP server bills for its output whether or not anyone is still reading.
       // Diagnostic log after successful spawn
       logger.info(`[${this.instanceId}] MCP process spawned`, {
         instanceId: this.instanceId,
@@ -2007,46 +1824,23 @@ export class AIStudioLayer implements LayerInterface {
       let errorOutput = '';
 
       let isCompleted = false;
-
-      // Cancellation reaches this process, not just the promise waiting on it.
-      // safeExecute aborts on any terminal outcome, so a retry that has already
-      // given up on attempt one no longer leaves attempt one generating -- the
-      // MCP server bills for its output whether or not anyone is still reading.
-      //
-      // Wired here, below the state it needs. The first version of this sat
-      // beside the spawn, thirty lines above `isCompleted`: an already-aborted
-      // signal ran the handler immediately and threw ReferenceError out of the
-      // temporal dead zone, after the child had been spawned and registered and
-      // so without terminating it. It also only set the flag -- the timer stayed
-      // armed and nothing rejected, so the close handler saw isCompleted and
-      // returned, leaving the caller waiting out its own five minutes for a
-      // process that was already dead.
-      const stopOnAbort = (): void => {
-        if (isCompleted) {
-          return;
-        }
-        isCompleted = true;
-        clearTimeout(timeoutId);
-        logger.info(`[${this.instanceId}] Cancelling MCP command`, { command, pid: child.pid });
-        AIStudioLayer.terminateChild(child);
-        reject(new Error(`AI Studio MCP command cancelled: ${command}`));
-      };
-
       const timeoutId = setTimeout(() => {
         if (!isCompleted) {
           isCompleted = true;
-          // Same helper as everywhere else, for the same reason: the
-          // hand-written Windows branch here waited on an exception that never
-          // came, so a failed taskkill left billed work running.
-          terminateProcessTree(child);
+          // Platform-aware process termination
+          if (process.platform === 'win32') {
+            // Windows: Use taskkill for reliable termination
+            try {
+              execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: 'ignore' });
+            } catch {
+              child.kill();
+            }
+          } else {
+            child.kill('SIGKILL');  // Unix: force kill
+          }
           reject(new Error(`AI Studio MCP command timeout after ${timeout}ms - operation may have completed successfully`));
         }
       }, timeout);
-
-      if (signal) {
-        signal.addEventListener('abort', stopOnAbort, { once: true });
-        child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
-      }
 
       // Send MCP request
       const mcpRequest = {

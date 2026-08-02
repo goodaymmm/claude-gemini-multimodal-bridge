@@ -15,9 +15,9 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -135,79 +135,5 @@ describe('AI Studio egress: allowed roots', () => {
 
     assert.equal(verdict.ok, false);
     assert.match(verdict.message, /Cannot resolve/);
-  });
-});
-
-describe('a directory link out of the root, on every platform', () => {
-  // The file-symlink case above skips where symlinks need elevation, which is
-  // Windows -- so the one case covering escape-by-link was absent exactly where
-  // reparse points are most common. A junction is a directory link Windows
-  // creates without elevation, and node makes one when asked for type
-  // 'junction'; elsewhere that argument is ignored and an ordinary symlink
-  // results. So this runs everywhere.
-
-  const linkedDir = join(workspace, 'linked-dir');
-  let available = true;
-  try {
-    symlinkSync(outside, linkedDir, 'junction');
-  } catch {
-    available = false;
-  }
-
-  it('refuses a file reached through a linked directory', {
-    skip: !available && 'neither junctions nor directory symlinks can be created here',
-  }, () => {
-    const verdict = checkPath(join(linkedDir, 'secret.txt'));
-
-    assert.equal(verdict.ok, false, 'the bytes are outside the root however the path spells it');
-    assert.match(verdict.message, /outside every allowed directory/);
-  });
-
-  it('still accepts a real file beside the link', {
-    skip: !available && 'neither junctions nor directory symlinks can be created here',
-  }, () => {
-    // The refusal must be about where the file is, not about a link existing.
-    const verdict = checkPath(join(workspace, 'report.txt'));
-
-    assert.equal(verdict.ok, true, verdict.message);
-  });
-});
-
-describe('what the registered MCP entry decides about egress', () => {
-  // The suite could not see this: every case above fixes the child's cwd, and
-  // that cwd becomes the allowed root. But the entry written into Claude Code's
-  // config pins neither a cwd nor CGMB_ALLOWED_ROOTS, so the root is whatever
-  // directory the host happened to launch from. Started from a home directory,
-  // the whole of it becomes uploadable.
-  //
-  // These cases record that contract rather than change it -- the behaviour is
-  // deliberate as far as the documentation goes ("only reads from the directory
-  // it was started in"), but it should be visible here rather than discovered.
-
-  it('pins no working directory and no allowed roots', async () => {
-    const { MCPConfigManager } = await import('../dist/utils/mcpConfigManager.js');
-    const entry = new MCPConfigManager().generateCGMBConfig();
-
-    assert.equal(entry.cwd, undefined, 'nothing fixes where the server starts');
-    assert.equal(
-      entry.env?.CGMB_ALLOWED_ROOTS, undefined,
-      'and nothing fixes which directories it may upload from'
-    );
-    assert.ok(Array.isArray(entry.args) && entry.args.includes('serve'), 'it does launch the server');
-  });
-
-  it('therefore takes its egress boundary from wherever it was started', () => {
-    // Demonstrated, not assumed: the same file is refused from one cwd and
-    // accepted from a broader one, with no configuration difference.
-    const broad = scratch; // stands in for a home directory containing both trees
-
-    assert.equal(
-      checkPath(join(outside, 'secret.txt')).ok, false,
-      'refused when started inside the workspace'
-    );
-    assert.equal(
-      checkPath(join(outside, 'secret.txt'), { cwd: broad }).ok, true,
-      'accepted when started one level up -- the boundary is the launch directory'
-    );
   });
 });

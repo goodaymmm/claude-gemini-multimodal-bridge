@@ -27,25 +27,6 @@ export default [
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',
       }],
-      // A warning, not an error, and the 130 that remain are deliberate.
-      //
-      // They sit almost entirely at two kinds of boundary. The larger one is
-      // external SDK surface -- @google/genai responses, MCP payloads, winston
-      // metadata -- where the vendor's own types are `any` or absent, and
-      // writing a local interface would assert a shape nobody guarantees; the
-      // check that matters there is the runtime one, and those exist. The
-      // second is the task objects that travel between layers: they are
-      // caller-supplied, they carry an index signature by design, and every
-      // consumer narrows before use.
-      //
-      // What is not acceptable is a new `any` used to silence a type error in
-      // code we own. `Record<string, any>` was swept to `Record<string,
-      // unknown>` where it type-checked as a drop-in; the one site that did not
-      // was left alone rather than cast around.
-      //
-      // Raising this to 'error' would mean 130 suppression comments, which is
-      // the same information with more noise. It stays a warning so the count
-      // is visible and a rise in it is a question worth asking.
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-non-null-assertion': 'warn',

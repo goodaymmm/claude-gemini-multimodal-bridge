@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from 'async_hooks';
-import { ChildProcess, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
@@ -8,114 +7,7 @@ import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { SearchCache } from '../utils/SearchCache.js';
-import { terminateProcessTree } from '../utils/processUtils.js';
-import { onShutdown } from '../utils/shutdown.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLeast, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
-
-/**
- * Workspaces and children that still exist, swept if the process ends first.
- *
- * Both are normally released when the child closes. A timeout does not close
- * anything: the layer signals the child and rejects, and the child's exit --
- * and with it the cleanup and the SIGKILL escalation two seconds later -- only
- * happens if this process is still around to see it. The MCP server is, so the
- * defect stayed invisible there; the one-shot CLI is not. `cgmb search` that
- * times out returned to the shell leaving a live agy and its scratch directory
- * behind, once per timed-out search, and nothing ever collected them. Measured
- * with a stand-in agy that outlives its budget: workspace present, two strays.
- *
- * 'exit' handlers may only do synchronous work, which both of these are.
- */
-const isWindows = process.platform === 'win32';
-
-/**
- * The cancellation in force for the current execute() call.
- *
- * Per-call rather than per-instance: one layer instance serves concurrent
- * requests, so an instance field would have one caller giving up kill another
- * caller's agy. Same mechanism as the other two layers.
- */
-const cancellation = new AsyncLocalStorage<AbortSignal>();
-const liveWorkspaces = new Set<string>();
-const liveChildren = new Set<ChildProcess>();
-let sweepInstalled = false;
-
-function installExitSweep(): void {
-  if (sweepInstalled) {
-    return;
-  }
-  sweepInstalled = true;
-
-  onShutdown('antigravity', () => shutdownAntigravity());
-
-  process.once('exit', () => {
-    // The last-resort backstop, and it can only do synchronous work: there is
-    // no way to wait for a child to close inside an 'exit' handler. So it kills
-    // the tree and tries the directory, and accepts that on Windows the removal
-    // may lose a race against a process that has not finished dying -- a
-    // leftover directory in tmp is the lesser failure, and shutdownAntigravity()
-    // below is what makes it rare.
-    for (const child of liveChildren) {
-      terminateProcessTree(child);
-    }
-    for (const dir of liveWorkspaces) {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // Nothing useful can be logged at exit.
-      }
-    }
-  });
-}
-
-/**
- * Stop everything this layer started, and wait for it.
- *
- * Called before a one-shot CLI run exits. The exit hook cannot wait, and on
- * Windows a `rmSync` issued while the process is still dying fails because the
- * files are still open -- and the failure is swallowed, because throwing out of
- * an exit handler is worse. Here there is somewhere to wait, so the children
- * are ended, awaited, and only then are the directories removed.
- *
- * Safe to call when nothing is running: it returns immediately.
- */
-export async function shutdownAntigravity(timeoutMs = 5000): Promise<void> {
-  const children = [...liveChildren];
-  const workspaces = [...liveWorkspaces];
-
-  if (children.length === 0 && workspaces.length === 0) {
-    return;
-  }
-
-  for (const child of children) {
-    terminateProcessTree(child);
-  }
-
-  await Promise.all(children.map(child => new Promise<void>(resolve => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve();
-      return;
-    }
-
-    const done = setTimeout(resolve, timeoutMs);
-    child.once('close', () => {
-      clearTimeout(done);
-      resolve();
-    });
-  })));
-
-  for (const dir of workspaces) {
-    try {
-      rmSync(dir, { recursive: true, force: true });
-      liveWorkspaces.delete(dir);
-    } catch (error) {
-      logger.debug('Could not remove Antigravity workspace during shutdown', {
-        dir,
-        error: (error as Error).message,
-      });
-    }
-  }
-}
 
 /**
  * Task interface for better type safety
@@ -286,15 +178,8 @@ export class AntigravityCLILayer implements LayerInterface {
   /**
    * Main execution method
    */
-  async execute(task: AntigravityTask, signal?: AbortSignal): Promise<LayerResult> {
-    if (signal?.aborted) {
-      throw new Error('Antigravity CLI execution cancelled before it started');
-    }
-
-    return cancellation.run(signal ?? new AbortController().signal, () => this.executeInContext(task, Date.now()));
-  }
-
-  private async executeInContext(task: AntigravityTask, startTime: number): Promise<LayerResult> {
+  async execute(task: AntigravityTask): Promise<LayerResult> {
+    const startTime = Date.now();
 
     // Ensure initialization
     if (!this.isInitialized) {
@@ -334,13 +219,14 @@ export class AntigravityCLILayer implements LayerInterface {
           throw new Error('No prompt provided for Antigravity CLI execution');
         }
 
+        // The model the answer will be produced with, decided once and used for
+        // both the lookup and the store. Without it the cache served one model's
+        // reply as another's.
+        const cacheModel = this.normalizeModel(task.model, this.DEFAULT_MODEL);
+
         // Check cache for search-enabled tasks (CGMB unique feature)
         if (task.useSearch !== false) {
-          const cachedResult = await this.searchCache.get(
-            prompt,
-            'antigravity',
-            this.normalizeModel(task.model, this.DEFAULT_MODEL)
-          );
+          const cachedResult = await this.searchCache.get(prompt, 'antigravity', cacheModel);
           if (cachedResult) {
             logger.debug('Cache hit for Antigravity search', {
               promptLength: prompt.length,
@@ -374,7 +260,7 @@ export class AntigravityCLILayer implements LayerInterface {
             grounded: true,
             search_used: true,
             timestamp: Date.now()
-          }, 'antigravity', duration, this.normalizeModel(task.model, this.DEFAULT_MODEL));
+          }, 'antigravity', duration, cacheModel);
         }
 
         return {
@@ -506,6 +392,7 @@ export class AntigravityCLILayer implements LayerInterface {
       );
     }
 
+    const isWindows = process.platform === 'win32';
     const printTimeoutSec = Math.ceil(this.DEFAULT_TIMEOUT / 1000);
 
     return new Promise<string>((resolve, reject) => {
@@ -544,8 +431,6 @@ export class AntigravityCLILayer implements LayerInterface {
       // directory with only the variables it needs to find its own config and
       // credentials.
       const workspaceDir = this.createWorkspaceDir();
-      installExitSweep();
-      liveWorkspaces.add(workspaceDir);
 
       const child = spawn(this.agyPath, args, {
         // stdin carries the prompt and is closed immediately: agy drains it to
@@ -553,14 +438,8 @@ export class AntigravityCLILayer implements LayerInterface {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: workspaceDir,
         env: this.buildChildEnv(),
-        // Its own process group on POSIX, so a cancellation can end the group
-        // atomically rather than hunting for descendants. The cost -- Ctrl-C no
-        // longer reaching it directly -- is covered by the shutdown handlers
-        // every entry point installs, and by the live set below.
-        ...(isWindows ? { windowsHide: true } : { detached: true }),
+        ...(isWindows ? { windowsHide: true } : {}),
       });
-
-      liveChildren.add(child);
 
       child.stdin.on('error', () => {
         // The child may exit before reading stdin; the close handler reports
@@ -572,28 +451,9 @@ export class AntigravityCLILayer implements LayerInterface {
       let stderr = '';
       let settled = false;
 
-      // Cancellation ends the CLI, not just the waiting. A short workflow
-      // timeout used to return failure while this agy ran to its own budget --
-      // a duplicate external call the caller would never read.
-      const signal = cancellation.getStore();
-
-      const stopOnAbort = (): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(killTimer);
-        logger.info('Cancelling Antigravity CLI execution', { pid: child.pid });
-        terminateProcessTree(child);
-        cleanupWorkspace();
-        reject(new Error('Antigravity CLI execution cancelled'));
-      };
-
       // Remove the scratch directory once the child is gone, whatever the
       // outcome. Anything agy wrote there belongs to this request alone.
       const cleanupWorkspace = (): void => {
-        liveWorkspaces.delete(workspaceDir);
-        liveChildren.delete(child);
         try {
           rmSync(workspaceDir, { recursive: true, force: true });
         } catch (error) {
@@ -690,14 +550,12 @@ export class AntigravityCLILayer implements LayerInterface {
         setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) {
             logger.warn('Antigravity CLI ignored SIGTERM, escalating', { pid: child.pid });
-            // The tree, not the one process: agy spawns its own helpers, and a
-            // survivor holds files open in the directory about to be removed.
-            terminateProcessTree(child);
+            if (isWindows) {
+              child.kill();
+            } else {
+              child.kill('SIGKILL');
+            }
           }
-          // Cleanup here as well as on close. On a timeout the caller has
-          // already been told it failed and may be on its way out, and the
-          // close that cleanup normally hangs off may never be observed.
-          cleanupWorkspace();
         }, 2000);
 
         if (!settled) {
@@ -708,15 +566,6 @@ export class AntigravityCLILayer implements LayerInterface {
           ));
         }
       }, this.DEFAULT_TIMEOUT + 5000);
-
-      if (signal) {
-        if (signal.aborted) {
-          stopOnAbort();
-        } else {
-          signal.addEventListener('abort', stopOnAbort, { once: true });
-          child.once('close', () => signal.removeEventListener('abort', stopOnAbort));
-        }
-      }
     });
   }
 
@@ -948,7 +797,7 @@ export class AntigravityCLILayer implements LayerInterface {
     return text.slice(0, MAX_TRANSLATION_LENGTH).trim();
   }
 
-  async translateToEnglish(text: string, sourceLang: string, signal?: AbortSignal): Promise<string> {
+  async translateToEnglish(text: string, sourceLang: string): Promise<string> {
     const languageNames: Record<string, string> = {
       ja: 'Japanese',
       ko: 'Korean',
@@ -984,16 +833,12 @@ export class AntigravityCLILayer implements LayerInterface {
     });
 
     try {
-      // The caller's cancellation, carried through. Without it this opened a
-      // fresh, never-aborted context: a non-English image generation that was
-      // still translating when the caller's budget expired left agy running to
-      // its own ninety seconds, answering nobody.
       const result = await this.execute({
         type: 'translation',
         prompt: translationPrompt,
         useSearch: false, // No web search needed for translation
         model: this.DEFAULT_MODEL
-      }, signal);
+      });
 
       if (!result.success || !result.data) {
         throw new Error('Translation failed: No result returned');

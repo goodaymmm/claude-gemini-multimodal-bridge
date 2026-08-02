@@ -85,42 +85,24 @@ export class ErrorHandler {
    * Wrap async operations with comprehensive error handling and proper timeout management
    */
   public static async safeExecute<T>(
-    operation: (signal: AbortSignal) => Promise<T>,
+    operation: () => Promise<T>,
     context: {
       operationName: string;
       layer?: LayerType;
       timeout?: number;
-      /** An outer cancellation to inherit, if the caller has one. */
-      signal?: AbortSignal;
     }
   ): Promise<T> {
     const startTime = Date.now();
-
-    // The operation is given a signal that fires on any terminal outcome --
-    // this timeout, an outer cancellation, or the operation's own failure --
-    // and not only on the timeout. Work that outlives the caller's answer is
-    // billed for output nobody will see, and a retry on top of it pays twice.
-    const controller = new AbortController();
-    const inheritOuter = () => controller.abort();
-    if (context.signal) {
-      if (context.signal.aborted) {
-        controller.abort();
-      } else {
-        context.signal.addEventListener('abort', inheritOuter, { once: true });
-      }
-    }
-
+    
     try {
       logger.debug(`Starting operation: ${context.operationName}`, context);
 
       let result: T;
-
+      
       if (context.timeout) {
-        result = await this.executeWithTimeout(
-          operation, context.timeout, context.operationName, controller
-        );
+        result = await this.executeWithTimeout(operation, context.timeout, context.operationName);
       } else {
-        result = await operation(controller.signal);
+        result = await operation();
       }
 
       const duration = Date.now() - startTime;
@@ -132,15 +114,9 @@ export class ErrorHandler {
 
       return result;
     } catch (error) {
-      // Failure is a terminal result too: the caller is about to be told this
-      // did not work, so nothing may still be running on its behalf.
-      if (!controller.signal.aborted) {
-        controller.abort();
-      }
-
       const duration = Date.now() - startTime;
       const enhancedError = this.enhanceError(error as Error, context);
-
+      
       logger.error(`Operation failed: ${context.operationName}`, {
         ...context,
         duration,
@@ -149,8 +125,6 @@ export class ErrorHandler {
       });
 
       throw enhancedError;
-    } finally {
-      context.signal?.removeEventListener('abort', inheritOuter);
     }
   }
 
@@ -293,14 +267,11 @@ export class ErrorHandler {
    * Execute operation with proper timeout management using AbortController
    */
   private static async executeWithTimeout<T>(
-    operation: (signal: AbortSignal) => Promise<T>,
+    operation: () => Promise<T>,
     timeout: number,
-    operationName: string,
-    abortController: AbortController
+    operationName: string
   ): Promise<T> {
-    // The controller is the caller's, and the operation is given its signal.
-    // A controller created and aborted here reached nothing: the operation
-    // never saw it, so the timeout ended the waiting and left the work running.
+    const abortController = new AbortController();
     let timeoutId: NodeJS.Timeout | undefined;
 
     try {
@@ -317,7 +288,7 @@ export class ErrorHandler {
 
       // Race between operation and timeout
       const result = await Promise.race([
-        operation(abortController.signal),
+        operation(),
         timeoutPromise
       ]);
 

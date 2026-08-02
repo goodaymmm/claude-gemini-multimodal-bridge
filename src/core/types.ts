@@ -261,19 +261,12 @@ export interface LayerInterface {
   initialize(): Promise<void>;
   isAvailable(): Promise<boolean>;
   canHandle(task: any): boolean;
-  /**
-   * @param signal cancels the work, not just the waiting. Every layer that
-   * spawns a subprocess must end it when this fires: a caller that has been
-   * told the operation failed is not reading the answer, and an external AI
-   * call left running is billed and may be duplicated by the fallback.
-   */
-  execute(task: any, signal?: AbortSignal): Promise<LayerResult>;
+  execute(task: any): Promise<LayerResult>;
   getCapabilities(): string[];
   getCost(task: any): number;
   getEstimatedDuration(task: any): number;
   // Optional methods
-  /** @param signal cancels the CLI call, not just the waiting. */
-  translateToEnglish?(text: string, sourceLang: string, signal?: AbortSignal): Promise<string>;
+  translateToEnglish?(text: string, sourceLang: string): Promise<string>;
 }
 
 // MCP Tool Result
@@ -352,7 +345,7 @@ export class CGMBError extends Error {
     message: string,
     public code: string,
     public layer?: LayerType,
-    public details?: Record<string, unknown>
+    public details?: Record<string, any>
   ) {
     super(message);
     this.name = 'CGMBError';
@@ -360,14 +353,14 @@ export class CGMBError extends Error {
 }
 
 export class LayerError extends CGMBError {
-  constructor(message: string, layer: LayerType, details?: Record<string, unknown>) {
+  constructor(message: string, layer: LayerType, details?: Record<string, any>) {
     super(message, 'LAYER_ERROR', layer, details);
     this.name = 'LayerError';
   }
 }
 
 export class WorkflowError extends CGMBError {
-  constructor(message: string, details?: Record<string, unknown>) {
+  constructor(message: string, details?: Record<string, any>) {
     super(message, 'WORKFLOW_ERROR', undefined, details);
     this.name = 'WorkflowError';
   }

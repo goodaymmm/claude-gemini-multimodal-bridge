@@ -58,7 +58,17 @@ Follows the Anthropic Model Context Protocol. 148 tests run on Linux, Windows an
 
 ---
 
-## ✨ What's New in v1.2.0
+## ✨ What's New in v1.2.1
+
+| Fix | Description |
+|-----|-------------|
+| 🎯 **Answers reach the caller who asked** | Concurrent AI Studio requests took each other's replies; each now gets its own |
+| 🚪 **`cgmb` exits when it is done** | The shared MCP server is ended rather than left running |
+| 🔑 **`.env` stays in your project** | Installation directories and `~/.cgmb` are opt-in via `CGMB_ENV_PATH`, not read by default |
+| 🔍 **Search cache answers the question asked** | Different years and different models are no longer treated as one entry |
+| 🧩 **Workflow steps see their inputs** | Parallel steps publish output; hybrid runs honour `dependsOn` |
+
+### Previously, in v1.2.0
 
 | Feature | Description |
 |---------|-------------|
@@ -458,21 +468,52 @@ src/
 
 ## 📜 Version History
 
-### v1.2.1 (2026-07-29)
+### v1.2.1 (2026-08-02)
 
-Found by installing 1.2.0 from the registry into a clean environment.
+A fix-only release. Every change addresses a defect measured in 1.2.0; no
+features were added, and the whole release is 18 files.
 
-- 🔑 **`AI_STUDIO_API_KEY` Is Recognised**: the credential check omitted the one
-  variable this README asks for, so exporting it — the documented setup on Linux
-  and Windows alike — was reported as an unloaded environment. It also accepted
-  `CLAUDE_API_KEY`, which nothing reads, as proof of configuration
-- 📋 **`cgmb info` Reflects This Release**: shows the required key, the
-  Antigravity settings and `CGMB_ALLOWED_ROOTS`; no longer presents the retired
-  Gemini CLI path as healthy, and marks optional settings as optional rather
-  than as errors
-- 📁 **Install Guidance Points Somewhere Real**: a global install no longer
-  writes a `.env` inside its own package directory, and the next steps no longer
-  tell users of the published package to run `npm run build`
+- 🎯 **Concurrent AI Studio requests no longer take each other's answers**: the
+  shared MCP server got one stdout listener per call, each settling on the first
+  reply it saw, and request ids were `Date.now()` — two calls in the same
+  millisecond shared one. Answers are now routed by id, ids are monotonic, and a
+  process replaced on its TTL cannot fail or disown its successor
+- 🚪 **`cgmb` exits after using AI Studio**: nothing ever ended the shared MCP
+  server, and its pipes kept the parent alive. It is now ended on shutdown, and
+  spawned without a shell so that ending it ends the server rather than a
+  wrapper
+- 🔑 **`.env` is read from your project, not from wherever CGMB is installed**:
+  the installation directory, the global npm directory and `~/.cgmb` were all
+  read by default, which meant another project's `AI_STUDIO_API_KEY` and — more
+  seriously — its `CGMB_ALLOWED_ROOTS`, which decides what may be sent to
+  Google. Those locations are now opt-in through `CGMB_ENV_PATH`, which accepts
+  a file or a directory and takes precedence over the defaults
+- 🔍 **The search cache answers the question that was asked**: keys folded every
+  year from 2024–2029 together and collapsed 最新/最近/新しい, and omitted the
+  model, so a question about 2026 could be answered from a 2024 reply, or one
+  model's answer returned for another's question
+- 🧩 **Workflow steps receive their inputs**: parallel steps published nothing,
+  so downstream steps ran without the output they referenced and still reported
+  success; hybrid runs ignored `dependsOn` ordering
+- ⏱️ **Timeouts reflect the work**: the general Claude path used a fixed floor
+  below the layer default and estimated from the wrong text
+- 🔊 **A discontinued model id is gone**: `gemini-2.0-flash` was hardcoded in the
+  audio path
+- 🧪 **CI runs the whole suite**: the postinstall script called `process.exit(0)`
+  under CI at module scope, ending whichever process imported it — five test
+  cases vanished on GitHub Actions while the run stayed green
+
+**Removed**: `generate-audio --script`. It offered a two-step "write a script,
+then read it aloud" flow whose first step requested an MCP tool named
+`generate_text` that the AI Studio server has never implemented, so it returned
+`MCP error -32601` on every call in this and every earlier version. It appeared
+in `--help` only — never in this README or in `docs/`. Plain `generate-audio` is
+unaffected. Building the two-step flow properly is left to a release that can
+verify it.
+
+**Known, unfixed**: the `audio_analysis_advanced` task type calls an
+`analyze_audio_advanced` tool the server does not implement. It is unreachable
+from the CLI and from every MCP tool, so nothing can currently invoke it.
 
 ### v1.2.0 (2026-07-28)
 - 🔄 **Antigravity CLI Migration**: Google discontinued Gemini CLI for individual
