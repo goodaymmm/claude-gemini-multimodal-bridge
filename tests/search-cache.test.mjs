@@ -22,6 +22,9 @@ function makeCache() {
   return new SearchCache({ ttl: 600000, maxEntries: 100, enableMetrics: false, similarityThreshold: 0.8 });
 }
 
+// set() takes (query, result, searchEngine, processingTime, model). Passing the
+// model in the processingTime slot made the model-collision case pass for the
+// wrong reason -- a miss caused by a mistake, not by the rule under test.
 const result = (data) => ({
   success: true,
   data,
@@ -58,7 +61,7 @@ describe('the cache answers the question that was asked', () => {
     // question give different answers, and the caller chose which one it wanted.
     const cache = makeCache();
 
-    await cache.set('capital of France', result('from flash'), 'antigravity', 'gemini-3.6-flash-low');
+    await cache.set('capital of France', result('from flash'), 'antigravity', 0, 'gemini-3.6-flash-low');
     const hit = await cache.get('capital of France', 'antigravity', 'gemini-3.1-pro-high');
 
     assert.notEqual(hit?.data, 'from flash', 'a different model must not share the entry');
@@ -69,7 +72,7 @@ describe('the cache answers the question that was asked', () => {
     // hit. A cache that never hits would be safe and pointless.
     const cache = makeCache();
 
-    await cache.set('capital of France', result('Paris'), 'antigravity', 'gemini-3.6-flash-low');
+    await cache.set('capital of France', result('Paris'), 'antigravity', 0, 'gemini-3.6-flash-low');
     const hit = await cache.get('capital of France', 'antigravity', 'gemini-3.6-flash-low');
 
     assert.equal(hit?.data, 'Paris', 'an identical question must still hit');

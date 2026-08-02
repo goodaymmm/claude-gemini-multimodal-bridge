@@ -1,10 +1,7 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
-import { findExecutable } from './platformUtils.js';
 import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
-import { probeCommand } from './processUtils.js';
 
 /**
  * Smart environment loader that finds .env files from multiple locations
@@ -148,46 +145,30 @@ export class SmartEnvLoader {
   private async getDefaultSearchPaths(): Promise<string[]> {
     const paths: string[] = [];
 
-    // 1. Current working directory
+    // Where the user is, and the project they are in. Nothing else by default.
+    //
+    // The list used to include the package's own installation directory, the
+    // global npm directory and ~/.cgmb unconditionally -- measured on WSL, that
+    // meant ~/.nvm/versions/node/v22/lib/node_modules/claude-gemini-multimodal-bridge
+    // was read on every run of every project. A .env left in an installation
+    // directory therefore supplied AI_STUDIO_API_KEY, billed to whoever owns
+    // that key, and CGMB_ALLOWED_ROOTS, which decides which files this process
+    // is willing to send to Google. Widening that silently is the serious half:
+    // the user is never told the boundary moved.
+    //
+    // Those locations are still usable, but they have to be asked for --
+    // CGMB_ENV_PATH names a file or directory explicitly.
     paths.push(process.cwd());
 
-    // 2. Look for package.json to find project root
     const projectRoot = await this.findProjectRoot();
     if (projectRoot && projectRoot !== process.cwd()) {
       paths.push(projectRoot);
     }
 
-    // 3. Look for CGMB installation directory (from current file location)
-    try {
-      const currentFileUrl = import.meta.url;
-      const currentFilePath = fileURLToPath(currentFileUrl);
-      const projectFromFile = this.findProjectRootFromPath(currentFilePath);
-      if (projectFromFile && !paths.includes(projectFromFile)) {
-        paths.push(projectFromFile);
-      }
-    } catch (error) {
-      // Ignore errors in finding file-based project root
-    }
-
-    // 4. Global npm installation directory
-    try {
-      const globalDir = await this.findGlobalNpmInstallation();
-      if (globalDir && !paths.includes(globalDir)) {
-        paths.push(globalDir);
-      }
-    } catch (error) {
-      // Ignore errors in finding global installation
-    }
-
-    // 5. User home directory with .cgmb subdirectory
-    try {
-      const homeDir = process.env.HOME || process.env.USERPROFILE;
-      if (homeDir) {
-        const cgmbHome = join(homeDir, '.cgmb');
-        paths.push(cgmbHome);
-      }
-    } catch (error) {
-      // Ignore errors in home directory detection
+    // Opt-in, and only what was named.
+    const explicit = process.env.CGMB_ENV_PATH?.trim();
+    if (explicit && !paths.includes(explicit)) {
+      paths.push(explicit);
     }
 
     return paths;
@@ -220,63 +201,12 @@ export class SmartEnvLoader {
   }
 
   /**
-   * Find project root from a specific file path
+   * Removed with the search-path narrowing above: findProjectRootFromPath and
+   * findGlobalNpmInstallation existed only to add the installation and global
+   * npm directories to the default list, which is exactly what must not happen
+   * by default. Nothing else called them.
    */
-  private findProjectRootFromPath(filePath: string): string | null {
-    let currentPath = dirname(filePath);
-    
-    while (currentPath !== dirname(currentPath)) {
-      const packageJsonPath = join(currentPath, 'package.json');
-      if (existsSync(packageJsonPath)) {
-        return currentPath;
-      }
-      currentPath = dirname(currentPath);
-    }
-    
-    return null;
-  }
 
-  /**
-   * Find global npm installation directory
-   */
-  private async findGlobalNpmInstallation(): Promise<string | null> {
-    try {
-      // Try to find global npm directory
-      // Resolved and run by absolute path like every other probe: `npm` via a
-      // shell resolves against PATH -- and on Windows the current directory --
-      // so a repository could supply its own npm here.
-      const npmRoot = (probeCommand('npm', ['root', '-g'], { timeoutMs: 5000 }) ?? '').trim();
-      if (npmRoot === '') {
-        return null;
-      }
-      
-      const cgmbGlobalPath = join(npmRoot, 'claude-gemini-multimodal-bridge');
-      if (existsSync(cgmbGlobalPath)) {
-        return cgmbGlobalPath;
-      }
-    } catch (error) {
-      // npm not available or command failed
-    }
-
-    // Try alternative: look for cgmb binary and trace back
-    try {
-      const cgmbPath = findExecutable('cgmb');
-      
-      if (cgmbPath) {
-        // cgmb binary found, trace back to package directory
-        const binDir = dirname(cgmbPath);
-        const possibleProjectRoot = dirname(binDir);
-        
-        if (existsSync(join(possibleProjectRoot, 'package.json'))) {
-          return possibleProjectRoot;
-        }
-      }
-    } catch (error) {
-      // cgmb binary not found or which command failed
-    }
-
-    return null;
-  }
 
   /**
    * Check if required environment variables are already set

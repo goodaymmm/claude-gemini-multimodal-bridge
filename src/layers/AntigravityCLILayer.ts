@@ -219,9 +219,14 @@ export class AntigravityCLILayer implements LayerInterface {
           throw new Error('No prompt provided for Antigravity CLI execution');
         }
 
+        // The model the answer will be produced with, decided once and used for
+        // both the lookup and the store. Without it the cache served one model's
+        // reply as another's.
+        const cacheModel = this.normalizeModel(task.model, this.DEFAULT_MODEL);
+
         // Check cache for search-enabled tasks (CGMB unique feature)
         if (task.useSearch !== false) {
-          const cachedResult = await this.searchCache.get(prompt, 'antigravity');
+          const cachedResult = await this.searchCache.get(prompt, 'antigravity', cacheModel);
           if (cachedResult) {
             logger.debug('Cache hit for Antigravity search', {
               promptLength: prompt.length,
@@ -255,7 +260,7 @@ export class AntigravityCLILayer implements LayerInterface {
             grounded: true,
             search_used: true,
             timestamp: Date.now()
-          }, 'antigravity', duration);
+          }, 'antigravity', duration, cacheModel);
         }
 
         return {

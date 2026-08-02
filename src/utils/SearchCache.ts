@@ -10,6 +10,8 @@ export interface CacheEntry {
   metadata: {
     promptHash: string;
     searchEngine: string;
+    /** Which model produced this answer; a different one must not reuse it. */
+    model?: string;
     resultCount: number;
     processingTime: number;
   };
@@ -52,8 +54,8 @@ export class SearchCache {
   /**
    * Get search results from cache
    */
-  async get(query: string, searchEngine: string = 'antigravity'): Promise<any | null> {
-    const key = this.generateCacheKey(query, searchEngine);
+  async get(query: string, searchEngine: string = 'antigravity', model?: string): Promise<any | null> {
+    const key = this.generateCacheKey(query, searchEngine, model);
     const entry = this.cache.get(key);
 
     if (!entry) {
@@ -79,7 +81,7 @@ export class SearchCache {
 
     // Search for similar query (optional)
     if (!entry && this.options.similarityThreshold) {
-      const similarEntry = this.findSimilarEntry(query, searchEngine);
+      const similarEntry = this.findSimilarEntry(query, searchEngine, model);
       if (similarEntry) {
         this.stats.hitCount++;
         this.updateHitRate();
@@ -110,9 +112,10 @@ export class SearchCache {
     query: string, 
     result: any, 
     searchEngine: string = 'antigravity',
-    processingTime: number = 0
+    processingTime: number = 0,
+    model?: string
   ): Promise<void> {
-    const key = this.generateCacheKey(query, searchEngine);
+    const key = this.generateCacheKey(query, searchEngine, model);
     const timestamp = Date.now();
     const ttl = this.options.ttl || this.defaultTTL;
     const expiresAt = timestamp + ttl;
@@ -131,6 +134,7 @@ export class SearchCache {
       metadata: {
         promptHash: this.hashString(query),
         searchEngine,
+        ...(model !== undefined && { model }),
         resultCount: this.countResults(result),
         processingTime
       }
@@ -151,10 +155,12 @@ export class SearchCache {
   /**
    * Generate cache key via query normalization
    */
-  private generateCacheKey(query: string, searchEngine: string): string {
-    // Query normalization
+  private generateCacheKey(query: string, searchEngine: string, model?: string): string {
+    // The model is part of the key. Two models asked the same question give
+    // different answers, and the caller chose which one it wanted; without it
+    // one model's reply was served as the other's.
     const normalizedQuery = this.normalizeQuery(query);
-    const dataToHash = `${normalizedQuery}:${searchEngine}`;
+    const dataToHash = `${normalizedQuery}:${searchEngine}:${model ?? 'default'}`;
     return this.hashString(dataToHash);
   }
 
@@ -162,29 +168,33 @@ export class SearchCache {
    * Normalize query
    */
   private normalizeQuery(query: string): string {
+    // Punctuation and whitespace only.
+    //
+    // What used to be here folded every year in 2024-2029 to one token and
+    // collapsed 最新の / 最近の / 新しい into a single word -- so "2024年の株価"
+    // and "2026年の株価" shared an entry, and a question about what is recent
+    // was answered from a question about what is newest. The caller got a
+    // success to a question it had not asked, with nothing to indicate it.
+    // Wording that differs is a question that differs.
     return query
       .toLowerCase()
       .trim()
-      // Normalize punctuation and symbols
       .replace(/[。、！？]/g, '')
-      .replace(/\s+/g, ' ')
-      // Normalize year format
-      .replace(/202[4-9]年?/g, '2024-2025')
-      // Normalize similar expressions
-      .replace(/について教えて|を説明して|について知りたい/g, 'について')
-      .replace(/最新の|最近の|新しい/g, '最新')
-      .replace(/具体的に|詳しく|詳細に/g, '詳細');
+      .replace(/\s+/g, ' ');
   }
 
   /**
    * Find similar entry
    */
-  private findSimilarEntry(query: string, searchEngine: string): CacheEntry | null {
+  private findSimilarEntry(query: string, searchEngine: string, model?: string): CacheEntry | null {
     const normalizedQuery = this.normalizeQuery(query);
     const threshold = this.options.similarityThreshold || this.similarityThreshold;
 
     for (const entry of this.cache.values()) {
       if (entry.metadata.searchEngine !== searchEngine) {continue;}
+      // Same reason the key carries it: a near-enough question asked of one
+      // model must not be answered from another model's reply.
+      if ((entry.metadata.model ?? 'default') !== (model ?? 'default')) {continue;}
       if (Date.now() > entry.expiresAt) {continue;}
 
       const similarity = this.calculateSimilarity(
