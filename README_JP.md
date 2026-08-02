@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.1-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -58,7 +58,17 @@ Anthropic Model Context Protocol準拠。148件のテストを Linux / Windows /
 
 ---
 
-## ✨ v1.2.0 の新機能
+## ✨ v1.2.1 の修正
+
+| 修正 | 説明 |
+|------|------|
+| 🎯 **応答が依頼した呼び出し元へ届く** | AI Studio への並行リクエストが互いの応答を受け取っていました |
+| 🚪 **`cgmb` が処理後に終了する** | 共有 MCP サーバを起動したまま放置せず、確実に終了させます |
+| 🔑 **`.env` は自分のプロジェクトから読む** | インストール先や `~/.cgmb` は既定では読まず、`CGMB_ENV_PATH` で明示指定 |
+| 🔍 **検索キャッシュが尋ねた質問に答える** | 年違い・モデル違いを同一エントリとして扱わなくなりました |
+| 🧩 **ワークフローの各ステップが入力を受け取る** | parallel が出力を publish し、hybrid が `dependsOn` の順序を守ります |
+
+### v1.2.0 の新機能
 
 | 機能 | 説明 |
 |------|------|
@@ -456,6 +466,49 @@ src/
 ---
 
 ## 📜 バージョン履歴
+
+### v1.2.1 (2026-08-02)
+
+修正のみのリリースです。すべて 1.2.0 で実測された欠陥への対応で、機能追加は
+ありません。変更は 18 ファイルに収まっています。
+
+- 🎯 **AI Studio への並行リクエストが互いの応答を取らなくなりました**: 共有 MCP
+  サーバに対して呼び出しごとに stdout リスナーを足し、最初に見えた応答で確定して
+  いたため、2 つの呼び出しが同じ応答を受け取っていました。リクエスト ID も
+  `Date.now()` で、同一ミリ秒の 2 件は衝突します。ID で応答を振り分け、ID は単調に
+  なり、TTL で交代したプロセスが後任を巻き込んで失敗させることもなくなりました
+- 🚪 **AI Studio 利用後に `cgmb` が終了します**: 共有 MCP サーバを終了する手段が
+  なく、その stdio パイプが親プロセスを生かし続けていました。shutdown で確実に
+  終了させ、さらに shell を経由せずに起動するため、終了処理が中間の shell ではなく
+  サーバ本体に届きます
+- 🔑 **`.env` はインストール先ではなくプロジェクトから読みます**: 既定でインストール
+  ディレクトリ・グローバル npm ディレクトリ・`~/.cgmb` を読んでいました。他プロジェクト
+  の `AI_STUDIO_API_KEY` に加え、**Google へ送ってよいファイルを決める
+  `CGMB_ALLOWED_ROOTS`** まで引き込む点がより深刻です。これらは `CGMB_ENV_PATH` に
+  よる明示指定のみとし、同変数はファイル・ディレクトリのどちらも受け付け、既定の
+  探索先より優先されます
+- 🔍 **検索キャッシュが尋ねた質問に答えます**: キーが 2024〜2029 年をすべて同一視し、
+  「最新」「最近」「新しい」を畳み込み、モデルを含めていませんでした。2026 年の質問に
+  2024 年の回答が返る、別モデルの回答が返る、といった誤りが起きていました
+- 🧩 **ワークフローの各ステップが入力を受け取ります**: parallel が出力を publish せず、
+  下流ステップが参照先の値なしで動いたうえ success を返していました。hybrid は
+  `dependsOn` の順序を無視していました
+- ⏱️ **タイムアウトが実際の処理量を反映します**: Claude の一般経路がレイヤー既定を
+  下回る固定値を下限にし、見積りも実際に送るプロンプトを見ていませんでした
+- 🔊 **提供終了モデル ID を除去**: 音声経路に `gemini-2.0-flash` が直書きされていました
+- 🧪 **CI がテスト全体を実行します**: postinstall スクリプトが CI 環境でモジュール
+  スコープから `process.exit(0)` していたため、これを `require` したプロセスごと
+  終了していました。GitHub Actions 上でテスト 5 件が消えたまま緑になっていました
+
+**削除**: `generate-audio --script`。「原稿を生成してから読み上げる」2 段階処理を
+うたっていましたが、第 1 段が AI Studio サーバに存在しない `generate_text` ツールを
+要求するため、本バージョン以前のすべてで `MCP error -32601` を返していました。
+`--help` にのみ現れ、本 README にも `docs/` にも記載はありません。通常の
+`generate-audio` は影響を受けません。2 段階処理は、検証できるリリースで作り直します。
+
+**既知・未修正**: `audio_analysis_advanced` タスク種別が、サーバに実装のない
+`analyze_audio_advanced` を呼びます。CLI からも MCP ツールからも到達できないため、
+現状これを起動する手段はありません。
 
 ### v1.2.0 (2026-07-28)
 - 🔄 **Antigravity CLI へ移行**: Google が 2026-06-18 に Gemini CLI の個人向け提供を
