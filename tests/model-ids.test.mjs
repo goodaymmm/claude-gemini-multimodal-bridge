@@ -28,6 +28,13 @@ const SEP = String.fromCharCode(92);
 const NEWLINE = String.fromCharCode(10);
 /** Any model from the shut-down 2.0 generation, in a string literal. */
 const RETIRED_2_0 = /['"`](gemini-2[.]0-[a-z0-9.-]*)['"`]/g;
+/**
+ * Any model from the 2.5 generation, in a string literal. Since 2026-09-18
+ * Google serves 2.5 only to accounts that already used it, so a fresh key is
+ * refused. The match ends at the closing quote, so it also catches a 2.5 ID
+ * embedded in a longer string such as a help text.
+ */
+const RESTRICTED_2_5 = /['"`][^'"`]*?(gemini-2[.]5-[a-z0-9.-]*)/g;
 
 /** Every .ts file under src/. */
 function sourceFiles(dir = SRC, found = []) {
@@ -51,6 +58,17 @@ describe('AI Studio model constants', () => {
         value, /^gemini-2\.0-/,
         `${key} = ${value} is from a shut-down generation`
       );
+    }
+  });
+
+  it('names nothing a new API key cannot reach', () => {
+    // Gemini 2.5 is limited to existing users since 2026-09-18, and
+    // gemini-3-pro-preview was shut down on 2026-03-09 (the ID survives only as
+    // an alias). A default on either works for some users and fails for every
+    // new install, which is the case that matters most.
+    for (const [key, value] of Object.entries(AI_MODELS)) {
+      assert.doesNotMatch(value, /^gemini-2\.5-/, `${key} = ${value} is restricted to existing users`);
+      assert.notEqual(value, 'gemini-3-pro-preview', `${key} = ${value} was shut down`);
     }
   });
 
@@ -112,6 +130,34 @@ describe('no source file hardcodes a retired model', () => {
     );
   });
 
+  it('names no model from the access-restricted 2.5 generation', () => {
+    // Same rule as the 2.0 check above. gemini-2.5-flash was hardcoded at a
+    // dozen call sites -- including the auth probe, which would have reported
+    // a brand-new, valid key as broken. Every model goes through AI_MODELS.
+    // No escapes in this check, for the reason given above.
+    const offenders = [];
+    const isComment = line => {
+      const t = line.trimStart();
+      return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+    };
+
+    for (const file of sourceFiles()) {
+      const relative = file.split(SEP).join('/').replace(/.*\/src\//, 'src/');
+
+      readFileSync(file, 'utf8').split(NEWLINE).forEach((line, index) => {
+        if (isComment(line)) { return; }
+
+        for (const match of line.matchAll(RESTRICTED_2_5)) {
+          offenders.push(`${relative}:${index + 1}  ${match[1]}`);
+        }
+      });
+    }
+
+    assert.deepEqual(
+      offenders, [],
+      `a new API key is refused for 2.5; use AI_MODELS instead:\n${offenders.join('\n')}`
+    );
+  });
 
   it('has removed every gemini-2.0-flash-exp literal', () => {
     const offenders = [];

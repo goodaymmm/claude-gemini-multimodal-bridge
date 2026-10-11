@@ -1265,7 +1265,7 @@ export class LayerManager {
         prompt: typeof inputData.prompt === 'string' ? inputData.prompt.substring(0, 100) + '...' : 'No prompt'
       });
     } else if (isDocumentProcessing) {
-      // Document processing goes to AI Studio with gemini-2.5-flash
+      // Document processing goes to AI Studio (AI_MODELS.DOCUMENT_PROCESSING)
       recommendedLayer = 'aistudio';
       logger.info('Routing to AI Studio for document processing', {
         hasFiles: hasMultimodalFiles,

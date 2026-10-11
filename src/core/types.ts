@@ -293,7 +293,8 @@ export const ConfigSchema = z.object({
    */
   gemini: z.object({
     api_key: z.string(),
-    model: z.string().default('gemini-2.5-pro'),
+    // Lazy: AI_MODELS is declared further down this module.
+    model: z.string().default(() => AI_MODELS.GEMINI_FLASH),
     timeout: z.number().default(60000),
     max_tokens: z.number().default(16384),
     temperature: z.number().default(0.2),
@@ -886,42 +887,54 @@ export type ResourceEstimate = z.infer<typeof ResourceEstimateSchema>;
  * down; it is absent from the catalogue, so every call that used the default
  * would have been rejected.
  *
- * Choices below are the cheaper option wherever the newer generation is only
- * an upgrade rather than a fix -- 2.5 Flash is current, has a free tier, and
- * costs a fifth of 3.6 Flash on input.
+ * Being listed is not the same as being reachable, either. On 2026-09-18
+ * Google limited the Gemini 2.5 models to accounts that had already been
+ * using them (Gemini API release notes). They are not deprecated, but a
+ * fresh API key is refused -- so a 2.5 default works for long-time users and
+ * fails for everyone who installs CGMB today. Vertex AI, a separate platform,
+ * is reported to retire the 2.5 line outright in October 2026.
+ *
+ * Google recommends gemini-3.5-flash-lite (or gemini-3.8-flash) for new
+ * projects. 3.5 Flash-Lite is the default here: 1,048,576-token context, ~65K
+ * output, and $0.30 in / $2.50 out per 1M tokens -- exactly what 2.5 Flash
+ * cost, so moving off 2.5 changes nothing on the bill. 3.8 Flash ($0.75/$3.75
+ * until 2026-12-31, then $1.50/$7.50) is an upgrade, not a fix.
  */
 export const AI_MODELS = {
-  // Image generation. 2.5 Flash Image bills $0.039/image against $0.067 for
-  // 3.1 Flash Image, and both are current.
-  IMAGE_GENERATION: 'gemini-2.5-flash-image',
-  // The GA build of the same model the preview ID pointed at, at the same price.
+  // Image generation. Google's named replacement for gemini-2.5-flash-image
+  // (retiring 2027-03-15). About $0.034 per image; output is limited to 1K
+  // resolution, aspectRatio options unchanged.
+  IMAGE_GENERATION: 'gemini-3.1-flash-lite-image',
+  // GA, higher-quality image generation.
   IMAGE_GENERATION_PRO: 'gemini-3-pro-image',
 
-  // Audio generation. The only TTS models Google publishes are previews; this
-  // is the generation its docs point at for speech.
-  AUDIO_GENERATION: 'gemini-3.1-flash-tts-preview',
+  // Audio generation. gemini-3.1-flash-tts-preview is now a legacy preview;
+  // Google points migrations here. Unlike earlier TTS models, a unary
+  // generateContent call returns a complete WAV file (audio/wav), not raw
+  // PCM -- see utils/wavAudio.ts.
+  AUDIO_GENERATION: 'gemini-3.8-flash-tts',
 
   // General purpose models
-  GEMINI_FLASH: 'gemini-2.5-flash',
+  GEMINI_FLASH: 'gemini-3.5-flash-lite',
   GEMINI_FLASH_3: 'gemini-3-flash-preview',
-  GEMINI_FLASH_3_PRO: 'gemini-3-pro-preview',
+  // gemini-3-pro-preview was shut down on 2026-03-09 and is now only an alias
+  // for this ID; name the real model.
+  GEMINI_FLASH_3_PRO: 'gemini-3.1-pro-preview',
 
-  // Document processing model with 1M token context
-  DOCUMENT_PROCESSING: 'gemini-2.5-flash',
+  // Document processing; 1M-token context.
+  DOCUMENT_PROCESSING: 'gemini-3.5-flash-lite',
 
   /**
    * Image and multimodal understanding.
    *
    * Replaces the `gemini-2.0-flash-exp` that was hardcoded at six call sites.
-   * Google's image-understanding guide demonstrates gemini-3.5-flash, but every
-   * Gemini model takes image input and 2.5 Flash costs $0.30/$2.50 against
-   * $1.50/$9.00 -- so the fix here is removing a model that no longer exists,
-   * not moving generation.
+   * Every Gemini model takes image input, so this follows GEMINI_FLASH rather
+   * than paying for a larger model.
    */
-  MULTIMODAL_ANALYSIS: 'gemini-2.5-flash',
+  MULTIMODAL_ANALYSIS: 'gemini-3.5-flash-lite',
 
   // Default multimodal model
-  MULTIMODAL_DEFAULT: 'gemini-2.5-flash'
+  MULTIMODAL_DEFAULT: 'gemini-3.5-flash-lite'
 } as const;
 
 // Type for AI model values

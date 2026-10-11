@@ -1391,7 +1391,7 @@ program
         console.log('The generate-image command includes:');
         console.log('   • Automatic prompt sanitization (cute → friendly-looking)');
         console.log('   • Safety prefixes to avoid content policy issues');
-        console.log('   • Proper image generation with Gemini 2.0 Flash');
+        console.log(`   • Proper image generation with ${AI_MODELS.IMAGE_GENERATION}`);
         console.log('');
         console.log('Would you like to continue with text analysis anyway? (y/N)');
         
@@ -1599,7 +1599,7 @@ program
       
       const defaultConfig = {
         claude: { timeout: 300000, code_path: 'claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: AI_MODELS.GEMINI_FLASH, api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -1683,7 +1683,7 @@ program
 
       const defaultConfig = {
         claude: { timeout: 300000, code_path: 'claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: AI_MODELS.GEMINI_FLASH, api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -1955,7 +1955,7 @@ program
 
       const defaultConfig = {
         claude: { timeout: 300000, code_path: 'claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: AI_MODELS.GEMINI_FLASH, api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }
@@ -2066,7 +2066,7 @@ program
       
       const defaultConfig = {
         claude: { timeout: 300000, code_path: 'claude' },
-        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: 'gemini-2.5-flash', api_key: process.env.AI_STUDIO_API_KEY || '' },
+        gemini: { temperature: 0.2, max_tokens: 16384, timeout: 60000, model: AI_MODELS.GEMINI_FLASH, api_key: process.env.AI_STUDIO_API_KEY || '' },
         aistudio: { enabled: true, max_files: 10, max_file_size: 100 },
         cache: { enabled: true, ttl: 3600 },
         logging: { level: 'info' as const }

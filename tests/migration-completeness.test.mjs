@@ -91,6 +91,14 @@ describe('the default layer config lives in one place', () => {
     assert.equal(defaultLayerConfig().gemini.model, AI_MODELS.GEMINI_FLASH);
   });
 
+  it('defaults an omitted model to AI_MODELS.GEMINI_FLASH as well', () => {
+    // The schema default was a separate `gemini-2.5-pro` literal, which drifted
+    // from AI_MODELS. It now reads the constant (lazily, as AI_MODELS is
+    // declared later in types.ts).
+    const config = ConfigSchema.parse({ ...defaultLayerConfig(), gemini: { api_key: '' } });
+    assert.equal(config.gemini.model, AI_MODELS.GEMINI_FLASH);
+  });
+
   it('has no copy of the old literal left in src', () => {
     const offenders = [];
 

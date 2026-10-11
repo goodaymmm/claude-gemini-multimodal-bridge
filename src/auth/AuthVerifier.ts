@@ -1,6 +1,6 @@
 import { commandExists } from '../utils/platformUtils.js';
 import { execFileSync } from 'child_process';
-import { AuthResult, VerificationResult } from '../core/types.js';
+import { AI_MODELS, AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
 import { buildSpawnTarget, commandAvailable } from '../utils/processUtils.js';
@@ -512,6 +512,10 @@ export class AuthVerifier {
    * no generation quota, and still requires a valid credential. Distinguishes a
    * rejected key from a network fault so a blip is never reported as "your key
    * is invalid".
+   *
+   * The probed model must be one a brand-new key can reach. Gemini 2.5 has
+   * been limited to existing users since 2026-09-18, so probing it would
+   * report a perfectly good new key as broken; probe the layer's default.
    */
   private async probeAIStudioKey(
     apiKey: string
@@ -522,7 +526,7 @@ export class AuthVerifier {
       const { GoogleGenAI } = await import('@google/genai');
       const client = new GoogleGenAI({ apiKey });
 
-      const probe = client.models.get({ model: 'gemini-2.5-flash' });
+      const probe = client.models.get({ model: AI_MODELS.GEMINI_FLASH });
       const timeout = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error(`timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS).unref()
       );
