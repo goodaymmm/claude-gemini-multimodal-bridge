@@ -32,7 +32,6 @@ import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { isPlatformWindows, normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
-import { describeTtsAudio, hasWavHeader } from '../utils/wavAudio.js';
 const { WaveFile } = pkg;
 
 // Language detection patterns for auto-translation
@@ -558,7 +557,7 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
-   * Generate image using AI Studio (AI_MODELS.IMAGE_GENERATION by default)
+   * Generate image using AI Studio with Gemini 2.0 Flash for cost efficiency
    */
   async generateImage(prompt: string, options: Partial<ImageGenOptions> = {}): Promise<MediaGenResult> {
     logger.info('🔧 UPDATED generateImage method called - with translation fix', {
@@ -566,7 +565,7 @@ export class AIStudioLayer implements LayerInterface {
       version: 'v2025-07-03-translation-fix'
     });
     
-    logger.info('Generating image using Antigravity CLI translation + MCP pattern', {
+    logger.info('Generating image using GeminiCLI translation + MCP pattern', {
       promptLength: prompt.length,
       model: AI_MODELS.IMAGE_GENERATION,
       quality: options.quality ?? 'standard'
@@ -609,17 +608,17 @@ export class AIStudioLayer implements LayerInterface {
       corePromptLength: corePrompt.length
     });
     
-    // Auto-detect language and translate using the Antigravity CLI for token optimization
+    // Auto-detect language and translate using GeminiCLI for token optimization
     const detectedLang = detectLanguage(corePrompt);
     if (detectedLang && detectedLang !== 'en') {
       const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
-      logger.info(`Non-English prompt detected (${languageName}), using the Antigravity CLI for translation...`, {
+      logger.info(`Non-English prompt detected (${languageName}), using GeminiCLI for translation...`, {
         originalPrompt: prompt,
         detectedLanguage: detectedLang
       });
 
       if (this.antigravityLayer) {
-        logger.info('Antigravity CLI layer available, checking translateToEnglish method', {
+        logger.info('GeminiCLI layer available, checking translateToEnglish method', {
           hasTranslateMethod: typeof this.antigravityLayer.translateToEnglish === 'function',
           layerType: this.antigravityLayer.constructor.name,
           availableMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.antigravityLayer)).slice(0, 10),
@@ -628,9 +627,9 @@ export class AIStudioLayer implements LayerInterface {
         
         if (typeof this.antigravityLayer.translateToEnglish === 'function') {
           try {
-            // Ensure Antigravity CLI layer is initialized before translation
+            // Ensure GeminiCLI layer is initialized before translation
             if (!await this.antigravityLayer.isAvailable()) {
-              logger.warn('Antigravity CLI layer not available, initializing...');
+              logger.warn('GeminiCLI layer not available, initializing...');
               await this.antigravityLayer.initialize();
             }
             
@@ -653,7 +652,7 @@ export class AIStudioLayer implements LayerInterface {
               wasTranslated: true
             };
             
-            logger.info('Antigravity CLI translation completed', {
+            logger.info('GeminiCLI translation completed', {
               originalPrompt: prompt,
               translatedPrompt: processedPrompt,
               language: `${languageName} → English`
@@ -680,7 +679,7 @@ export class AIStudioLayer implements LayerInterface {
         }
       } else {
         logger.warn('Translation unavailable. Continuing with image generation in the input language.', {
-          reason: 'Antigravity CLI layer not available',
+          reason: 'GeminiCLI layer not available',
           originalLanguage: detectedLang,
           languageName
         });
@@ -691,7 +690,7 @@ export class AIStudioLayer implements LayerInterface {
     
     try {
       // Use MCP command (matches working timeout pattern from image/PDF analysis)
-      // Translation now handled by the Antigravity CLI for token distribution
+      // Translation now handled by GeminiCLI for token distribution
       const mcpResult = await this.executeMCPCommand('generate_image', {
         prompt: processedPrompt,
         numberOfImages: options.numberOfImages || 1,
@@ -1120,7 +1119,7 @@ export class AIStudioLayer implements LayerInterface {
     return await this.executeMCPCommandOptimized('multimodal_process', {
       files: task.files || [],
       instructions: prompt,
-      model: AI_MODELS.MULTIMODAL_ANALYSIS,
+      model: 'gemini-2.5-flash',
     });
   }
 
@@ -2226,12 +2225,6 @@ export class AIStudioLayer implements LayerInterface {
    * Create a WAV file with proper headers manually (fallback method)
    */
   private createManualWavHeader(pcmData: Buffer, sampleRate: number, bitDepth: number, channels: number): Buffer {
-    // Already a WAV file (gemini-3.8-flash-tts and later): a second header
-    // would be read as audio samples.
-    if (hasWavHeader(pcmData)) {
-      return pcmData;
-    }
-
     const byteRate = sampleRate * channels * (bitDepth / 8);
     const blockAlign = channels * (bitDepth / 8);
     const dataSize = pcmData.length;
@@ -2393,7 +2386,7 @@ export class AIStudioLayer implements LayerInterface {
    * Save generated audio from base64 data
    * Returns normalized cross-platform path (forward slashes)
    */
-  private async saveGeneratedAudio(base64Data: string, format: string = 'wav', mimeType?: string): Promise<string> {
+  private async saveGeneratedAudio(base64Data: string, format: string = 'wav'): Promise<string> {
     const outputDir = join(process.cwd(), 'output', 'audio');
     await mkdir(outputDir, { recursive: true });
 
@@ -2405,65 +2398,57 @@ export class AIStudioLayer implements LayerInterface {
     let finalBuffer: Buffer;
     if (format === 'wav') {
       const rawAudioBuffer = Buffer.from(base64Data, 'base64');
-      // gemini-3.8-flash-tts returns a finished WAV file; older TTS models
-      // return headerless L16 PCM. Only the latter needs a header.
-      const { isWav, format: audioFormat } = describeTtsAudio(rawAudioBuffer, mimeType);
 
       logger.debug('Processing audio data for saveGeneratedAudio', {
         rawDataSize: rawAudioBuffer.length,
-        format,
-        mimeType,
-        alreadyWav: isWav
+        format
       });
 
-      if (isWav) {
-        finalBuffer = rawAudioBuffer;
-        logger.info('Model returned a complete WAV file; writing it unchanged', {
-          finalWavSize: finalBuffer.length,
-          ...audioFormat
-        });
-      } else {
-        try {
-          // Create WAV file with proper headers using WaveFile library (google_docs.md specification)
-          const wav = new WaveFile();
+      try {
+        // Create WAV file with proper headers using WaveFile library (google_docs.md specification)
+        const wav = new WaveFile();
 
-          // L16 PCM data (16-bit signed little-endian integers).
-          // Convert Buffer to samples for WaveFile.fromScratch()
-          const pcmSamples = [];
-          for (let i = 0; i + 1 < rawAudioBuffer.length; i += 2) {
-            pcmSamples.push(rawAudioBuffer.readInt16LE(i));
-          }
-
-          // fromScratch expects: channels, sampleRate, bitDepth, PCM samples array
-          wav.fromScratch(audioFormat.channels, audioFormat.sampleRate, String(audioFormat.bitDepth), pcmSamples);
-          const wavData = wav.toBuffer();
-          finalBuffer = Buffer.from(wavData);
-
-          // Validate WAV header
-          if (!hasWavHeader(finalBuffer)) {
-            throw new Error(`Invalid WAV header: ${finalBuffer.toString('ascii', 0, 12)}`);
-          }
-
-          logger.info('Generated WAV file with proper headers', {
-            originalDataSize: rawAudioBuffer.length,
-            finalWavSize: finalBuffer.length,
-            ...audioFormat
-          });
-
-        } catch (wavError) {
-          logger.error('WAV creation failed in saveGeneratedAudio, using manual header', {
-            error: (wavError as Error).message
-          });
-
-          // Fallback to manual WAV header creation
-          finalBuffer = this.createManualWavHeader(
-            rawAudioBuffer, audioFormat.sampleRate, audioFormat.bitDepth, audioFormat.channels
-          );
-
-          logger.warn('Used manual WAV header fallback in saveGeneratedAudio', {
-            finalWavSize: finalBuffer.length
-          });
+        // Google AI Studio returns L16 PCM data (16-bit signed integers)
+        // Convert Buffer to Int16Array for WaveFile.fromScratch()
+        const pcmSamples = [];
+        for (let i = 0; i < rawAudioBuffer.length; i += 2) {
+          // Read 16-bit signed little-endian integers
+          const sample = rawAudioBuffer.readInt16LE(i);
+          pcmSamples.push(sample);
         }
+
+        // fromScratch expects: channels, sampleRate, bitDepth, PCM samples array
+        wav.fromScratch(1, 24000, '16', pcmSamples);
+        const wavData = wav.toBuffer();
+        finalBuffer = Buffer.from(wavData);
+
+        // Validate WAV header
+        const riffHeader = finalBuffer.toString('ascii', 0, 4);
+        const waveHeader = finalBuffer.toString('ascii', 8, 12);
+
+        if (riffHeader !== 'RIFF' || waveHeader !== 'WAVE') {
+          throw new Error(`Invalid WAV header: RIFF=${riffHeader}, WAVE=${waveHeader}`);
+        }
+
+        logger.info('Generated WAV file with proper headers', {
+          originalDataSize: rawAudioBuffer.length,
+          finalWavSize: finalBuffer.length,
+          sampleRate: 24000,
+          bitDepth: 16,
+          channels: 1
+        });
+
+      } catch (wavError) {
+        logger.error('WAV creation failed in saveGeneratedAudio, using manual header', {
+          error: (wavError as Error).message
+        });
+
+        // Fallback to manual WAV header creation
+        finalBuffer = this.createManualWavHeader(rawAudioBuffer, 24000, 16, 1);
+
+        logger.warn('Used manual WAV header fallback in saveGeneratedAudio', {
+          finalWavSize: finalBuffer.length
+        });
       }
     } else {
       finalBuffer = Buffer.from(base64Data, 'base64');
@@ -2536,7 +2521,7 @@ export class AIStudioLayer implements LayerInterface {
             documentCount: documents.length,
             estimatedTokens,
             maxTokensPerDocument: this.MAX_DOCUMENT_PAGES * this.TOKENS_PER_PAGE,
-            processingModel: AI_MODELS.DOCUMENT_PROCESSING,
+            processingModel: 'gemini-2.5-flash',
             compliance: 'Google AI Studio Official Specifications'
           }
         };
@@ -2646,7 +2631,7 @@ export class AIStudioLayer implements LayerInterface {
       return AI_MODELS.IMAGE_GENERATION;
     }
     
-    // Document processing uses the 1M-context document model
+    // Document processing uses gemini-2.5-flash for better performance
     if (taskType.includes('document') || taskType.includes('pdf') || taskType.includes('text') || taskType.includes('analyze')) {
       return AI_MODELS.DOCUMENT_PROCESSING;
     }
@@ -2716,7 +2701,7 @@ export class AIStudioLayer implements LayerInterface {
     const result = await this.executeMCPCommandOptimized('multimodal_process', {
       files: pdfFiles,
       instructions: `${prompt}\n\nProcess these ${pdfFiles.length} PDF documents using Gemini File API batch processing. Compare and analyze content across all documents.`,
-      model: AI_MODELS.DOCUMENT_PROCESSING,
+      model: 'gemini-2.5-flash',
       options: {
         batchProcessing: true,
         multiplePDFs: true,

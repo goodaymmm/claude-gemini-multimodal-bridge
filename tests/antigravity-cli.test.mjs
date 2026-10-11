@@ -1,18 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  buildAgyChildEnv,
   isVersionAtLeast,
   looksLikeAgyBinary,
-  looksSignedOut,
   MIN_AGY_VERSION,
-  probeAntigravityAuth,
 } from '../dist/utils/antigravityCli.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager, assertNoCredentialFiles } from '../dist/core/LayerManager.js';
@@ -880,151 +877,6 @@ describe('files are refused, not silently dropped', () => {
         /cannot fall back to the Antigravity CLI layer/.test(error.message) &&
         /AI Studio quota exceeded/.test(error.message),
       'the fallback must fail loudly and preserve the original cause'
-    );
-  });
-});
-
-describe('auth probe classification', () => {
-  // The stubs live under os.tmpdir() for the same reason as in
-  // agy-regression.test.mjs, and not under a `cgmb-agy-*` name, which the
-  // workspace-isolation test scans for.
-  const probeScratch = mkdtempSync(join(tmpdir(), 'cgmb-probe-'));
-  after(() => rmSync(probeScratch, { recursive: true, force: true }));
-
-  /** A fake `agy` whose `models` subcommand runs the given body. */
-  function agyStub(name, body) {
-    const scriptPath = join(probeScratch, `${name}.mjs`);
-    writeFileSync(scriptPath, `
-      const args = process.argv.slice(2);
-      if (args.includes('--version')) { console.log('1.3.3'); process.exit(0); }
-      ${body}
-    `, 'utf8');
-
-    // process.execPath, not a bare `node`: the probe runs agy under a minimal
-    // environment, and the interpreter must not depend on PATH lookup.
-    if (!isWindows) {
-      const shPath = join(probeScratch, name);
-      writeFileSync(shPath, `#!/bin/sh\nexec "${process.execPath}" "${scriptPath}" "$@"\n`, { mode: 0o755 });
-      return shPath;
-    }
-    const cmdPath = join(probeScratch, `${name}.cmd`);
-    writeFileSync(cmdPath, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, 'utf8');
-    return cmdPath;
-  }
-
-  it('reads the 1.3.1 "Authentication expired" notice as signed out, not unavailable', async () => {
-    const stub = agyStub('agy-expired', `
-      console.error('Authentication expired. Please log back in.');
-      process.exit(1);
-    `);
-
-    const probe = await probeAntigravityAuth(stub, { timeoutMs: 6000 });
-    assert.equal(probe.authenticated, false);
-    assert.equal(probe.outcome, 'unauthenticated', `got ${JSON.stringify(probe)}`);
-    assert.match(probe.error, /log back in/);
-  });
-
-  it('does not read the notice as a model listing when it arrives on stdout with exit 0', async () => {
-    const stub = agyStub('agy-expired-stdout', `
-      console.log('Authentication expired. Please log back in.');
-      process.exit(0);
-    `);
-
-    const probe = await probeAntigravityAuth(stub, { timeoutMs: 6000 });
-    assert.equal(probe.authenticated, false, 'a sign-out notice is not a model listing');
-    assert.equal(probe.outcome, 'unauthenticated', `got ${JSON.stringify(probe)}`);
-  });
-
-  it('keeps sign-out wording ahead of transport words in the same message', async () => {
-    const stub = agyStub('agy-revoked', `
-      console.error('Sign-in was revoked; the service is unavailable until you log back in.');
-      process.exit(1);
-    `);
-
-    const probe = await probeAntigravityAuth(stub, { timeoutMs: 6000 });
-    assert.equal(probe.outcome, 'unauthenticated', `got ${JSON.stringify(probe)}`);
-  });
-
-  it('still reports a network failure as unavailable', async () => {
-    const stub = agyStub('agy-offline', `
-      console.error('request failed: getaddrinfo ENOTFOUND antigravity.googleapis.com');
-      process.exit(1);
-    `);
-
-    const probe = await probeAntigravityAuth(stub, { timeoutMs: 6000 });
-    assert.equal(probe.outcome, 'unavailable', `got ${JSON.stringify(probe)}`);
-  });
-
-  it('matches the sign-out phrases and leaves a model listing alone', () => {
-    for (const text of [
-      'Authentication expired. Please log back in.',
-      'Error: please log back in',
-      'Your sign-in was revoked.',
-    ]) {
-      assert.equal(looksSignedOut(text), true, text);
-    }
-    assert.equal(looksSignedOut('gemini-3.6-flash-low\ngemini-3.1-pro-high\n'), false);
-  });
-
-  it('probes without GEMINI_API_KEY, like the layer it speaks for', async () => {
-    // agy treats GEMINI_API_KEY as API-key mode. The layer never passes it, so
-    // a probe that inherited it could report "signed in" for a session the
-    // layer's requests cannot use.
-    const stub = agyStub('agy-key-only', `
-      if (process.env.GEMINI_API_KEY) { console.log('gemini-3.6-flash-low'); process.exit(0); }
-      console.error('Authentication expired. Please log back in.');
-      process.exit(1);
-    `);
-
-    const saved = process.env.GEMINI_API_KEY;
-    process.env.GEMINI_API_KEY = 'AIza-test-key-not-real';
-    try {
-      const probe = await probeAntigravityAuth(stub, { timeoutMs: 6000 });
-      assert.equal(probe.authenticated, false, 'an API key in CGMB\'s env is not a keyring sign-in');
-      assert.equal(probe.outcome, 'unauthenticated', `got ${JSON.stringify(probe)}`);
-    } finally {
-      if (saved === undefined) { delete process.env.GEMINI_API_KEY; } else { process.env.GEMINI_API_KEY = saved; }
-    }
-  });
-
-  it('gives the layer and the probe the same allow-listed environment', () => {
-    const source = {
-      PATH: '/usr/bin',
-      HOME: '/home/someone',
-      DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus',
-      GEMINI_API_KEY: 'AIza-test-key-not-real',
-      AI_STUDIO_API_KEY: 'secret',
-      GOOGLE_API_KEY: 'secret',
-    };
-    const env = buildAgyChildEnv(source);
-    assert.equal(env.PATH, '/usr/bin');
-    assert.equal(env.DBUS_SESSION_BUS_ADDRESS, source.DBUS_SESSION_BUS_ADDRESS, 'the keyring must stay reachable');
-    for (const secret of ['GEMINI_API_KEY', 'AI_STUDIO_API_KEY', 'GOOGLE_API_KEY']) {
-      assert.equal(env[secret], undefined, `${secret} must not reach agy`);
-    }
-
-    const layerEnv = new AntigravityCLILayer().buildChildEnv();
-    assert.deepEqual(layerEnv, buildAgyChildEnv(), 'the layer must use the shared allow-list');
-  });
-
-  it('points a signed-out request at the fix', { skip: isWindows && 'the layer spawns agy directly, not through a .cmd shim' }, async () => {
-    const stub = agyStub('agy-expired-run', `
-      process.stdin.resume();
-      process.stdin.on('end', () => {
-        console.error('Authentication expired. Please log back in.');
-        process.exit(1);
-      });
-    `);
-
-    const layer = new AntigravityCLILayer();
-    layer.agyPath = stub;
-    layer.agyVersion = '1.3.3';
-
-    await assert.rejects(
-      () => layer.executeAntigravityCLI('hello'),
-      error =>
-        /Authentication expired\. Please log back in\./.test(error.message) &&
-        /Sign in again by running `agy`/.test(error.message)
     );
   });
 });

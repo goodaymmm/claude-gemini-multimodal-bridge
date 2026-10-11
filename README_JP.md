@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.3-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.2-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -50,7 +50,7 @@ Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生�
 
 ### 🎯 MCP標準対応
 
-Anthropic Model Context Protocol準拠。197件のテストを Linux / Windows / macOS の CI で push ごとに実行
+Anthropic Model Context Protocol準拠。179件のテストを Linux / Windows / macOS の CI で push ごとに実行
 
 </td>
 </tr>
@@ -58,22 +58,7 @@ Anthropic Model Context Protocol準拠。197件のテストを Linux / Windows /
 
 ---
 
-## ✨ v1.2.3 の変更
-
-修正リリースです。Google は 2026-09-18 以降、Gemini 2.5 系モデルをそれ以前から
-利用していたアカウントにしか提供しておらず、新しい API キーでは AI Studio
-レイヤーが何も返せませんでした。実際の Gemini API・実際の `agy` では実行して
-いません（バージョン履歴を参照）。
-
-| 修正 | 説明 |
-|------|------|
-| 🚀 **AI Studio の既定モデルを Gemini 2.5 から移行** | 汎用・ドキュメント・マルチモーダルは `gemini-3.5-flash-lite`（2.5 Flash と同価格）、画像は `gemini-3.1-flash-lite-image`、音声は `gemini-3.8-flash-tts` |
-| 🔑 **新しい API キーを壊れていると判定しなくなりました** | キー確認に、新しいキーを拒否する `gemini-2.5-flash` を使っていました |
-| 🎵 **音声ファイルの WAV ヘッダーは 1 つだけ** | 3.8 TTS は完全な WAV ファイルを返すため、ヘッダーを重ねて付けずそのまま書き出します |
-| 🔐 **Antigravity のサインイン確認が実際のリクエストと一致** | `GEMINI_API_KEY` を渡さなくなり、期限切れのサインインは障害ではなく未サインインと判定します |
-| 🧭 **表記を Antigravity CLI に統一** | 残っていた「Gemini CLI」の案内を `agy` に修正。`cgmb detect-paths --fix` が一度も出なかった `agy` のインストール案内を表示します |
-
-### v1.2.2 の変更
+## ✨ v1.2.2 の変更
 
 整理のみのリリースです。利用者から到達できる挙動は何も変わりません
 （削除したコードはいずれも到達不能でした）。
@@ -93,6 +78,19 @@ Anthropic Model Context Protocol準拠。197件のテストを Linux / Windows /
 | 🔑 **`.env` は自分のプロジェクトから読む** | インストール先や `~/.cgmb` は既定では読まず、`CGMB_ENV_PATH` で明示指定 |
 | 🔍 **検索キャッシュが尋ねた質問に答える** | 年違い・モデル違いを同一エントリとして扱わなくなりました |
 | 🧩 **ワークフローの各ステップが入力を受け取る** | parallel が出力を publish し、hybrid が `dependsOn` の順序を守ります |
+
+### v1.2.0 の新機能
+
+| 機能 | 説明 |
+|------|------|
+| 🔄 **Antigravity CLI** | 検索レイヤーが提供終了した Gemini CLI から `agy` へ移行 |
+| 🖥️ **3OS 対応** | Linux / Windows / macOS を push ごとに CI で検証 |
+| 🚀 **モデル更新** | `gemini-3-pro-image` / `gemini-3.1-flash-tts-preview`。提供終了した `gemini-2.0-flash-exp` は除去 |
+| 🎯 **`targetLayer` が機能** | 指定したレイヤーへ届きます（`claude` も指定可能に） |
+| 🔧 **`CLAUDE_CODE_PATH`** | ドキュメントどおり実行ファイル探索に反映されるようになりました |
+| 🪟 **Windows完全対応** | CLI/MCP両方でネイティブサポート（v1.1.0 以降） |
+| 🔐 **OAuth認証** | `agy` は OS キーリング、Claude Code はファイルベース認証 |
+| 📊 **スマートルーティング** | PDF URLはAI Studioへ、WebページはAntigravity CLIへ |
 
 ---
 
@@ -216,19 +214,15 @@ CGMBはClaude Codeとシームレスに統合。**「CGMB」キーワード**を
 | 用途 | モデルID | レイヤー |
 |:----:|:---------|:-------:|
 | 🔍 Web検索 | `gemini-3.6-flash-low` | Antigravity CLI |
-| 🎨 画像生成 | `gemini-3.1-flash-lite-image` | AI Studio |
+| 🎨 画像生成 | `gemini-2.5-flash-image` | AI Studio |
 | 🖼️ 画像生成（高品質） | `gemini-3-pro-image` | AI Studio |
-| 🎵 音声生成 | `gemini-3.8-flash-tts` | AI Studio |
-| 📄 ドキュメント処理 | `gemini-3.5-flash-lite` | AI Studio |
-| 📝 OCR/テキスト抽出 | `gemini-3.5-flash-lite` | AI Studio |
-| 🔮 汎用マルチモーダル | `gemini-3.5-flash-lite` | AI Studio |
+| 🎵 音声生成 | `gemini-3.1-flash-tts-preview` | AI Studio |
+| 📄 ドキュメント処理 | `gemini-2.5-flash` | AI Studio |
+| 📝 OCR/テキスト抽出 | `gemini-2.5-flash` | AI Studio |
+| 🔮 汎用マルチモーダル | `gemini-2.5-flash` | AI Studio |
 
-Antigravity の行は既定値です。どの Antigravity モデル ID が有効かは手元の
-`agy models` が決めます。一覧はアカウントとプランによって異なります（agy 1.2.16
-で報告された一覧には `gemini-3.6` / `3.7` / `3.8` の Flash 各段階
-`-low` / `-medium` / `-high` があります）。別のモデルは `ANTIGRAVITY_MODEL` または
-`--model` で指定します。AI Studio 側の ID は `src/core/types.ts` の `AI_MODELS` に
-あります。
+Antigravity のモデル ID は `agy models` の出力に存在するものだけが有効です。
+AI Studio 側の ID は `src/core/types.ts` の `AI_MODELS` にあります。
 
 ---
 
@@ -499,71 +493,6 @@ src/
 ---
 
 ## 📜 バージョン履歴
-
-### v1.2.3 (2026-10-11)
-
-修正リリースです。いずれも今日インストールした利用者が遭遇しうる問題への対応で、
-機能追加はありません。
-
-- 🔑 **新しい AI Studio API キーで動作するようになりました**: Google は 2026-09-18 に
-  Gemini 2.5 系モデルを、それ以前から利用していたアカウントに限定しました。非推奨では
-  ありませんが、新しい API キーは拒否されます。`gemini-2.5-flash` は CGMB の汎用・
-  ドキュメント処理・マルチモーダル分析の既定モデルであり、キー確認に使うモデルでも
-  あったため、有効な新しいキーがリクエスト前の段階で壊れていると報告されていました。
-  既定を新しいキーで使えるモデルへ移します:
-  - `gemini-2.5-flash` → `gemini-3.5-flash-lite`（汎用・ドキュメント処理・
-    マルチモーダル分析）。コンテキスト 1M トークン、料金 1M トークンあたり
-    $0.30 / $2.50 とも同じで、請求額は変わりません
-  - `gemini-2.5-flash-image` → `gemini-3.1-flash-lite-image`。Google が後継として
-    名指しするモデルで、1 枚あたり約 $0.034、出力は 1K 解像度までです
-  - `gemini-3.1-flash-tts-preview` → `gemini-3.8-flash-tts`。旧 ID はレガシーの
-    プレビュー扱いになりました
-  - `gemini-3-pro-preview` → `gemini-3.1-pro-preview`。旧 ID は 2026-03-09 に
-    提供終了し、別名としてのみ残っています
-- 🎵 **音声ファイルに WAV ヘッダーを二重に付けなくなりました**: 3.8 TTS は、従来の
-  モデルが返していたヘッダーなしの PCM ではなく完全な WAV ファイルを返します。
-  WAV ヘッダーを付けていた 2 箇所は、いずれもヘッダーを重ねるところでした。WAV は
-  そのまま書き出し、上書き指定で選んだ旧 TTS モデルの PCM は従来どおりヘッダーを
-  付けます。報告するサンプルレートとビット深度も、想定値ではなく音声の実際の値です
-- 🔒 **モデル ID が再びずれないように**: `src/` 内のモデル ID はすべて `AI_MODELS`
-  から取るようにし、`gemini-2.5-*` の直書きがあれば失敗するテストを追加しました
-  （`gemini-2.0-*` は従来から検出しています）。設定スキーマの `gemini.model` の
-  既定値はまだ `gemini-2.5-pro` でしたが、同じ定数に従うようにしました
-- 🔐 **Antigravity のサインイン確認が実際のリクエストと同じ環境で行われます**: 確認は
-  環境変数をすべて引き継いで `agy models` を実行していた一方、レイヤーは `agy -p` に
-  `GEMINI_API_KEY` を含まない最小限の許可リストだけを渡していました。agy はこのキーを
-  API キーモードの要求とみなすため、キーが設定されていると（CGMB 自身の `.env`
-  テンプレートが設定します）、確認は「サインイン済み」と答えながら実際のリクエストは
-  空のキーリングで実行される、ということが起きえました。両者は同じ許可リストを使う
-  ようになり、CGMB の秘密情報は `agy` に渡りません
-- ⏳ **期限切れのサインインを未サインインと判定します**: agy 1.3.1 以降、期限切れ・
-  失効したサインインでは "Authentication expired. Please log back in." と表示され、
-  これが障害と判定されることがありました。未サインインとして報告し、エラーで
-  `agy` を再度実行するよう案内します
-- 📋 **Antigravity のモデル一覧を更新**: 参照用の一覧を、agy 1.2.16 で報告された
-  `agy models` の出力に差し替えました — Gemini 3.6 / 3.7 / 3.8 Flash の各段階、
-  3.1 Pro、Claude Opus / Sonnet 5.5 の各段階、`gpt-oss-120b-medium`。参考情報であり、
-  この一覧を理由に拒否されるモデルはありません。有効かどうかは手元の `agy models` が
-  決めます
-- 🧭 **「Gemini CLI」表記を置き換え**: CLI の案内、起動時のヒント、依存関係チェック、
-  ログが Antigravity CLI (`agy`) を名指しするようになりました。うち 1 件は欠陥で、
-  `cgmb detect-paths --fix` が旧名と比較していたため `agy` のインストール案内が一度も
-  表示されていませんでした。`detect-paths` は `ANTIGRAVITY_CLI_PATH` も表示します
-- 🧹 **古いバージョン表記と固定モデル**: `package.json` の `mcp` ブロックは v1.2.0 の
-  ままでしたが 1.2.3 にしました。GitHub Pages のランディングページ
-  (`docs/index.html`) は v1.1.0 のままで Gemini CLI を説明していました。
-  `.claude/settings.json` はヘッドレスの Claude Code プロセスにレガシーの
-  `claude-sonnet-5` を固定していましたが、`claude-sonnet-5-5` に変更しました
-
-**変更なし**: 高品質な画像生成の `gemini-3-pro-image`、Antigravity の既定
-`gemini-3.6-flash-low`、`MIN_AGY_VERSION`（1.1.7）。export している識別子の名前は
-変えていません。テスト: 179 → 197（WAV ヘルパー 7 件、スキーマ既定値 1 件、
-モデル表 2 件、Antigravity の確認と環境 8 件）。
-
-**実環境では未検証**: いずれも実際の Gemini API・実際の `agy` に対しては実行して
-いません。モデル ID と 3.8 TTS の WAV 出力は Google のドキュメントとリリースノート、
-agy 1.3.1 の文言と 1.2.16 のモデル一覧はリリースノートとコード中で引用している
-GitHub issue に基づいています。
 
 ### v1.2.2 (2026-08-03)
 
