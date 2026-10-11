@@ -29,7 +29,7 @@ import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import { describeTtsAudio } from '../utils/wavAudio.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
-// pdf-parse is dynamically imported within the extractPDFText() method
+import { extractPdfText } from '../utils/pdfText.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -969,26 +969,13 @@ To retrieve this file, use:
   }
 
   /**
-   * Extract text from PDF using pdf-parse (dynamic import)
+   * Extract text from PDF using pdf-parse (see utils/pdfText.ts)
    */
   private async extractPDFText(filePath: string): Promise<string> {
     try {
       console.error(`[MCP Server] Extracting text from PDF: ${filePath}`);
       
-      // Dynamically import pdf-parse (only during PDF file processing)
-      let pdfParse;
-      try {
-        // CommonJS dynamic import in ES module environment (using lib directly to avoid test mode)
-        pdfParse = (await import('pdf-parse/lib/pdf-parse.js' as any)).default;
-      } catch (importError) {
-        throw new Error(`PDF processing library not available: ${importError instanceof Error ? importError.message : String(importError)}`);
-      }
-      
-      const buffer = fs.readFileSync(filePath);
-      const data = await pdfParse(buffer, {
-        max: 0, // Process all pages
-        version: 'v1.10.100',
-      });
+      const data = await extractPdfText(filePath);
 
       const extractedText = data.text.trim();
       

@@ -13,7 +13,7 @@ import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';
-// pdf-parse is dynamically imported within extractPDFWithPdfParse() method (fallback only)
+import { extractPdfText } from '../utils/pdfText.js';
 
 /**
  * DocumentAnalysis tool provides advanced document analysis capabilities
@@ -283,55 +283,10 @@ Please extract the complete text content while maintaining readability and struc
     try {
       logger.info('Extracting PDF with pdf-parse (fallback)', { pdfPath });
       
-      // Dynamically import pdf-parse (only during Gemini File API fallback)
-      let pdfParse;
-      try {
-        // CommonJS dynamic import in ES module environment (using lib directly to avoid test mode)
-        pdfParse = (await import('pdf-parse/lib/pdf-parse.js' as any)).default;
-      } catch (importError) {
-        throw new Error(`PDF processing library not available: ${importError instanceof Error ? importError.message : String(importError)}`);
-      }
-      
-      const buffer = await fs.readFile(pdfPath);
-      const data = await pdfParse(buffer, {
-        // PDF parsing options optimized for Japanese content
-        max: 0, // Process all pages
-        version: 'v1.10.100', // Use specific version for compatibility
-        pagerender: (pageData: any) => {
-          // Enhanced page rendering for Japanese text and better structure
-          const renderOptions = {
-            normalizeWhitespace: false,
-            disableCombineTextItems: false,
-            includeMarkedContent: true, // Include tagged content for better structure
-            textFilter: undefined // No text filtering to preserve all content
-          };
-          return pageData.getTextContent(renderOptions)
-            .then((textContent: any) => {
-              let lastY, text = '';
-              let lineSpacing = 0;
-              
-              for (const item of textContent.items) {
-                // Improved line break detection for Japanese text
-                if (lastY && Math.abs(lastY - item.transform[5]) > lineSpacing) {
-                  // Add line break for significant Y position changes
-                  text += '\n' + item.str;
-                } else {
-                  // Add space for horizontal text flow (but not for Japanese characters)
-                  const needsSpace = lastY && lastY === item.transform[5] && 
-                    !/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(item.str) &&
-                    !/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(text.slice(-1));
-                  text += (needsSpace ? ' ' : '') + item.str;
-                }
-                lastY = item.transform[5];
-                // Update line spacing based on font size if available
-                if (item.height) {
-                  lineSpacing = Math.max(lineSpacing, item.height * 0.3);
-                }
-              }
-              return text;
-            });
-        }
-      });
+      // pdf-parse 2 has no page-render callback, so the Japanese-aware
+      // spacing this used to apply per text item is replaced by pdf-parse's own
+      // line handling, with a space between widely spaced items on one line.
+      const data = await extractPdfText(pdfPath);
 
       const extractedText = data.text.trim();
       
@@ -344,8 +299,7 @@ Please extract the complete text content while maintaining readability and struc
         textLength: data.text.length,
         extractedSample: data.text.substring(0, 200),
         hasInfo: !!data.info,
-        infoKeys: data.info ? Object.keys(data.info) : [],
-        version: data.version || 'unknown'
+        infoKeys: data.info ? Object.keys(data.info) : []
       });
       
       logger.info('PDF text extraction completed', {

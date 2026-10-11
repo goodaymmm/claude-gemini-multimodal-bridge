@@ -1,7 +1,31 @@
-import { config } from 'dotenv';
+import { config, type DotenvConfigOutput } from 'dotenv';
 import { existsSync, statSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { logger } from './logger.js';
+
+/**
+ * Read one .env file into process.env without writing anything to stdout.
+ *
+ * CGMB's main mode is an MCP server on stdio, where stdout carries JSON-RPC and
+ * nothing else. dotenv 17 started printing an "injected env" line on every
+ * load unless told to be quiet, and dotenv 18 also takes ENCODING, PATH, QUIET,
+ * DEBUG, OVERRIDE and FAST from DOTENV_* / DOTENV_CONFIG_* variables in the
+ * environment. Its debug output goes to console.log -- stdout -- so a stray
+ * DOTENV_DEBUG=true in the user's shell would corrupt the protocol, and a stray
+ * DOTENV_OVERRIDE or DOTENV_PATH would change which values win or which file is
+ * read. Every option is therefore pinned here: options given in code take
+ * precedence over the environment ones, and these are the values dotenv 16 used.
+ */
+export function loadDotenvFile(path: string = resolve(process.cwd(), '.env')): DotenvConfigOutput {
+  return config({
+    path,
+    encoding: 'utf8',
+    quiet: true,
+    debug: false,
+    override: false,
+    fast: false,
+  });
+}
 
 /**
  * Smart environment loader that finds .env files from multiple locations
@@ -81,7 +105,7 @@ export class SmartEnvLoader {
         
         try {
           // Load this .env file
-          const result = config({ path: envPath });
+          const result = loadDotenvFile(envPath);
           
           if (result.error) {
             this.loadResult.errors.push(`Failed to load ${envPath}: ${result.error.message}`);

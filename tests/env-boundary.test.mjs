@@ -20,10 +20,12 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { after, afterEach, describe, it } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { SmartEnvLoader } from '../dist/utils/envLoader.js';
 
@@ -143,4 +145,62 @@ describe('the opt-in that replaces what the default list dropped', () => {
       'the named file must be the one that is read'
     );
   });
+});
+
+/**
+ * Loading a .env must not write to stdout.
+ *
+ * `cgmb serve` speaks JSON-RPC on stdout, so a single extra line there breaks
+ * the MCP client. dotenv 17 began printing an "injected env (N) from .env" line
+ * on every load unless asked to be quiet, and dotenv 18 also reads DEBUG,
+ * QUIET, OVERRIDE and PATH from DOTENV_* variables in the environment -- its
+ * debug log goes to console.log. The load runs in a child process so that its
+ * stdout can be captured on its own, with those variables set against us.
+ */
+describe('loading a .env is silent on stdout', () => {
+  const LOADER = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'utils', 'envLoader.js')).href;
+
+  function loadInChild(dir, extraEnv) {
+    const script = [
+      `const { SmartEnvLoader, loadDotenvFile } = await import(${JSON.stringify(LOADER)});`,
+      `process.env.CGMB_TEST_PRESET = 'from-shell';`,
+      `await new SmartEnvLoader().loadEnvironment({ forceReload: true });`,
+      `loadDotenvFile();`,
+      `process.stderr.write('RESULT ' + JSON.stringify({ loaded: process.env.CGMB_TEST_QUIET, preset: process.env.CGMB_TEST_PRESET }) + '\\n');`,
+    ].join('\n');
+    return spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: dir,
+      env: { ...process.env, CGMB_ENV_PATH: join(dir, '.env'), LOG_LEVEL: 'error', ...extraEnv },
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+  }
+
+  for (const [label, extraEnv] of [
+    ['with no DOTENV_* settings', {}],
+    ['with DOTENV_* settings asking for output', {
+      DOTENV_CONFIG_QUIET: 'false',
+      DOTENV_QUIET: 'false',
+      DOTENV_DEBUG: 'true',
+      DOTENV_CONFIG_DEBUG: 'true',
+      DOTENV_OVERRIDE: 'true',
+    }],
+  ]) {
+    it(`writes nothing to stdout ${label}`, () => {
+      const dir = join(scratch, `quiet-${Object.keys(extraEnv).length}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, '.env'), 'CGMB_TEST_QUIET=loaded\nCGMB_TEST_PRESET=from-file\n', 'utf8');
+
+      const run = loadInChild(dir, extraEnv);
+
+      assert.equal(run.status, 0, `the child failed:\n${run.stderr}`);
+      assert.equal(run.stdout, '', 'stdout is the MCP channel; loading a .env must leave it empty');
+
+      const line = run.stderr.split('\n').find(l => l.startsWith('RESULT '));
+      assert.ok(line, `no result line:\n${run.stderr}`);
+      const result = JSON.parse(line.slice('RESULT '.length));
+      assert.equal(result.loaded, 'loaded', 'the .env must still be read');
+      assert.equal(result.preset, 'from-shell', 'a value already in the environment must win over the .env');
+    });
+  }
 });

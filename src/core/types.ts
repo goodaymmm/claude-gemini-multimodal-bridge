@@ -195,7 +195,7 @@ export const WorkflowStepSchema = z.object({
   id: z.string(),
   layer: z.enum(['claude', 'antigravity', 'gemini', 'aistudio']),
   action: z.string(),
-  input: z.record(z.any()),
+  input: z.record(z.string(), z.any()),
   dependsOn: z.array(z.string()).optional(),
   timeout: z.number().optional(),
   retries: z.number().optional(),
@@ -204,8 +204,8 @@ export type WorkflowStep = z.infer<typeof WorkflowStepSchema>;
 
 export const ExecutionPlanSchema = z.object({
   steps: z.array(WorkflowStepSchema),
-  dependencies: z.record(z.array(z.string())).optional(),
-  fallbackStrategies: z.record(z.object({
+  dependencies: z.record(z.string(), z.array(z.string())).optional(),
+  fallbackStrategies: z.record(z.string(), z.object({
     replace: z.string(),
     with: WorkflowStepSchema,
   })).optional(),
@@ -215,7 +215,7 @@ export type ExecutionPlan = z.infer<typeof ExecutionPlanSchema>;
 
 export const WorkflowDefinitionArgsSchema = z.object({
   workflow_definition: ExecutionPlanSchema,
-  input_data: z.record(z.any()),
+  input_data: z.record(z.string(), z.any()),
   execution_mode: z.enum(['sequential', 'parallel', 'adaptive']).optional(),
   options: ProcessingOptionsSchema.optional(),
 });
@@ -241,7 +241,7 @@ export type LayerResult = z.infer<typeof LayerResultSchema>;
 
 export const WorkflowResultSchema = z.object({
   success: z.boolean(),
-  results: z.union([z.record(LayerResultSchema), z.array(LayerResultSchema)]),
+  results: z.union([z.record(z.string(), LayerResultSchema), z.array(LayerResultSchema)]),
   summary: z.string().optional(),
   metadata: z.object({
     total_duration: z.number(),
@@ -376,7 +376,7 @@ export const ImageAnalysisResultSchema = z.object({
   type: ImageAnalysisTypeSchema,
   description: z.string(),
   extracted_text: z.string().optional(),
-  technical_details: z.record(z.any()).optional(),
+  technical_details: z.record(z.string(), z.any()).optional(),
   confidence: z.number().min(0).max(1).optional(),
   // OCR-specific fields
   text_blocks: z.array(z.object({
@@ -463,7 +463,7 @@ export const LayerRequirementsSchema = z.object({
   format: z.string(),
   requirements: z.array(z.string()),
   capabilities: z.array(z.string()),
-  example: z.record(z.any()),
+  example: z.record(z.string(), z.any()),
   limitations: z.array(z.string()).optional()
 });
 export type LayerRequirements = z.infer<typeof LayerRequirementsSchema>;
@@ -475,7 +475,7 @@ export const FormattedLayerDataSchema = z.object({
     args: z.array(z.string())
   }).optional(),
   aistudioFormat: z.object({
-    apiData: z.record(z.any()),
+    apiData: z.record(z.string(), z.any()),
     files: z.array(z.string()) // base64 encoded
   }).optional()
 });
@@ -575,7 +575,7 @@ export const MediaGenResultSchema = z.object({
       height: z.number(),
     }).optional(),
     model: z.string(),
-    settings: z.record(z.any()),
+    settings: z.record(z.string(), z.any()),
     cost: z.number().optional(),
     voice: z.string().optional(),
     responseText: z.string().optional(),
@@ -590,7 +590,7 @@ export const MediaGenResultSchema = z.object({
   media: z.object({
     type: z.enum(['image', 'audio', 'video']),
     data: z.string().optional(),
-    metadata: z.record(z.any()).optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
   }).optional(),
   downloadUrl: z.string().optional(),
   error: z.string().optional(),
@@ -626,7 +626,7 @@ export type AudioAnalysisResult = z.infer<typeof AudioAnalysisResultSchema>;
 export const MediaGenerationArgsSchema = z.object({
   prompt: z.string().min(1),
   type: GenerationTypeSchema,
-  options: z.record(z.any()).optional(),
+  options: z.record(z.string(), z.any()).optional(),
   outputPath: z.string().optional(),
   downloadAfterGeneration: z.boolean().default(true),
 });
@@ -662,7 +662,7 @@ export type AuthResult = z.infer<typeof AuthResultSchema>;
 // Verification Result
 export const VerificationResultSchema = z.object({
   overall: z.boolean(),
-  services: z.record(AuthResultSchema),
+  services: z.record(z.string(), AuthResultSchema),
   recommendations: z.array(z.string()),
 });
 export type VerificationResult = z.infer<typeof VerificationResultSchema>;
@@ -753,7 +753,7 @@ export const ClaudeRequestSchema = z.object({
   args: z.array(z.string()),
   originalCommand: z.string(),
   workingDirectory: z.string().optional(),
-  environment: z.record(z.string()).optional(),
+  environment: z.record(z.string(), z.string()).optional(),
   timestamp: z.date().default(() => new Date()),
 });
 export type ClaudeRequest = z.infer<typeof ClaudeRequestSchema>;
@@ -809,7 +809,7 @@ export const MultimodalFileSchema = z.object({
   encoding: z.string().optional(),
   content: z.string().optional(),
   name: z.string().optional(),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 });
 export type MultimodalFile = z.infer<typeof MultimodalFileSchema>;
 
@@ -837,8 +837,8 @@ export const WorkflowDefinitionSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   steps: z.array(WorkflowStepSchema),
-  dependencies: z.record(z.array(z.string())).optional(),
-  fallbackStrategies: z.record(z.object({
+  dependencies: z.record(z.string(), z.array(z.string())).optional(),
+  fallbackStrategies: z.record(z.string(), z.object({
     replace: z.string(),
     with: WorkflowStepSchema,
   })).optional(),
@@ -853,7 +853,7 @@ export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 export const WorkflowExecutionPlanSchema = z.object({
   id: z.string(),
   workflow: WorkflowDefinitionSchema,
-  input_data: z.record(z.any()),
+  input_data: z.record(z.string(), z.any()),
   execution_mode: ExecutionModeSchema,
   estimated_duration: z.number().optional(),
   estimated_cost: z.number().optional(),

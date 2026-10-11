@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { config } from 'dotenv';
 import { createRequire } from 'module';
 import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
+import { loadDotenvFile } from './utils/envLoader.js';
 import { shutdownAIStudio } from './layers/AIStudioLayer.js';
 
 // Read version from package.json
@@ -17,8 +17,8 @@ const VERSION = packageJson.version;
 
 async function main() {
   try {
-    // Load environment variables
-    config();
+    // Load environment variables (silently: stdout is the MCP channel)
+    loadDotenvFile();
 
     // Log startup information for MCP server
     logger.info('Starting CGMB MCP Server for Claude Code integration...', {

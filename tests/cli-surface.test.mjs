@@ -85,3 +85,32 @@ describe('the CLI offers only what it can do', () => {
     assert.match(output, /--output/, 'and so does the output path');
   });
 });
+
+/**
+ * Words the command does not take are refused, not dropped.
+ *
+ * Up to commander 12, extra command-arguments were accepted and ignored, so
+ * `cgmb generate-image a red fox` (unquoted) generated an image of "a" and
+ * said nothing about "red fox". Commander 13 made excess arguments an error by
+ * default; CGMB keeps that default rather than opting back into the old
+ * behaviour, because a silently truncated prompt costs a paid API call and
+ * produces the wrong thing.
+ */
+describe('the CLI refuses arguments it would otherwise drop', () => {
+  it('rejects an unquoted multi-word prompt for generate-image before calling anything', () => {
+    const { status, output } = cgmb('generate-image', 'a', 'red', 'fox');
+
+    assert.notEqual(status, 0, 'a prompt that would be truncated must not succeed');
+    assert.match(
+      output, /too many arguments/i,
+      `the parser should reject it outright, not generate an image of "a":\n${output.slice(0, 600)}`
+    );
+  });
+
+  it('rejects arguments to a command that takes none', () => {
+    const { status, output } = cgmb('info', 'extra');
+
+    assert.notEqual(status, 0);
+    assert.match(output, /too many arguments/i, output.slice(0, 600));
+  });
+});
