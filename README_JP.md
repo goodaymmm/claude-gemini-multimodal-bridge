@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.3-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.3.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.12.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -50,7 +50,7 @@ Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生�
 
 ### 🎯 MCP標準対応
 
-Anthropic Model Context Protocol準拠。197件のテストを Linux / Windows / macOS の CI で push ごとに実行
+Anthropic Model Context Protocol準拠。234件のテストを Linux / Windows / macOS の CI で push ごとに実行
 
 </td>
 </tr>
@@ -58,20 +58,25 @@ Anthropic Model Context Protocol準拠。197件のテストを Linux / Windows /
 
 ---
 
-## ✨ v1.2.3 の変更
+## ✨ v1.3.0 の変更
 
-修正リリースです。Google は 2026-09-18 以降、Gemini 2.5 系モデルをそれ以前から
-利用していたアカウントにしか提供しておらず、新しい API キーでは AI Studio
-レイヤーが何も返せませんでした。実際の Gemini API・実際の `agy` では実行して
-いません（バージョン履歴を参照）。
+Google は 2026-09-18 以降、Gemini 2.5 系モデルをそれ以前から利用していた
+アカウントにしか提供しておらず、新しい API キーでは AI Studio レイヤーが何も
+返せませんでした。このリリースでは AI Studio の既定モデルを Gemini 2.5 から移し、
+テキストを含む PDF をアップロードせずローカルで読む PDF モードを追加し、Node.js
+の下限を 22.12.0 に引き上げます。いずれも実際の Gemini API・実際の `agy` では
+実行していません（バージョン履歴を参照）。
 
-| 修正 | 説明 |
+| 変更 | 説明 |
 |------|------|
 | 🚀 **AI Studio の既定モデルを Gemini 2.5 から移行** | 汎用・ドキュメント・マルチモーダルは `gemini-3.5-flash-lite`（2.5 Flash と同価格）、画像は `gemini-3.1-flash-lite-image`、音声は `gemini-3.8-flash-tts` |
 | 🔑 **新しい API キーを壊れていると判定しなくなりました** | キー確認に、新しいキーを拒否する `gemini-2.5-flash` を使っていました |
 | 🎵 **音声ファイルの WAV ヘッダーは 1 つだけ** | 3.8 TTS は完全な WAV ファイルを返すため、ヘッダーを重ねて付けずそのまま書き出します |
-| 🔐 **Antigravity のサインイン確認が実際のリクエストと一致** | `GEMINI_API_KEY` を渡さなくなり、期限切れのサインインは障害ではなく未サインインと判定します |
+| 📄 **テキストを含む PDF はローカルで読み取り** | テキストとして Gemini へ送り、アップロードするのはスキャン PDF だけです。新しい既定は `auto` で、`--pdf-mode upload` で従来の動作に戻せます |
+| 🔐 **Antigravity のサインイン確認が実際のリクエストと一致** | `agy` に `GEMINI_API_KEY` を渡さず、API キーをサインインとみなさなくなりました。期限切れのサインインは未サインインと判定します |
 | 🧭 **表記を Antigravity CLI に統一** | 残っていた「Gemini CLI」の案内を `agy` に修正。`cgmb detect-paths --fix` が一度も出なかった `agy` のインストール案内を表示します |
+| 📦 **依存パッケージを現行メジャーへ更新** | `@google/genai` 2、commander 15、dotenv 18、pdf-parse 2、zod 4。Node.js ≥ 22.12.0。余分な CLI 引数はエラーになるため、プロンプトは引用符で囲みます |
+| 📌 **lockfile をコミット** | `package-lock.json` をリポジトリに含めました。CI の `npm ci` への切り替えはまだです |
 
 ### v1.2.2 の変更
 
@@ -273,7 +278,7 @@ PDF入力 → ローカルでテキスト抽出 ─┬─ テキストあり    
 |--------|------|----------|
 | `auto`（既定） | テキストがあればローカル抽出、なければアップロード | — |
 | `local` | 常にローカル抽出。テキストのない PDF はエラー | `--pdf-mode local` |
-| `upload` | 常にアップロード（1.2.3 までの動作） | `--pdf-mode upload` |
+| `upload` | 常にアップロード（1.2.2 までの動作） | `--pdf-mode upload` |
 
 `--pdf-mode` は `analyze`・`multimodal`・`process`・`aistudio` で使えます。MCP
 からは `options.pdf_mode` で指定します。既定は `CGMB_PDF_MODE`、ページあたりの
@@ -523,10 +528,12 @@ src/
 
 ## 📜 バージョン履歴
 
-### v1.2.3 (2026-10-11)
+### v1.3.0 (2026-10-11)
 
-修正リリースです。いずれも今日インストールした利用者が遭遇しうる問題への対応で、
-機能追加はありません。
+修正のみの 1.2.3 として準備していましたが、マイナーリリースとして公開します。
+修正に加えて PDF モードを追加し、既定の動作を 1 つ変え（テキストを含む PDF は
+アップロードしなくなります）、Node.js の下限を 22.12.0 に引き上げ、ランタイム依存
+5 つをメジャー更新したためです。1.2.3 は公開していません。
 
 - 🔑 **新しい AI Studio API キーで動作するようになりました**: Google は 2026-09-18 に
   Gemini 2.5 系モデルを、それ以前から利用していたアカウントに限定しました。非推奨では
@@ -563,6 +570,16 @@ src/
   失効したサインインでは "Authentication expired. Please log back in." と表示され、
   これが障害と判定されることがありました。未サインインとして報告し、エラーで
   `agy` を再度実行するよう案内します
+- 🔐 **Gemini API キーを Antigravity のサインインとみなさなくなりました**: サインインの
+  案内とトークン更新は、`GEMINI_API_KEY` か `GOOGLE_API_KEY` が設定されていれば確認を
+  実行せずに `agy` をサインイン済みと報告していました。インストーラーが新しい `.env`
+  に書き込むプレースホルダーでも条件を満たすため、キーリングが空のまま新規インストール
+  がサインイン済みと案内されていました。判定は確認の結果だけに基づき、メッセージも
+  それに従います。未サインインなら `agy` の実行を、未インストールならインストール
+  コマンドを案内し、時間内に応答しない `agy` はサインイン失敗ではなく不明と報告します。
+  セットアップウィザードは、サインインに成功すると以前の「未サインイン」の結果を
+  忘れます。公開メソッドの名前は変えておらず、AI Studio は従来どおり独自の経路で
+  `AI_STUDIO_API_KEY` を読みます
 - 📋 **Antigravity のモデル一覧を更新**: 参照用の一覧を、agy 1.2.16 で報告された
   `agy models` の出力に差し替えました — Gemini 3.6 / 3.7 / 3.8 Flash の各段階、
   3.1 Pro、Claude Opus / Sonnet 5.5 の各段階、`gpt-oss-120b-medium`。参考情報であり、
@@ -572,21 +589,73 @@ src/
   ログが Antigravity CLI (`agy`) を名指しするようになりました。うち 1 件は欠陥で、
   `cgmb detect-paths --fix` が旧名と比較していたため `agy` のインストール案内が一度も
   表示されていませんでした。`detect-paths` は `ANTIGRAVITY_CLI_PATH` も表示します
-- 🧹 **古いバージョン表記と固定モデル**: `package.json` の `mcp` ブロックは v1.2.0 の
-  ままでしたが 1.2.3 にしました。GitHub Pages のランディングページ
+- 📄 **テキストを含む PDF はローカルで読み取ります（既定の変更）**: 1.1.0 以降、PDF を
+  扱う経路（`cgmb analyze`・`multimodal`・`process`・`aistudio -f` と 3 つの MCP
+  ツール）はすべて Gemini File API でファイルをアップロードしており、コードに残って
+  いたローカルのテキスト抽出には呼び出し元がありませんでした。ローカルの PDF はまず
+  読み取り、80 % 以上のページに空白を除いて 100 文字以上のテキストがあれば、ファイル
+  の代わりにテキストを Gemini へ送ります。アップロードより安く、待ち時間もありません。
+  スキャン PDF や画像だけの PDF は従来どおりアップロードして Gemini に OCR させ、PDF
+  の URL は常にアップロードします。これは意図した挙動の変更で、テキストを含む PDF
+  では図・グラフ・レイアウトが Gemini に届かなくなります。モードは `analyze`・
+  `multimodal`・`process`・`aistudio` の `--pdf-mode auto|local|upload`、MCP からは
+  `options.pdf_mode` で指定し、既定は `CGMB_PDF_MODE`、ページあたりのしきい値は
+  `CGMB_PDF_TEXT_MIN_CHARS` で変更できます。`upload` で 1.2.2 の動作に戻り、`local`
+  はテキストのない PDF をエラーにし、不正な値は拒否します。判定は stderr のログ、
+  `metadata.pdfs` に残り、CLI は PDF ごとに 1 行表示します。どこからも import されて
+  いなかった `DocumentAnalysis`（1,029 行）は削除しました
+- 📦 **ランタイム依存を現行メジャーへ更新**: `@google/genai` 1.52 → 2.28、commander
+  11 → 15、dotenv 16 → 18、pdf-parse 1 → 2、zod 3 → 4。1 つずつ更新し、そのたびに
+  テスト全体を実行しました。commander 15 と pdf-parse 2 が Node.js 22.12.0 を必要と
+  するため、下限を 22.0.0 から **≥ 22.12.0** に引き上げます。利用者から見える変化:
+  - dotenv 17 以降は読み込みのたびに 1 行表示し、18 は `DOTENV_*` 環境変数を読んで
+    デバッグ出力を stdout に出します。stdout は MCP サーバが JSON-RPC を流す経路です。
+    CGMB のローダーはすべてのオプションを dotenv 16 と同じ値に固定しているため、
+    `DOTENV_*` に何が設定されていても `.env` の読み込みで stdout には何も出ません。
+    テストでこれを確認しています
+  - commander 13 で余分な引数がエラーになり、これはそのまま有効にしています。引用符
+    なしの `cgmb generate-image a red fox` は "a" の画像を生成して課金していましたが、
+    今後は拒否されます。複数語のプロンプトは引用符で囲んでください
+  - pdf-parse 2 は API が異なります。旧来の 2 箇所の呼び出しを置き換えた 1 つの関数は、
+    記載している上限（50MB / 1,000 ページ）を超える PDF を全体を読む前に拒否します
+
+  変わらないもの: MCP ツールのスキーマは手書きの JSON で、両サーバの `tools/list` の
+  出力は更新の前後でバイト単位まで同一です。zod スキーマ 58 個はいずれも zod 4 でも
+  同じ入力を受け付け・拒否し、違うのは検証エラーの文言だけです。`@google/genai` 2 の
+  変更は Interactions API のみで、偽のエンドポイントへ送るリクエストは 1.52 と 2.28
+  で同一でした
+- 🧰 **lint を ESLint 10 と typescript-eslint 8 へ、内容はそのまま**: ESLint 8 は
+  サポートが終了しており、typescript-eslint 6 は TypeScript 5.9 に対応していません
+  でした。ルールは同じ 14 個・同じ重大度で、プリセットは取り込んでいません。lint
+  スクリプトは Linux と macOS で `src/cli.ts` と `src/index.ts` を検査していません
+  でした。引用符のない glob をシェルが展開していたためです。glob を引用符で囲み、
+  どのプラットフォームでも同じファイルを検査するようにしました。警告数が 127 → 131
+  に増えたのはこのためだけです。rimraf は 6、`@types/node` は 22 系に更新し、
+  TypeScript は 5.9 のままです
+- 🧹 **古いバージョン表記・固定モデル・lockfile**: `package.json` の `mcp` ブロックは
+  v1.2.0 のままでしたが 1.3.0 にしました。GitHub Pages のランディングページ
   (`docs/index.html`) は v1.1.0 のままで Gemini CLI を説明していました。
   `.claude/settings.json` はヘッドレスの Claude Code プロセスにレガシーの
-  `claude-sonnet-5` を固定していましたが、`claude-sonnet-5-5` に変更しました
+  `claude-sonnet-5` を固定していましたが、`claude-sonnet-5-5` に変更しました。
+  `package-lock.json` は gitignore されていたため、CI は実行のたびにバージョン範囲を
+  解決し直し、3 つのプラットフォームが別々の依存ツリーをテストしうる状態でした。
+  pdf-parse 2 が Windows と macOS で取り込むプラットフォーム別パッケージも含めて
+  コミットしました。CI のインストール手順を `npm ci` に切り替える作業は未実施です
 
 **変更なし**: 高品質な画像生成の `gemini-3-pro-image`、Antigravity の既定
 `gemini-3.6-flash-low`、`MIN_AGY_VERSION`（1.1.7）。export している識別子の名前は
-変えていません。テスト: 179 → 197（WAV ヘルパー 7 件、スキーマ既定値 1 件、
-モデル表 2 件、Antigravity の確認と環境 8 件）。
+変えていません。テスト: 179 → 234（WAV ヘルパー 7 件、スキーマ既定値 1 件、
+モデル表 2 件、Antigravity の確認と環境 8 件、API キーとサインイン 3 件、依存の
+更新 10 件、PDF モード 24 件）。Linux では 232 件が成功し、2 件はスキップです。
 
-**実環境では未検証**: いずれも実際の Gemini API・実際の `agy` に対しては実行して
-いません。モデル ID と 3.8 TTS の WAV 出力は Google のドキュメントとリリースノート、
-agy 1.3.1 の文言と 1.2.16 のモデル一覧はリリースノートとコード中で引用している
-GitHub issue に基づいています。
+**実環境では未検証**: いずれも実際の Gemini API・実際の `agy` やキーリングに対しては
+実行していません。セットアップウィザードは対話的にではなく、ウィザードが呼ぶ
+メソッドを通して確認しました。モデル ID と 3.8 TTS の WAV 出力は Google の
+ドキュメントとリリースノート、agy 1.3.1 の文言と 1.2.16 のモデル一覧はリリース
+ノートとコード中で引用している GitHub issue に基づいています。PDF のテストは手作りの
+PDF と偽の Gemini エンドポイントを使っています。実際の文書・スキャン PDF・日本語の
+PDF では試しておらず、80 % / 100 文字のしきい値は測定ではなく推論で決めたもので、
+新しい PDF のテストは Windows ではまだ実行していません。
 
 ### v1.2.2 (2026-08-03)
 

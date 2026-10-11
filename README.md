@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.3-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.3.0-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.12.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 197 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 234 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -58,20 +58,25 @@ Follows the Anthropic Model Context Protocol. 197 tests run on Linux, Windows an
 
 ---
 
-## ✨ What's New in v1.2.3
+## ✨ What's New in v1.3.0
 
-A fix release. Since 2026-09-18 Google serves the Gemini 2.5 models only to
-accounts that already used them, so with a new API key the AI Studio layer
-returned nothing. Not run against the live Gemini API or a real `agy` — see
-Version History.
+Since 2026-09-18 Google serves the Gemini 2.5 models only to accounts that
+already used them, so with a new API key the AI Studio layer returned nothing.
+This release moves the AI Studio defaults off Gemini 2.5, adds a PDF mode that
+reads PDFs with a text layer locally instead of uploading them, and raises the
+Node.js floor to 22.12.0. None of it ran against the live Gemini API or a real
+`agy` — see Version History.
 
-| Fix | Description |
-|-----|-------------|
+| Change | Description |
+|--------|-------------|
 | 🚀 **AI Studio defaults moved off Gemini 2.5** | `gemini-3.5-flash-lite` for general, document and multimodal work (same price as 2.5 Flash), `gemini-3.1-flash-lite-image` for images, `gemini-3.8-flash-tts` for speech |
 | 🔑 **A new API key is no longer reported as broken** | The key check probed `gemini-2.5-flash`, which refuses new keys |
 | 🎵 **Speech files get one WAV header** | 3.8 TTS returns a complete WAV file; it is written as-is instead of being wrapped a second time |
-| 🔐 **The Antigravity sign-in check matches real requests** | It no longer receives `GEMINI_API_KEY`, and an expired sign-in reads as signed out, not as an outage |
+| 📄 **PDFs with a text layer are read locally** | Sent to Gemini as text; only scanned PDFs are uploaded. `auto` is the new default — `--pdf-mode upload` restores the old behaviour |
+| 🔐 **The Antigravity sign-in check matches real requests** | `agy` no longer receives `GEMINI_API_KEY`, an API key no longer counts as a sign-in, and an expired sign-in reads as signed out |
 | 🧭 **Antigravity CLI named throughout** | Remaining "Gemini CLI" hints now say `agy`; `cgmb detect-paths --fix` prints the `agy` install hint it never showed |
+| 📦 **Dependencies on their current majors** | `@google/genai` 2, commander 15, dotenv 18, pdf-parse 2, zod 4; Node.js ≥ 22.12.0. Excess CLI arguments are now an error — quote prompts |
+| 📌 **Lockfile committed** | `package-lock.json` is now in the repository; switching CI to `npm ci` is still pending |
 
 ### Previously, in v1.2.2
 
@@ -273,7 +278,7 @@ themselves, upload:
 |------|-----------|----------|
 | `auto` (default) | Local text when the PDF has a text layer, upload otherwise | — |
 | `local` | Always local text; a PDF with no text is refused | `--pdf-mode local` |
-| `upload` | Always upload (the behaviour up to 1.2.3) | `--pdf-mode upload` |
+| `upload` | Always upload (the behaviour up to 1.2.2) | `--pdf-mode upload` |
 
 `--pdf-mode` works on `analyze`, `multimodal`, `process` and `aistudio`; MCP
 callers pass `options.pdf_mode`. `CGMB_PDF_MODE` sets the default and
@@ -524,10 +529,12 @@ src/
 
 ## 📜 Version History
 
-### v1.2.3 (2026-10-11)
+### v1.3.0 (2026-10-11)
 
-A fix release. Every change addresses something a user installing today could
-hit; no features were added.
+Prepared as a fix-only 1.2.3 and released as a minor instead: on top of the
+fixes, it adds a PDF mode, changes a default (a PDF with a text layer is no
+longer uploaded), raises the Node.js floor to 22.12.0 and moves five runtime
+dependencies to new major versions. 1.2.3 was never published.
 
 - 🔑 **A new AI Studio API key works again**: on 2026-09-18 Google limited the
   Gemini 2.5 models to accounts that had already been using them. They are not
@@ -564,6 +571,17 @@ hit; no features were added.
   revoked sign-in prints "Authentication expired. Please log back in.", which
   could be classified as an outage. It is now reported as signed out, and the
   error says to run `agy` again
+- 🔐 **A Gemini API key no longer counts as an Antigravity sign-in**: the sign-in
+  prompt and token refresh reported `agy` as signed in whenever
+  `GEMINI_API_KEY` or `GOOGLE_API_KEY` was set, without running the check. The
+  placeholder the installer writes into a fresh `.env` was enough, so a new
+  install was told it was signed in while the keyring was empty. The answer now
+  comes from the probe alone, and the messages follow it: signed out says to run
+  `agy`, not installed prints the install command, and an `agy` that cannot be
+  reached in time is reported as unknown rather than as a failed sign-in. The
+  setup wizard forgets an earlier "signed out" once a sign-in succeeds. Public
+  method names are unchanged, and AI Studio still reads `AI_STUDIO_API_KEY` on
+  its own path
 - 📋 **Antigravity model list refreshed**: the reference list now copies an
   `agy models` listing reported on agy 1.2.16 — Gemini 3.6, 3.7 and 3.8 Flash
   tiers, 3.1 Pro, Claude Opus and Sonnet 5.5 tiers, `gpt-oss-120b-medium`. It is
@@ -574,21 +592,78 @@ hit; no features were added.
   these was a defect: `cgmb detect-paths --fix` compared against the old name,
   so the `agy` install hint never printed. `detect-paths` also lists
   `ANTIGRAVITY_CLI_PATH`
-- 🧹 **Stale version numbers and pins**: the `mcp` block in `package.json` said
-  v1.2.0 and now says 1.2.3; the GitHub Pages landing page (`docs/index.html`)
-  was at v1.1.0 and still described Gemini CLI; `.claude/settings.json` pinned
-  the legacy `claude-sonnet-5` for the headless Claude Code process and now pins
-  `claude-sonnet-5-5`
+- 📄 **PDFs with a text layer are read locally — a new default**: since 1.1.0
+  every PDF path (`cgmb analyze`, `multimodal`, `process`, `aistudio -f` and the
+  three MCP tools) uploaded the file through the Gemini File API; the local text
+  extraction left in the code had no caller. A local PDF is now read first, and
+  when at least 80 % of its pages carry 100 or more non-space characters, the
+  text goes to Gemini in place of the file, which is cheaper and skips the
+  upload. Scanned or image-only PDFs are uploaded as before so Gemini can OCR
+  them, and PDF URLs are always uploaded. This changes behaviour on purpose:
+  for a PDF with text, Gemini no longer sees figures, charts or layout. The mode
+  is `--pdf-mode auto|local|upload` on `analyze`, `multimodal`, `process` and
+  `aistudio`, `options.pdf_mode` for MCP callers, `CGMB_PDF_MODE` for the default
+  and `CGMB_PDF_TEXT_MIN_CHARS` for the per-page threshold. `upload` restores
+  the 1.2.2 behaviour, `local` refuses a PDF with no text, and an invalid value
+  is refused. The decision is logged on stderr, returned as `metadata.pdfs`, and
+  printed by the CLI one line per PDF. `DocumentAnalysis` (1,029 lines nothing
+  imported) is deleted
+- 📦 **Runtime dependencies on their current majors**: `@google/genai` 1.52 →
+  2.28, commander 11 → 15, dotenv 16 → 18, pdf-parse 1 → 2, zod 3 → 4, taken one
+  at a time with the full suite in between. commander 15 and pdf-parse 2 need
+  Node.js 22.12.0, so the floor moves from 22.0.0 to **≥ 22.12.0**. What users
+  can notice:
+  - dotenv 17 and later print a line on every load, and 18 reads `DOTENV_*`
+    variables from the environment with debug output on stdout — the channel
+    the MCP server speaks JSON-RPC on. CGMB's loader pins every option to what
+    dotenv 16 did, so loading `.env` stays silent on stdout whatever `DOTENV_*`
+    is set, and a test asserts it
+  - commander 13 made excess arguments an error, and that stays on: an unquoted
+    `cgmb generate-image a red fox` used to generate, and bill, an image of "a";
+    it is now refused. Quote multi-word prompts
+  - pdf-parse 2 is a different API; the one function that replaces both old
+    calls refuses PDFs over the documented 50 MB / 1,000-page limits instead of
+    reading them in full
+
+  What did not change: the MCP tool schemas are hand-written JSON, and the
+  `tools/list` output of both servers is byte-identical before and after. All
+  58 zod schemas accept and reject the same inputs under zod 4; only the wording
+  of validation errors differs. `@google/genai` 2 changed only the Interactions
+  API, and requests to a fake endpoint were identical under 1.52 and 2.28
+- 🧰 **Linting on ESLint 10 and typescript-eslint 8, like for like**: ESLint 8
+  is past end of life and typescript-eslint 6 never supported TypeScript 5.9.
+  The rule set is the same 14 rules at the same severities; no preset is pulled
+  in. The lint script was skipping `src/cli.ts` and `src/index.ts` on Linux and
+  macOS, because the shell expanded the unquoted glob; it is now quoted, so
+  every platform lints the same files, and the warning count moves 127 → 131
+  for that reason alone. rimraf moves to 6 and `@types/node` to 22; TypeScript
+  stays at 5.9
+- 🧹 **Stale version numbers, pins and the lockfile**: the `mcp` block in
+  `package.json` said v1.2.0 and now says 1.3.0; the GitHub Pages landing page
+  (`docs/index.html`) was at v1.1.0 and still described Gemini CLI;
+  `.claude/settings.json` pinned the legacy `claude-sonnet-5` for the headless
+  Claude Code process and now pins `claude-sonnet-5-5`. `package-lock.json` was
+  gitignored, so each CI run resolved the version ranges afresh and the three
+  platforms could test three different trees; it is now committed, including the
+  per-platform packages pdf-parse 2 pulls in on Windows and macOS. Switching the
+  CI install step to `npm ci` is pending, not done
 
 **Unchanged**: `gemini-3-pro-image` for high-quality images, the Antigravity
 default `gemini-3.6-flash-low`, and `MIN_AGY_VERSION` (1.1.7). No exported
-identifier is renamed. Tests: 179 → 197 (7 for the WAV helper, 1 for the schema
-default, 2 for the model table, 8 for the Antigravity probe and environment).
+identifier is renamed. Tests: 179 → 234 (7 for the WAV helper, 1 for the schema
+default, 2 for the model table, 8 for the Antigravity probe and environment, 3
+for the API-key sign-in, 10 for the dependency moves, 24 for the PDF mode); on
+Linux 232 pass and 2 are skipped.
 
 **Not verified live**: none of this ran against the real Gemini API or a real
-`agy`. The model IDs and the 3.8 TTS WAV behaviour come from Google's
-documentation and release notes; the agy 1.3.1 wording and the 1.2.16 model
-listing come from release notes and the GitHub issues cited in the code.
+`agy` or keyring; the setup wizard was exercised through the methods it calls,
+not interactively. The model IDs and the 3.8 TTS WAV behaviour come from
+Google's documentation and release notes; the agy 1.3.1 wording and the 1.2.16
+model listing come from release notes and the GitHub issues cited in the code.
+The PDF tests use PDFs built by hand and a fake Gemini endpoint: no real-world,
+scanned or Japanese PDF was tried, the 80 % / 100-character threshold is
+reasoned rather than measured, and the new PDF tests have not been run on
+Windows.
 
 ### v1.2.2 (2026-08-03)
 

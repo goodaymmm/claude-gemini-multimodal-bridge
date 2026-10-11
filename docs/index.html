@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="CGMB v1.2.3 - MCP bridge connecting Claude Code, Antigravity CLI, and Google AI Studio with intelligent routing" />
+  <meta name="description" content="CGMB v1.3.0 - MCP bridge connecting Claude Code, Antigravity CLI, and Google AI Studio with intelligent routing" />
   <meta name="theme-color" content="#0f0f23" />
   <title>CGMB - Claude-Gemini Multimodal Bridge</title>
   <style>
@@ -623,9 +623,9 @@
       </p>
 
       <div class="badges-row">
-        <img src="https://img.shields.io/badge/npm-v1.2.3-CB3837?style=flat-square&logo=npm" alt="npm version" />
+        <img src="https://img.shields.io/badge/npm-v1.3.0-CB3837?style=flat-square&logo=npm" alt="npm version" />
         <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License" />
-        <img src="https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js" />
+        <img src="https://img.shields.io/badge/Node.js-%3E%3D22.12.0-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js" />
         <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
       </div>
       <div class="badges-row">
@@ -679,20 +679,27 @@
 
     <!-- What's New -->
     <section>
-      <h2 class="section-title">✨ What's New in v1.2.x</h2>
+      <h2 class="section-title">✨ What's New in v1.3.0 and v1.2.x</h2>
       <div class="whats-new-grid">
         <div class="new-item">
           <span class="icon">🚀</span>
           <div>
-            <h4>v1.2.3 &middot; New AI Studio Defaults</h4>
+            <h4>v1.3.0 &middot; New AI Studio Defaults</h4>
             <p>Off the access-restricted Gemini 2.5 line: <code>gemini-3.5-flash-lite</code> for general and document work, <code>gemini-3.8-flash-tts</code> for speech, <code>gemini-3.1-flash-lite-image</code> for images</p>
           </div>
         </div>
         <div class="new-item">
           <span class="icon">📋</span>
           <div>
-            <h4>v1.2.3 &middot; Antigravity Model Catalogue</h4>
+            <h4>v1.3.0 &middot; Antigravity Model Catalogue</h4>
             <p>The list of Antigravity CLI models CGMB knows about is refreshed</p>
+          </div>
+        </div>
+        <div class="new-item">
+          <span class="icon">📄</span>
+          <div>
+            <h4>v1.3.0 &middot; PDFs Read Locally</h4>
+            <p>A PDF with a text layer is sent to Gemini as text; scanned ones are still uploaded for OCR. This is the new default &mdash; <code>--pdf-mode upload</code> restores the old behaviour</p>
           </div>
         </div>
         <div class="new-item">
@@ -706,14 +713,7 @@
           <span class="icon">🎯</span>
           <div>
             <h4>v1.2.1 &middot; Fix-Only Release</h4>
-            <p>Concurrent AI Studio requests each get their own answer, <code>cgmb</code> exits when it is done, and the search cache answers the question that was asked</p>
-          </div>
-        </div>
-        <div class="new-item">
-          <span class="icon">🔑</span>
-          <div>
-            <h4>v1.2.1 &middot; <code>.env</code> Stays in Your Project</h4>
-            <p>Read from the directory you run CGMB in; any other location has to be named with <code>CGMB_ENV_PATH</code></p>
+            <p>Concurrent AI Studio requests each get their own answer, <code>cgmb</code> exits when it is done, and <code>.env</code> is read from your project unless <code>CGMB_ENV_PATH</code> names another</p>
           </div>
         </div>
         <div class="new-item">
