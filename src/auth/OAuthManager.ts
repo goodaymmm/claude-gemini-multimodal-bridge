@@ -1,14 +1,14 @@
 import { AuthenticationError, AuthErrorCode, AuthStatus } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
-import path from 'path';
-import fs from 'fs';
-import os from 'os';
 import { AGY_INSTALL_HINT, findAntigravityBinary, probeAntigravityAuth } from '../utils/antigravityCli.js';
 
 /**
- * OAuthManager handles OAuth flow management and Antigravity CLI (`agy`) authentication
- * Supports both OAuth and API key authentication methods
+ * OAuthManager handles Antigravity CLI (`agy`) authentication.
+ *
+ * agy signs in through Google OAuth with its tokens in the OS keyring; the only
+ * evidence of that session is a live `agy models` probe (probeAntigravityAuth).
+ * API keys in the environment are never taken as an agy sign-in.
  */
 export class OAuthManager {
   private authCache: Map<string, AuthStatus> = new Map();
@@ -87,237 +87,125 @@ export class OAuthManager {
   }
 
   /**
-   * Prompt the user to sign in to the Antigravity CLI and guide them through it
+   * Check the Antigravity CLI sign-in and tell the user how to complete it.
+   *
+   * The answer comes from a live `agy models` probe and nothing else. This used
+   * to short-circuit on GEMINI_API_KEY / GOOGLE_API_KEY: any value longer than
+   * ten characters -- including the `your_gemini_api_key_here` placeholder the
+   * postinstall script writes into a fresh .env -- reported agy as signed in
+   * while the keyring was empty. agy never receives that key (see
+   * buildAgyChildEnv), so it proves nothing about the session the layer uses.
+   *
+   * Resolves true when agy is signed in and false when it is not. Throws an
+   * AuthenticationError when the sign-in state could not be established at all
+   * (agy not installed, unreachable, or timed out), because none of those is a
+   * sign-in failure and must not be reported as one.
    */
   async promptGeminiLogin(): Promise<boolean> {
     return safeExecute(
       async () => {
-        logger.info('Prompting Antigravity CLI sign-in...');
-        
-        const method = await this.detectAuthMethod();
-        
-        if (method === 'api_key') {
-          logger.info('API key authentication detected. Please ensure GEMINI_API_KEY is set.');
-          const status = await this.checkApiKeyAuth();
-          return status.isAuthenticated;
+        logger.info('Checking Antigravity CLI sign-in...');
+
+        const probe = await probeAntigravityAuth();
+
+        if (probe.authenticated) {
+          const status: AuthStatus = {
+            isAuthenticated: true,
+            method: 'oauth',
+            userInfo: {
+              planType: 'free',
+              email: undefined,
+              quotaRemaining: undefined,
+            },
+          };
+          this.updateCache('gemini', status);
+          logger.info('Antigravity CLI is signed in');
+          return true;
         }
 
-        // OAuth flow
-        logger.info('Starting OAuth authentication flow...');
-        
-        try {
-          // Guide the user through Antigravity CLI sign-in
-          const result = await this.executeGeminiAuth();
-          
-          if (result) {
-            logger.info('OAuth authentication successful');
-            
-            // Verify authentication worked by checking file
-            const status = await this.checkGeminiAuthentication();
-            
-            return status.isAuthenticated;
+        // Never cache a negative answer here: the user is about to go and fix it.
+        this.authCache.delete('gemini');
+
+        switch (probe.outcome) {
+          case 'not-installed':
+            throw new AuthenticationError(
+              `Antigravity CLI (agy) is not installed. Install it with: ${AGY_INSTALL_HINT}`,
+              'gemini',
+              AuthErrorCode.AUTH_SETUP_REQUIRED,
+              {
+                method: 'oauth',
+                instructions: AGY_INSTALL_HINT,
+                canRetry: true,
+              }
+            );
+
+          case 'timeout':
+          case 'unavailable': {
+            const what = probe.outcome === 'timeout'
+              ? 'did not answer in time'
+              : 'could not reach its service';
+            throw new AuthenticationError(
+              `Antigravity CLI ${what}, so its sign-in state is unknown ` +
+              `(${probe.error ?? probe.outcome}). This is not a sign-in failure; ` +
+              'check your network and try again.',
+              'gemini',
+              AuthErrorCode.NOT_AUTHENTICATED,
+              {
+                method: 'oauth',
+                instructions: 'Check your network connection, then run `agy models` to confirm agy can answer',
+                canRetry: true,
+              }
+            );
           }
-          
-          return false;
-        } catch (error) {
-          logger.error('OAuth authentication failed', { error: (error as Error).message });
-          throw new AuthenticationError(
-            'OAuth authentication failed. Please try again or use API key method.',
-            'gemini',
-            AuthErrorCode.OAUTH_FLOW_FAILED,
-            {
-              method: 'oauth',
-              instructions: 'Run `agy` in a terminal and complete the Google sign-in',
-              canRetry: true
-            }
-          );
+
+          case 'unauthenticated':
+          default:
+            logger.warn(
+              'Antigravity CLI is not signed in. Sign in again by running `agy` in a terminal.',
+              { error: probe.error }
+            );
+            return false;
         }
       },
       {
         operationName: 'prompt-antigravity-login',
         layer: 'antigravity',
-        timeout: 60000, // OAuth flow can take time
+        timeout: 60000,
       }
     );
   }
 
   /**
-   * Refresh Gemini token if possible
+   * Re-check the Antigravity CLI sign-in.
+   *
+   * There is no token for CGMB to refresh: agy keeps and renews its own OAuth
+   * tokens in the OS keyring. "Refreshing" therefore means dropping the cached
+   * answer and probing again. An API key in the environment is not consulted,
+   * for the reason given on promptGeminiLogin().
    */
   async refreshGeminiToken(): Promise<boolean> {
     return safeExecute(
       async () => {
-        const method = await this.detectAuthMethod();
-        
-        if (method === 'api_key') {
-          // API keys don't need refresh, just revalidate
-          const status = await this.checkApiKeyAuth();
-          this.updateCache('gemini', status);
-          return status.isAuthenticated;
-        }
+        this.authCache.delete('gemini');
+        logger.info('Re-checking Antigravity CLI sign-in...');
 
-        // For OAuth, try to refresh by re-authenticating
-        logger.info('Attempting to refresh OAuth token...');
-        
         try {
-          // Clear cache first
-          this.authCache.delete('gemini');
-          
-          // Check if current auth is still valid
-          const currentStatus = await this.checkOAuthAuth();
-          if (currentStatus.isAuthenticated) {
-            this.updateCache('gemini', currentStatus);
-            return true;
-          }
-
-          // If not valid, prompt for re-authentication
-          logger.warn('OAuth token expired, re-authentication required');
           return await this.promptGeminiLogin();
-          
         } catch (error) {
-          logger.error('Token refresh failed', { error: (error as Error).message });
+          // promptGeminiLogin only throws when the sign-in state is unknown
+          // (not installed, unreachable, timed out); its message says which.
+          logger.warn('Could not re-check the Antigravity CLI sign-in', {
+            error: (error as Error).message,
+          });
           return false;
         }
       },
       {
         operationName: 'refresh-gemini-token',
         layer: 'antigravity',
-        timeout: 30000,
+        timeout: 70000, // above promptGeminiLogin's own 60s window
       }
     );
-  }
-
-  /**
-   * Detect current authentication method (OAuth vs API key)
-   * Simplified to check files and env vars only
-   */
-  private async detectAuthMethod(): Promise<'oauth' | 'api_key' | 'none'> {
-    // Check for OAuth file first
-    const oauthFile = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
-    if (fs.existsSync(oauthFile)) {
-      return 'oauth';
-    }
-    
-    // Check for Gemini-specific API keys
-    const geminiApiKey = process.env.GEMINI_API_KEY ??  // read by the retired Gemini CLI; CGMB never passes it to agy
-                         process.env.GOOGLE_API_KEY;   // Legacy support
-                   
-    if (geminiApiKey && geminiApiKey.length > 10) {
-      return 'api_key';
-    }
-
-    return 'none';
-  }
-
-  /**
-   * Check API key authentication
-   * Only checks Gemini-specific API keys
-   */
-  private async checkApiKeyAuth(): Promise<AuthStatus> {
-    const apiKey = process.env.GEMINI_API_KEY ??  // read by the retired Gemini CLI; CGMB never passes it to agy
-                   process.env.GOOGLE_API_KEY;    // Legacy support
-    
-    if (!apiKey) {
-      return {
-        isAuthenticated: false,
-        method: 'api_key',
-        userInfo: undefined,
-      };
-    }
-
-    // Basic validation - Gemini API keys have different format than AI Studio
-    if (apiKey.length < 10) {
-      logger.warn('API key format appears invalid');
-      return {
-        isAuthenticated: false,
-        method: 'api_key',
-        userInfo: undefined,
-      };
-    }
-
-    // We can't easily test API key without making a request,
-    // so we assume it's valid if format is correct
-    return {
-      isAuthenticated: true,
-      method: 'api_key',
-      userInfo: {
-        email: undefined,
-        quotaRemaining: undefined,
-        planType: 'free', // Default assumption
-      },
-    };
-  }
-
-  /**
-   * Check OAuth authentication via file existence
-   * Removed dependency on gemini command execution
-   */
-  private async checkOAuthAuth(): Promise<AuthStatus> {
-    const oauthFile = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
-    
-    if (fs.existsSync(oauthFile)) {
-      try {
-        const creds = JSON.parse(fs.readFileSync(oauthFile, 'utf8'));
-        
-        if (creds.access_token || creds.refresh_token) {
-          return {
-            isAuthenticated: true,
-            method: 'oauth',
-            userInfo: {
-              email: undefined,
-              quotaRemaining: undefined,
-              planType: 'free',
-            },
-          };
-        }
-      } catch (error) {
-        logger.debug('OAuth credentials file could not be parsed', { error: (error as Error).message });
-      }
-    }
-    
-    return {
-      isAuthenticated: false,
-      method: 'oauth',
-      userInfo: undefined,
-    };
-  }
-
-  /**
-   * Guide the user through Antigravity CLI sign-in.
-   *
-   * The Antigravity CLI has no `auth` subcommand: signing in happens on the
-   * first interactive launch, which opens a browser and writes the tokens to the
-   * OS keyring. There is nothing to drive non-interactively, so instruct the
-   * user and then re-probe.
-   */
-  private async executeGeminiAuth(): Promise<boolean> {
-    const binary = await findAntigravityBinary();
-
-    if (!binary) {
-      throw new AuthenticationError(
-        `Antigravity CLI (agy) is not installed. Install it with: ${AGY_INSTALL_HINT}`,
-        'gemini',
-        AuthErrorCode.OAUTH_FLOW_FAILED,
-        {
-          method: 'oauth',
-          instructions: AGY_INSTALL_HINT,
-          canRetry: true,
-        }
-      );
-    }
-
-    const probe = await probeAntigravityAuth(binary.path);
-    if (probe.authenticated) {
-      return true;
-    }
-
-    logger.info(
-      'Antigravity CLI is installed but not signed in. ' +
-      'Run `agy` in a terminal, complete the Google sign-in, then re-run this command.',
-      { error: probe.error }
-    );
-
-    return false;
   }
 
   /**
@@ -356,18 +244,31 @@ export class OAuthManager {
   }
 
   /**
-   * Get authentication method for a service
+   * Get authentication method for a service.
+   *
+   * The Antigravity CLI ('antigravity', or its deprecated name 'gemini') only
+   * ever signs in through Google OAuth stored in the OS keyring, so its method
+   * is always 'oauth'; whether that sign-in is present is a separate question
+   * answered by checkGeminiAuthentication(). AI Studio uses an API key, looked
+   * up in the same order AuthVerifier.verifyAIStudioAuth() uses.
    */
   async getAuthMethod(service: 'antigravity' | 'gemini' | 'aistudio' | 'claude'): Promise<string> {
-    if (service === 'gemini' || service === 'aistudio') {
-      return await this.detectAuthMethod();
+    if (service === 'antigravity' || service === 'gemini') {
+      return 'oauth';
     }
-    
+
+    if (service === 'aistudio') {
+      const apiKey = process.env.AI_STUDIO_API_KEY ??
+                     process.env.GOOGLE_AI_STUDIO_API_KEY ??
+                     process.env.GEMINI_API_KEY; // deprecated for AI Studio
+      return apiKey ? 'api_key' : 'none';
+    }
+
     if (service === 'claude') {
       // Claude Code typically uses session-based auth
       return 'session';
     }
-    
+
     return 'none';
   }
 

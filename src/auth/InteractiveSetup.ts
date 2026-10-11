@@ -211,10 +211,16 @@ export class InteractiveSetup {
 
     console.log('🔄 Checking Antigravity CLI sign-in...');
     try {
+      // Resolves false only when agy answered and is signed out; it throws when
+      // agy is missing or unreachable, and that message says which.
       const authSuccess = await this.oauthManager.promptGeminiLogin();
       if (authSuccess) {
+        // verifyGeminiAuth() caches its earlier negative answer; drop it so the
+        // fresh sign-in is what gets reported.
+        this.authVerifier.clearAuthCache('gemini');
         return await this.authVerifier.verifyGeminiAuth();
       }
+      console.log('⚠️  Antigravity CLI is not signed in. Sign in again by running `agy` in a terminal.');
     } catch (error) {
       console.log(`⚠️  Antigravity CLI is not ready: ${(error as Error).message}`);
     }

@@ -13,7 +13,9 @@ import {
   looksSignedOut,
   MIN_AGY_VERSION,
   probeAntigravityAuth,
+  resetAntigravityBinaryCache,
 } from '../dist/utils/antigravityCli.js';
+import { OAuthManager } from '../dist/auth/OAuthManager.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager, assertNoCredentialFiles } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
@@ -1005,6 +1007,81 @@ describe('auth probe classification', () => {
 
     const layerEnv = new AntigravityCLILayer().buildChildEnv();
     assert.deepEqual(layerEnv, buildAgyChildEnv(), 'the layer must use the shared allow-list');
+  });
+
+  /**
+   * Run fn with agy discovery pinned to the given stub and the API-key
+   * variables set as given (undefined removes one), restoring both afterwards.
+   */
+  async function withAgyStub(stub, keys, fn) {
+    const names = ['ANTIGRAVITY_CLI_PATH', 'GEMINI_CLI_PATH', 'GEMINI_API_KEY', 'GOOGLE_API_KEY'];
+    const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    const wanted = { ANTIGRAVITY_CLI_PATH: stub, GEMINI_CLI_PATH: undefined, ...keys };
+    for (const name of names) {
+      if (wanted[name] === undefined) { delete process.env[name]; } else { process.env[name] = wanted[name]; }
+    }
+    resetAntigravityBinaryCache();
+    try {
+      return await fn();
+    } finally {
+      for (const name of names) {
+        if (saved[name] === undefined) { delete process.env[name]; } else { process.env[name] = saved[name]; }
+      }
+      resetAntigravityBinaryCache();
+    }
+  }
+
+  it('does not take the .env placeholder API key as an agy sign-in', async () => {
+    // postinstall writes GEMINI_API_KEY=your_gemini_api_key_here into a fresh
+    // .env. OAuthManager used to accept any key longer than ten characters as
+    // proof that agy was signed in, without asking agy.
+    const stub = agyStub('agy-expired-oauth', `
+      console.error('Authentication expired. Please log back in.');
+      process.exit(1);
+    `);
+
+    await withAgyStub(stub, { GEMINI_API_KEY: 'your_gemini_api_key_here', GOOGLE_API_KEY: 'your_google_api_key_here' }, async () => {
+      const manager = new OAuthManager();
+      assert.equal(await manager.promptGeminiLogin(), false, 'an empty keyring is not a sign-in');
+      assert.equal(await manager.refreshGeminiToken(), false, 'refreshing must not fall back to the key either');
+      const status = await manager.checkGeminiAuthentication();
+      assert.equal(status.isAuthenticated, false);
+      assert.equal(status.method, 'oauth');
+      assert.equal(await manager.getAuthMethod('antigravity'), 'oauth');
+    });
+  });
+
+  it('reports agy as signed in from the probe alone, with no API key set', async () => {
+    const stub = agyStub('agy-signed-in-oauth', `
+      console.log('gemini-3.6-flash-low');
+      console.log('gemini-3.1-pro-high');
+      process.exit(0);
+    `);
+
+    await withAgyStub(stub, { GEMINI_API_KEY: undefined, GOOGLE_API_KEY: undefined }, async () => {
+      const manager = new OAuthManager();
+      assert.equal(await manager.promptGeminiLogin(), true);
+      assert.equal(await manager.refreshGeminiToken(), true);
+      const status = await manager.checkGeminiAuthentication();
+      assert.equal(status.isAuthenticated, true);
+      assert.equal(status.method, 'oauth');
+    });
+  });
+
+  it('does not call an unreachable agy a sign-in failure', async () => {
+    const stub = agyStub('agy-offline-oauth', `
+      console.error('request failed: getaddrinfo ENOTFOUND antigravity.googleapis.com');
+      process.exit(1);
+    `);
+
+    await withAgyStub(stub, { GEMINI_API_KEY: undefined, GOOGLE_API_KEY: undefined }, async () => {
+      const manager = new OAuthManager();
+      await assert.rejects(
+        () => manager.promptGeminiLogin(),
+        error => /could not reach its service/.test(error.message) && /not a sign-in failure/.test(error.message)
+      );
+      assert.equal(await manager.refreshGeminiToken(), false);
+    });
   });
 
   it('points a signed-out request at the fix', { skip: isWindows && 'the layer spawns agy directly, not through a .cmd shim' }, async () => {
