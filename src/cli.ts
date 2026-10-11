@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
 import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
@@ -19,6 +19,40 @@ import { AuthCache } from './auth/AuthCache.js';
 import { LayerManager } from './core/LayerManager.js';
 import { Logger } from './utils/logger.js';
 import { withCLITimeout } from './utils/TimeoutManager.js';
+import { PDF_MODES, type PdfMode } from './utils/pdfText.js';
+
+/**
+ * `--pdf-mode`, on every command that takes PDFs. Left unset it sends nothing,
+ * so CGMB_PDF_MODE (or `auto`) applies in the MCP server that reads the files.
+ */
+function pdfModeOption(): Option {
+  return new Option(
+    '--pdf-mode <mode>',
+    'How PDFs reach Gemini: auto (local text when the PDF has a text layer, upload for OCR when not), ' +
+    'local (always local text), upload (always upload). Default: CGMB_PDF_MODE, else auto'
+  ).choices(PDF_MODES);
+}
+
+/** The options key for a --pdf-mode value, or nothing when it was not given. */
+function pdfModeOptions(mode: PdfMode | undefined): { pdf_mode?: PdfMode } {
+  return mode === undefined ? {} : { pdf_mode: mode };
+}
+
+/**
+ * One line per PDF saying whether it was sent as local text or uploaded, read
+ * from the metadata the AI Studio MCP server returns. Empty when there is none.
+ */
+function describePdfHandling(data: unknown): string[] {
+  const pdfs = (data as { metadata?: { pdfs?: unknown } } | null | undefined)?.metadata?.pdfs;
+  if (!Array.isArray(pdfs)) {
+    return [];
+  }
+  return pdfs.map((entry: { file?: string; sent_as?: string; pages?: number; reason?: string }) =>
+    entry.sent_as === 'text'
+      ? `   PDF ${entry.file}: read locally, sent as text (${entry.pages} page${entry.pages === 1 ? '' : 's'})`
+      : `   PDF ${entry.file}: uploaded to the Gemini File API (${entry.reason ?? 'upload'})`
+  );
+}
 
 // ===================================
 // Helper Functions for CLI Commands
@@ -1361,6 +1395,7 @@ program
   .option('-p, --prompt <text>', 'Prompt for AI Studio')
   .option('-f, --files <paths...>', 'Files to process (images, documents, etc.)')
   .option('-m, --model <model>', 'AI Studio model to use', AI_MODELS.MULTIMODAL_ANALYSIS)
+  .addOption(pdfModeOption())
   .action(async (options) => {
     try {
       if (!options.prompt) {
@@ -1457,7 +1492,8 @@ program
         type: 'multimodal_processing',
         prompt: options.prompt,
         files: files.map((f: string) => ({ path: f, type: 'document' })),
-        model: options.model
+        model: options.model,
+        options: pdfModeOptions(options.pdfMode)
       });
       
       logger.info('✅ AI Studio processing completed');
@@ -1501,6 +1537,7 @@ program
   .option('-f, --files <paths...>', 'Files to process')
   .option('-w, --workflow <type>', 'Workflow type: analysis, generation, conversion, extraction', 'analysis')
   .option('--strategy <strategy>', 'Processing strategy: claude-first, gemini-first, aistudio-first, adaptive', 'adaptive')
+  .addOption(pdfModeOption())
   .action(async (options) => {
     try {
       if (!options.prompt) {
@@ -1526,7 +1563,8 @@ program
             layer_priority: options.strategy === 'claude-first' ? 'claude' :
                            options.strategy === 'gemini-first' ? 'antigravity' :
                            options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
-            detailed: true
+            detailed: true,
+            ...pdfModeOptions(options.pdfMode)
           }
         }
       );
@@ -1741,6 +1779,7 @@ program
   .option('-t, --type <type>', 'Analysis type (summary, extract, compare)', 'summary')
   .option('-p, --prompt <prompt>', 'Custom analysis prompt')
   .option('-l, --layer <layer>', 'Force specific layer (gemini, claude, aistudio, auto)', 'auto')
+  .addOption(pdfModeOption())
   .action(async (files, options) => {
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
@@ -1953,7 +1992,7 @@ program
       // Multiple PDF Detection for Special Handling
       const pdfFiles = resolvedFiles.filter((file: string) => path.extname(file).toLowerCase() === '.pdf');
       if (pdfFiles.length > 1) {
-        console.log(`\n📚 Multiple PDFs detected (${pdfFiles.length}). Using Gemini File API batch processing...`);
+        console.log(`\n📚 Multiple PDFs detected (${pdfFiles.length}). Processing them together...`);
       }
 
       const defaultConfig = {
@@ -2011,7 +2050,8 @@ program
               analysisType: options.type,
               depth: 'deep',
               multiplePDFs: pdfFiles.length > 1,
-              preferredLayer: userPreferredLayer
+              preferredLayer: userPreferredLayer,
+              ...pdfModeOptions(options.pdfMode)
             }
           }
         ),
@@ -2029,6 +2069,7 @@ program
           console.log('\n📊 Analysis Metadata:');
           console.log(`   Layer used: ${result.metadata.layer || 'Unknown'}`);
           console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
+          describePdfHandling(result.data).forEach(line => console.log(line));
         }
         process.exit(0);
       } else {
@@ -2053,6 +2094,7 @@ program
   .option('-p, --prompt <prompt>', 'Processing prompt', 'Analyze and summarize these files')
   .option('-w, --workflow <type>', 'Workflow type (analysis, conversion, extraction)', 'analysis')
   .option('-o, --output <format>', 'Output format (text, json, markdown)', 'text')
+  .addOption(pdfModeOption())
   .action(async (files, options) => {
     // Set CLI mode environment variable FIRST before any imports or logger initialization
     process.env.CGMB_CLI_MODE = 'true';
@@ -2097,7 +2139,8 @@ program
             options: {
               workflow: options.workflow,
               outputFormat: options.output,
-              execution_mode: 'adaptive'
+              execution_mode: 'adaptive',
+              ...pdfModeOptions(options.pdfMode)
             }
           }
         ),
@@ -2122,6 +2165,7 @@ program
           console.log(`   Layer used: ${result.metadata.layer || 'Unknown'}`);
           console.log(`   Files processed: ${files.length}`);
           console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
+          describePdfHandling(result.data).forEach(line => console.log(line));
         }
         process.exit(0);
       } else {

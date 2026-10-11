@@ -17,45 +17,12 @@ import { after, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { extractPdfText, PDF_MAX_BYTES, PDF_MAX_PAGES } from '../dist/utils/pdfText.js';
+import { makePdf } from './fixtures/make-pdf.mjs';
 
 const PDF_TEXT = pathToFileURL(join(fileURLToPath(new URL('.', import.meta.url)), '..', 'dist', 'utils', 'pdfText.js')).href;
 
 const scratch = mkdtempSync(join(tmpdir(), 'cgmb-pdf-'));
 after(() => rmSync(scratch, { recursive: true, force: true }));
-
-/** A PDF with one page per entry of `pageTexts`, each drawing its string in Helvetica. */
-function makePdf(pageTexts) {
-  const objects = [];
-  const add = body => { objects.push(body); return objects.length; };
-
-  const catalog = add(null);
-  const pages = add(null);
-  const font = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
-  const kids = [];
-  for (const text of pageTexts) {
-    const escaped = text.replace(/[\\()]/g, ch => `\\${ch}`);
-    const stream = `BT /F1 24 Tf 72 720 Td (${escaped}) Tj ET`;
-    const contents = add(`<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`);
-    kids.push(add(
-      `<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Contents ${contents} 0 R ` +
-      `/Resources << /Font << /F1 ${font} 0 R >> >> >>`
-    ));
-  }
-  objects[catalog - 1] = `<< /Type /Catalog /Pages ${pages} 0 R >>`;
-  objects[pages - 1] = `<< /Type /Pages /Kids [${kids.map(k => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`;
-
-  let out = '%PDF-1.4\n';
-  const offsets = [];
-  objects.forEach((body, i) => {
-    offsets.push(Buffer.byteLength(out, 'latin1'));
-    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
-  });
-  const xref = Buffer.byteLength(out, 'latin1');
-  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const offset of offsets) { out += `${String(offset).padStart(10, '0')} 00000 n \n`; }
-  out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return Buffer.from(out, 'latin1');
-}
 
 function writePdf(name, pageTexts) {
   const file = join(scratch, name);

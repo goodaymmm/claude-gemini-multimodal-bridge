@@ -35,6 +35,19 @@ import pkg from 'wavefile';
 import { describeTtsAudio, hasWavHeader } from '../utils/wavAudio.js';
 const { WaveFile } = pkg;
 
+/**
+ * The pdf_mode a task asks for, top-level or in its options, as MCP arguments.
+ *
+ * Passed through unvalidated on purpose: the MCP server is where the mode is
+ * resolved against CGMB_PDF_MODE and checked, so a bad value is refused there
+ * with one message rather than being dropped here and silently becoming auto.
+ * Absent, it adds nothing, and the server's default applies.
+ */
+function pdfModeArgs(task: { pdf_mode?: unknown; options?: { pdf_mode?: unknown } } | undefined): { pdf_mode?: unknown } {
+  const mode = task?.pdf_mode ?? task?.options?.pdf_mode;
+  return mode === undefined ? {} : { pdf_mode: mode };
+}
+
 // Language detection patterns for auto-translation
 const LANGUAGE_PATTERNS = {
   ja: /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/,    // Hiragana, Katakana, CJK Unified Ideographs
@@ -387,7 +400,7 @@ export class AIStudioLayer implements LayerInterface {
         switch (task.action || task.type) {
           case 'multimodal_processing':
           case 'multimodal':
-            result = await this.processMultimodal(task.files, task.prompt || task.instructions);
+            result = await this.processMultimodal(task.files, task.prompt || task.instructions, pdfModeArgs(task).pdf_mode);
             break;
           case 'document_analysis':
           case 'document':
@@ -404,7 +417,7 @@ export class AIStudioLayer implements LayerInterface {
             // taskFileRefs normalises both shapes. `documents` arrives as bare
             // path strings, and analyzeDocuments below reads `.path` off each
             // entry -- so passing them through raw produced undefined paths.
-            result = await this.analyzeDocuments(taskFileRefs(task), task.instructions);
+            result = await this.analyzeDocuments(taskFileRefs(task), task.instructions, pdfModeArgs(task).pdf_mode);
             break;
           case 'image':
             result = await this.analyzeImage(task.imagePath || task.files?.[0]?.path, task.analysisType || 'detailed');
@@ -464,7 +477,7 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Process multimodal files
    */
-  async processMultimodal(files: MultimodalFile[], instructions: string): Promise<MultimodalResult> {
+  async processMultimodal(files: MultimodalFile[], instructions: string, pdfMode?: unknown): Promise<MultimodalResult> {
     return retry(
       async () => {
         logger.debug('Processing multimodal files', {
@@ -486,6 +499,7 @@ export class AIStudioLayer implements LayerInterface {
             quality: 'high',
             includeMetadata: true,
           },
+          ...pdfModeArgs({ pdf_mode: pdfMode }),
         });
 
         const processingTime = Date.now() - startTime;
@@ -1011,7 +1025,7 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Analyze documents
    */
-  private async analyzeDocuments(files: FileReference[], instructions: string): Promise<string> {
+  private async analyzeDocuments(files: FileReference[], instructions: string, pdfMode?: unknown): Promise<string> {
     logger.info('🔧 analyzeDocuments method called - with timeout fix', {
       fileCount: files.length,
       instructionsLength: instructions.length,
@@ -1026,6 +1040,7 @@ export class AIStudioLayer implements LayerInterface {
         extract_structure: true,
         summarize: true,
       },
+      ...pdfModeArgs({ pdf_mode: pdfMode }),
     });
 
     return result.analysis || result.content || 'Document analysis completed';
@@ -1113,7 +1128,7 @@ export class AIStudioLayer implements LayerInterface {
           pdfCount: pdfFiles.length,
           totalFiles: task.files.length
         });
-        return await this.processMultiplePDFs(pdfFiles, prompt);
+        return await this.processMultiplePDFs(pdfFiles, prompt, pdfModeArgs(task).pdf_mode);
       }
     }
     
@@ -1121,6 +1136,7 @@ export class AIStudioLayer implements LayerInterface {
       files: task.files || [],
       instructions: prompt,
       model: AI_MODELS.MULTIMODAL_ANALYSIS,
+      ...pdfModeArgs(task),
     });
   }
 
@@ -2691,7 +2707,7 @@ export class AIStudioLayer implements LayerInterface {
    * Process multiple PDFs using Gemini File API batch processing
    * Based on Google official documentation: https://ai.google.dev/gemini-api/docs/document-processing
    */
-  private async processMultiplePDFs(pdfFiles: any[], prompt: string): Promise<any> {
+  private async processMultiplePDFs(pdfFiles: any[], prompt: string, pdfMode?: unknown): Promise<any> {
     logger.info('Starting multiple PDF processing with Gemini File API', {
       pdfCount: pdfFiles.length,
       promptLength: prompt.length
@@ -2712,17 +2728,19 @@ export class AIStudioLayer implements LayerInterface {
       });
     }
 
-    // Use MCP server for multiple PDF processing
+    // Use MCP server for multiple PDF processing. Each PDF is still read
+    // locally first when it has a text layer; see pdf_mode.
     const result = await this.executeMCPCommandOptimized('multimodal_process', {
       files: pdfFiles,
-      instructions: `${prompt}\n\nProcess these ${pdfFiles.length} PDF documents using Gemini File API batch processing. Compare and analyze content across all documents.`,
+      instructions: `${prompt}\n\nProcess these ${pdfFiles.length} PDF documents together. Compare and analyze content across all documents.`,
       model: AI_MODELS.DOCUMENT_PROCESSING,
       options: {
         batchProcessing: true,
         multiplePDFs: true,
         extractStructure: true,
         compareDocuments: pdfFiles.length > 1
-      }
+      },
+      ...pdfModeArgs({ pdf_mode: pdfMode }),
     });
 
     logger.info('Multiple PDF processing completed', {

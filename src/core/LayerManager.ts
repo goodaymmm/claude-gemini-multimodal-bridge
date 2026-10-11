@@ -928,6 +928,8 @@ export class LayerManager {
             instructions: outputRequirements?.trim()
               ? outputRequirements
               : `Perform a ${analysisType} analysis of the attached documents.`,
+            // Local text or upload, for each PDF; the server decides when unset.
+            ...(options?.pdf_mode !== undefined && { pdf_mode: options.pdf_mode }),
           },
           dependsOn: ['preprocess'],
         },

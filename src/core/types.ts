@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PDF_MODES } from '../utils/pdfText.js';
 
 // ===================================
 // Core Types and Schemas
@@ -140,6 +141,9 @@ export const ProcessingOptionsSchema = z.object({
   extractionType: z.string().optional(),
   outputFormat: z.string().optional(), // Note: keeping both output_format and outputFormat for compatibility
   preserveQuality: z.boolean().optional(),
+  // How local PDFs reach the model: their extracted text, or the uploaded file.
+  // Carried to the AI Studio MCP server, which decides; see utils/pdfText.ts.
+  pdf_mode: z.enum(PDF_MODES).optional(),
 });
 export type ProcessingOptions = z.infer<typeof ProcessingOptionsSchema>;
 

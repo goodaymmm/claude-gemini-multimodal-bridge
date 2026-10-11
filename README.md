@@ -252,15 +252,32 @@ numbers are quoted here.
 ### ✨ OCR Features
 
 - ✅ Supports both text-based and scanned PDFs
-- ✅ Automatic OCR detection
-- ✅ Native OCR processing via Gemini File API
+- ✅ Automatic OCR detection: text is extracted locally first
+- ✅ Native OCR processing via Gemini File API for scanned PDFs
 - ✅ Multi-language support
 
 ### 📋 Processing Workflow
 
 ```
-PDF Input → Upload → OCR Processing → Content Analysis → Output Results
+PDF Input → Local text extraction ─┬─ text layer        → Text to Gemini      → Output Results
+                                   └─ scanned / no text → Upload → Gemini OCR → Output Results
 ```
+
+A page counts as text when it has at least 100 characters, not counting
+spaces; a PDF is sent as text when at least 4 in 5 of its pages are. Text is
+cheaper and skips the upload, but Gemini then sees only the words: figures,
+charts and the page layout do not reach it. To have Gemini look at the pages
+themselves, upload:
+
+| Mode | Behaviour | Set with |
+|------|-----------|----------|
+| `auto` (default) | Local text when the PDF has a text layer, upload otherwise | — |
+| `local` | Always local text; a PDF with no text is refused | `--pdf-mode local` |
+| `upload` | Always upload (the behaviour up to 1.2.3) | `--pdf-mode upload` |
+
+`--pdf-mode` works on `analyze`, `multimodal`, `process` and `aistudio`; MCP
+callers pass `options.pdf_mode`. `CGMB_PDF_MODE` sets the default and
+`CGMB_PDF_TEXT_MIN_CHARS` the per-page threshold. PDF URLs are always uploaded.
 
 ### 📁 Supported Formats
 
@@ -307,6 +324,10 @@ ANTIGRAVITY_CLI_PATH=                    # unset = auto-detect
 
 # Claude layer
 CLAUDE_CODE_PATH=/usr/local/bin/claude   # for installs outside the defaults
+
+# PDFs: auto | local | upload (see PDF Processing & OCR)
+CGMB_PDF_MODE=auto
+CGMB_PDF_TEXT_MIN_CHARS=100
 
 # Caching and logging
 ENABLE_CACHING=true
@@ -438,6 +459,8 @@ cgmb serve --debug
 - Avoid skewed or rotated documents
 
 **If large documents timeout:**
+- A PDF with a text layer is read locally and not uploaded; `--pdf-mode local`
+  makes sure of it
 - Split large PDFs before processing (limit: 50MB, 1,000 pages)
 - The AI Studio layer's 300s budget is fixed; there is no environment variable
   that extends it, so splitting the document is the remedy

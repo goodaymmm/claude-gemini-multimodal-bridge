@@ -36,11 +36,21 @@ import { LegacyCGMBRequestSchema, ProcessingOptionsSchema } from './types.js';
 import { pickFinalResultText } from '../utils/workflowUtils.js';
 import { LayerResult, LayerType } from './types.js';
 import { AI_MODELS } from './types.js';
+import { PDF_MODES } from '../utils/pdfText.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
 const packageJson = require('../../package.json') as { version: string };
 const VERSION = packageJson.version;
+
+/** options.pdf_mode, as the three tools that take files describe it. */
+const PDF_MODE_OPTION = {
+  type: 'string',
+  enum: [...PDF_MODES],
+  description: 'How local PDFs reach the model. "auto" (default, or CGMB_PDF_MODE): send the text ' +
+    'extracted locally when the PDF has a text layer, upload the file for Gemini to OCR when it does not. ' +
+    '"local": always send the extracted text. "upload": always upload the file.',
+};
 
 // ===================================
 // claude-gemini-multimodal-bridge Server
@@ -277,6 +287,7 @@ export class CGMBServer {
                       description: 'Processing priority',
                       default: 'balanced',
                     },
+                    pdf_mode: PDF_MODE_OPTION,
                   },
                   default: {},
                 },
@@ -344,6 +355,7 @@ export class CGMBServer {
                       enum: ['fast', 'balanced', 'quality'],
                       description: 'Quality vs speed preference',
                     },
+                    pdf_mode: PDF_MODE_OPTION,
                   },
                 },
               },
@@ -353,7 +365,8 @@ export class CGMBServer {
           {
             name: 'cgmb_document_analysis',
             description: '📄 **Document Analysis Expert** - Deep document processing:\n' +
-              '• Supported: PDF (via Gemini File API, max 1000 pages), TXT, MD, DOCX\n' +
+              '• Supported: PDF (max 50MB, 1000 pages), TXT, MD, DOCX\n' +
+              '• PDFs: text read locally when the PDF has a text layer; scanned PDFs uploaded for OCR (options.pdf_mode)\n' +
               '• Analysis Types: summary, comparison, extraction, translation\n' +
               '• Batch PDFs: Automatic detection for multiple PDF processing\n' +
               '• Path Handling: Relative paths resolved with workingDirectory\n' +
@@ -378,6 +391,13 @@ export class CGMBServer {
                 output_requirements: {
                   type: 'string',
                   description: 'Specific requirements for the output format',
+                },
+                options: {
+                  type: 'object',
+                  description: 'Processing options',
+                  properties: {
+                    pdf_mode: PDF_MODE_OPTION,
+                  },
                 },
               },
               required: ['documents', 'analysis_type'],

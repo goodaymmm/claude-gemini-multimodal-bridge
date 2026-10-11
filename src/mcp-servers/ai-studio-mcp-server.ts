@@ -29,7 +29,8 @@ import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import { describeTtsAudio } from '../utils/wavAudio.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
-import { extractPdfText } from '../utils/pdfText.js';
+import { PDF_MODES, type PdfMode, planPdf, resolveMinCharsPerPage, resolvePdfMode } from '../utils/pdfText.js';
+import { logger } from '../utils/logger.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -143,8 +144,30 @@ const MultimodalProcessSchema = z.object({
     type: z.string()
   })),
   instructions: z.string(),
-  model: z.string().optional().default(AI_MODELS.MULTIMODAL_ANALYSIS)
+  model: z.string().optional().default(AI_MODELS.MULTIMODAL_ANALYSIS),
+  // Checked by requestPdfMode, which reports a bad value as invalid params.
+  pdf_mode: z.string().optional()
 });
+
+/** How each local PDF in a request reached the model, returned in the result's metadata. */
+interface PdfHandling {
+  file: string;
+  mode: PdfMode;
+  sent_as: 'text' | 'upload';
+  reason?: string;
+  pages?: number;
+  text_pages?: number;
+  chars?: number;
+}
+
+/** The JSON schema of the pdf_mode argument, shared by both tools that read PDFs. */
+const PDF_MODE_PROPERTY = {
+  type: 'string',
+  enum: [...PDF_MODES],
+  description: 'How local PDFs reach the model. "auto" (default, or CGMB_PDF_MODE): send the locally ' +
+    'extracted text when the PDF has a text layer, upload the file for Gemini to OCR when it does not. ' +
+    '"local": always send the extracted text. "upload": always upload the file.'
+};
 
 const GetGeneratedFileSchema = z.object({
   filePath: z.string(),
@@ -316,14 +339,15 @@ class AIStudioMCPServer {
                   type: 'string',
                   description: 'Gemini model to use',
                   default: AI_MODELS.MULTIMODAL_ANALYSIS
-                }
+                },
+                pdf_mode: PDF_MODE_PROPERTY
               },
               required: ['files', 'instructions']
             }
           },
           {
             name: 'analyze_documents',
-            description: 'Extract and analyze information from documents using Google AI Studio\'s document understanding capabilities. Supports PDFs, text files, and various document formats. Provides structured data extraction, summarization, and intelligent insights for professional document processing.',
+            description: 'Extract and analyze information from documents using Google AI Studio\'s document understanding capabilities. Supports PDFs, text files, and various document formats. A PDF with a text layer is read locally and sent as text; a scanned PDF is uploaded so Gemini can OCR it (see pdf_mode). Provides structured data extraction, summarization, and intelligent insights for professional document processing.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -342,7 +366,8 @@ class AIStudioMCPServer {
                     extract_structure: { type: 'boolean', default: true },
                     summarize: { type: 'boolean', default: true }
                   }
-                }
+                },
+                pdf_mode: PDF_MODE_PROPERTY
               },
               required: ['documents', 'instructions']
             }
@@ -748,6 +773,8 @@ To retrieve this file, use:
 
   private async processMultimodal(args: any) {
     const params = MultimodalProcessSchema.parse(args);
+    const pdfMode = this.requestPdfMode(params.pdf_mode);
+    const pdfs: PdfHandling[] = [];
     
     try {
       console.error(`Processing multimodal request with ${params.files.length} files`);
@@ -804,15 +831,8 @@ To retrieve this file, use:
               }
             });
           } else if (mimeType === 'application/pdf') {
-            // Use File API to upload PDF for native processing
-            console.error(`Uploading PDF to Gemini File API: ${file.path}`);
-            const uploadedFile = await this.uploadPDFWithFileAPI(file.path);
-            parts.push({
-              fileData: {
-                fileUri: uploadedFile.uri,
-                mimeType: 'application/pdf'
-              }
-            });
+            // Text when the PDF has a text layer, the File API when it does not.
+            parts.push(await this.pdfPart(localPath, pdfMode, pdfs));
           } else {
             // For other text files, add as text content
             parts.push({
@@ -842,7 +862,8 @@ To retrieve this file, use:
         metadata: {
           model: params.model,
           filesProcessed: params.files.length,
-          instructions: params.instructions
+          instructions: params.instructions,
+          pdfs
         }
       };
 
@@ -857,6 +878,8 @@ To retrieve this file, use:
   private async analyzeDocuments(args: any) {
     // Enhanced document analysis implementation with File API support
     const { documents, instructions, options = {} } = args;
+    const pdfMode = this.requestPdfMode(args?.pdf_mode);
+    const pdfs: PdfHandling[] = [];
     
     try {
       const parts: any[] = [{ text: instructions }];
@@ -873,15 +896,9 @@ To retrieve this file, use:
         console.error(`Document detected as MIME type: ${mimeType}`);
 
         if (mimeType === 'application/pdf') {
-          // Use File API to upload PDF for native processing with OCR support
-          console.error(`Uploading PDF to Gemini File API for OCR processing: ${docPath}`);
-          const uploadedFile = await this.uploadPDFWithFileAPI(allowedDocPath);
-          parts.push({
-            fileData: {
-              fileUri: uploadedFile.uri,
-              mimeType: 'application/pdf'
-            }
-          });
+          // Text when the PDF has a text layer, the File API (and its OCR) when
+          // it does not.
+          parts.push(await this.pdfPart(allowedDocPath, pdfMode, pdfs));
         } else {
           // For text files, read as UTF-8
           const docData = fs.readFileSync(allowedDocPath, 'utf-8');
@@ -910,7 +927,8 @@ To retrieve this file, use:
         analysis: response.candidates?.[0]?.content?.parts?.[0]?.text || 'No analysis generated',
         metadata: {
           documentsProcessed: documents.length,
-          options
+          options,
+          pdfs
         }
       };
 
@@ -969,37 +987,53 @@ To retrieve this file, use:
   }
 
   /**
-   * Extract text from PDF using pdf-parse (see utils/pdfText.ts)
+   * The pdf_mode a request runs in, checked before anything is read or sent.
    */
-  private async extractPDFText(filePath: string): Promise<string> {
+  private requestPdfMode(requested: unknown): PdfMode {
     try {
-      console.error(`[MCP Server] Extracting text from PDF: ${filePath}`);
-      
-      const data = await extractPdfText(filePath);
-
-      const extractedText = data.text.trim();
-      
-      console.error(`[MCP Server] PDF extraction completed`, {
-        filePath,
-        textLength: extractedText.length,
-        pageCount: data.numpages,
-        hasText: extractedText.length > 0,
-        textPreview: extractedText.substring(0, 200) + (extractedText.length > 200 ? '...' : '')
-      });
-
-      if (extractedText.length === 0) {
-        return `[PDF Document: ${path.basename(filePath)}]\nNo text content could be extracted. This may be an image-based PDF that requires OCR processing.`;
-      }
-
-      // Add metadata header
-      const metadata = `[PDF Document: ${path.basename(filePath)} - ${data.numpages} pages]\n\n`;
-      return metadata + extractedText;
-      
+      return resolvePdfMode(requested);
     } catch (error) {
-      console.error(`[MCP Server] Failed to extract PDF text from ${filePath}:`, error);
-      
-      return `[PDF Document: ${path.basename(filePath)}]\nText extraction failed: ${error instanceof Error ? error.message : String(error)}\nNote: This PDF may require specialized OCR processing.`;
+      throw new McpError(ErrorCode.InvalidParams, (error as Error).message);
     }
+  }
+
+  /**
+   * The content part for one local PDF.
+   *
+   * When the PDF has a text layer, its text is extracted here and sent in place
+   * of the file: no upload, no File API processing wait, and a 50 MB document
+   * costs only its text. When it does not -- a scanned or image-only PDF -- the
+   * file is uploaded as before so Gemini can OCR it. planPdf holds the rule;
+   * pdf_mode or CGMB_PDF_MODE overrides it. Either way the decision is logged
+   * on stderr and reported in the result's metadata.
+   */
+  private async pdfPart(
+    localPath: string,
+    mode: PdfMode,
+    report: PdfHandling[]
+  ): Promise<{ text: string } | { fileData: { fileUri: string; mimeType: string } }> {
+    const file = path.basename(localPath);
+    const plan = await planPdf(localPath, mode, resolveMinCharsPerPage());
+
+    if (plan.action === 'text') {
+      logger.info(`PDF ${file}: sending text extracted locally`, {
+        mode, pages: plan.numpages, textPages: plan.textPages, chars: plan.chars,
+      });
+      report.push({ file, mode, sent_as: 'text', pages: plan.numpages, text_pages: plan.textPages, chars: plan.chars });
+      return { text: plan.text };
+    }
+
+    logger.info(`PDF ${file}: uploading to the Gemini File API instead of sending local text`, {
+      mode, reason: plan.reason,
+    });
+    const handling: PdfHandling = { file, mode, sent_as: 'upload', reason: plan.reason };
+    if (plan.numpages !== undefined) { handling.pages = plan.numpages; }
+    if (plan.textPages !== undefined) { handling.text_pages = plan.textPages; }
+    if (plan.chars !== undefined) { handling.chars = plan.chars; }
+    report.push(handling);
+
+    const uploadedFile = await this.uploadPDFWithFileAPI(localPath);
+    return { fileData: { fileUri: uploadedFile.uri, mimeType: 'application/pdf' } };
   }
 
   private async getGeneratedFile(args: any) {

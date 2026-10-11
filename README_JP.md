@@ -253,15 +253,32 @@ Antigravity の行は既定値です。どの Antigravity モデル ID が有効
 ### ✨ OCR機能
 
 - ✅ テキストベースとスキャンPDF両対応
-- ✅ OCR必要性を自動検出
-- ✅ Gemini File APIでネイティブOCR処理
+- ✅ OCR必要性を自動検出（まずローカルでテキストを抽出）
+- ✅ スキャンPDFは Gemini File APIでネイティブOCR処理
 - ✅ 多言語サポート
 
 ### 📋 処理ワークフロー
 
 ```
-PDF入力 → アップロード → OCR処理 → コンテンツ分析 → 結果出力
+PDF入力 → ローカルでテキスト抽出 ─┬─ テキストあり           → テキストを Gemini へ送信 → 結果出力
+                                  └─ スキャン/テキストなし → アップロード → OCR       → 結果出力
 ```
+
+空白を除いて 100 文字以上のテキストがあるページをテキストページとみなし、5 ページ中 4 ページ
+以上がテキストページの PDF はテキストで送ります。アップロードより安く待ち時間も
+ありませんが、Gemini に届くのは文字だけで、図・グラフ・レイアウトは届きません。
+ページそのものを見せたい場合はアップロードを指定してください:
+
+| モード | 動作 | 指定方法 |
+|--------|------|----------|
+| `auto`（既定） | テキストがあればローカル抽出、なければアップロード | — |
+| `local` | 常にローカル抽出。テキストのない PDF はエラー | `--pdf-mode local` |
+| `upload` | 常にアップロード（1.2.3 までの動作） | `--pdf-mode upload` |
+
+`--pdf-mode` は `analyze`・`multimodal`・`process`・`aistudio` で使えます。MCP
+からは `options.pdf_mode` で指定します。既定は `CGMB_PDF_MODE`、ページあたりの
+しきい値は `CGMB_PDF_TEXT_MIN_CHARS` で変更できます。PDF の URL は常にアップロード
+されます。
 
 ### 📁 サポート形式
 
@@ -308,6 +325,10 @@ ANTIGRAVITY_CLI_PATH=                    # 未設定なら自動検出
 
 # Claude レイヤー
 CLAUDE_CODE_PATH=/usr/local/bin/claude   # 既定の場所以外にある場合
+
+# PDF: auto | local | upload（「PDF処理 & OCR」を参照）
+CGMB_PDF_MODE=auto
+CGMB_PDF_TEXT_MIN_CHARS=100
 
 # キャッシュ・ログ
 ENABLE_CACHING=true
@@ -437,6 +458,8 @@ cgmb serve --debug
 - 傾きや回転した文書を避ける
 
 **大きな文書でタイムアウトする場合:**
+- テキストのある PDF はローカルで読み取られ、アップロードされません。
+  `--pdf-mode local` で確実にそうできます
 - 処理前に大きなPDFを分割（制限: 50MB、1,000ページ）
 - AI Studio レイヤーの 300 秒は固定で、延長する環境変数はありません。
   分割が唯一の対処です
