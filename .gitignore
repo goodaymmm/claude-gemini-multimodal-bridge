@@ -143,10 +143,7 @@ google_docs.md
 .npmignore
 
 # Additional package manager files
-package-lock.json
-pnpm-lock.yaml
 .pnpm-store/
-yarn.lock
 
 # Backup and temporary files
 *.backup
