@@ -566,7 +566,7 @@ export class AIStudioLayer implements LayerInterface {
       version: 'v2025-07-03-translation-fix'
     });
     
-    logger.info('Generating image using GeminiCLI translation + MCP pattern', {
+    logger.info('Generating image using Antigravity CLI translation + MCP pattern', {
       promptLength: prompt.length,
       model: AI_MODELS.IMAGE_GENERATION,
       quality: options.quality ?? 'standard'
@@ -609,17 +609,17 @@ export class AIStudioLayer implements LayerInterface {
       corePromptLength: corePrompt.length
     });
     
-    // Auto-detect language and translate using GeminiCLI for token optimization
+    // Auto-detect language and translate using the Antigravity CLI for token optimization
     const detectedLang = detectLanguage(corePrompt);
     if (detectedLang && detectedLang !== 'en') {
       const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
-      logger.info(`Non-English prompt detected (${languageName}), using GeminiCLI for translation...`, {
+      logger.info(`Non-English prompt detected (${languageName}), using the Antigravity CLI for translation...`, {
         originalPrompt: prompt,
         detectedLanguage: detectedLang
       });
 
       if (this.antigravityLayer) {
-        logger.info('GeminiCLI layer available, checking translateToEnglish method', {
+        logger.info('Antigravity CLI layer available, checking translateToEnglish method', {
           hasTranslateMethod: typeof this.antigravityLayer.translateToEnglish === 'function',
           layerType: this.antigravityLayer.constructor.name,
           availableMethods: Object.getOwnPropertyNames(Object.getPrototypeOf(this.antigravityLayer)).slice(0, 10),
@@ -628,9 +628,9 @@ export class AIStudioLayer implements LayerInterface {
         
         if (typeof this.antigravityLayer.translateToEnglish === 'function') {
           try {
-            // Ensure GeminiCLI layer is initialized before translation
+            // Ensure Antigravity CLI layer is initialized before translation
             if (!await this.antigravityLayer.isAvailable()) {
-              logger.warn('GeminiCLI layer not available, initializing...');
+              logger.warn('Antigravity CLI layer not available, initializing...');
               await this.antigravityLayer.initialize();
             }
             
@@ -653,7 +653,7 @@ export class AIStudioLayer implements LayerInterface {
               wasTranslated: true
             };
             
-            logger.info('GeminiCLI translation completed', {
+            logger.info('Antigravity CLI translation completed', {
               originalPrompt: prompt,
               translatedPrompt: processedPrompt,
               language: `${languageName} → English`
@@ -680,7 +680,7 @@ export class AIStudioLayer implements LayerInterface {
         }
       } else {
         logger.warn('Translation unavailable. Continuing with image generation in the input language.', {
-          reason: 'GeminiCLI layer not available',
+          reason: 'Antigravity CLI layer not available',
           originalLanguage: detectedLang,
           languageName
         });
@@ -691,7 +691,7 @@ export class AIStudioLayer implements LayerInterface {
     
     try {
       // Use MCP command (matches working timeout pattern from image/PDF analysis)
-      // Translation now handled by GeminiCLI for token distribution
+      // Translation now handled by the Antigravity CLI for token distribution
       const mcpResult = await this.executeMCPCommand('generate_image', {
         prompt: processedPrompt,
         numberOfImages: options.numberOfImages || 1,

@@ -409,7 +409,7 @@ export const MultimodalResultSchema = z.object({
 });
 export type MultimodalResult = z.infer<typeof MultimodalResultSchema>;
 
-// Grounding Context for Gemini CLI
+// Grounding context for the Antigravity CLI (search) layer
 export const GroundingContextSchema = z.object({
   files: z.array(z.string()).optional(),
   useSearch: z.boolean().default(false),
@@ -945,30 +945,56 @@ export type AIModelName = typeof AI_MODELS[keyof typeof AI_MODELS];
 // ===================================
 
 /**
- * Models served by the Antigravity CLI (`agy`).
+ * Models the Antigravity CLI (`agy`) has been reported to serve.
  *
  * IMPORTANT: this is a DIFFERENT catalogue from AI_MODELS above. AI_MODELS
  * targets the AI Studio / Gemini API and is unaffected by the CLI migration.
- * The authoritative source for the list below is the output of `agy models`;
- * never invent an ID. Verified against agy v1.1.7 on 2026-07-25.
+ *
+ * This is a snapshot, not a contract. It copies one `agy models` listing
+ * reported on agy 1.2.16 (pingdotgg/t3code#15378, October 2026). The catalogue
+ * depends on the signed-in account and plan: another account on agy 1.3.3 in
+ * the same issue still saw claude-sonnet-4-6 and claude-opus-4-6-thinking
+ * instead of the 5.5 entries. Running `agy models` on the user's own machine is
+ * the only authority, and slugs are not guaranteed to mean what they say
+ * (antigravity-cli#687 reports `gemini-3.1-pro-high` resolving to 3.6 Flash on
+ * 1.1.7).
+ *
+ * Informational only. Nothing validates a requested model against this list:
+ * it exists to give AntigravityModelName (and so DEFAULT_ANTIGRAVITY_MODEL) a
+ * type. Any other ID is passed through to `agy --model` unchanged, and agy
+ * itself decides whether it is valid; only RETIRED_GEMINI_CLI_MODEL_PATTERN is
+ * remapped. Do not add rejection logic based on this list.
  */
 export const ANTIGRAVITY_MODELS = [
+  'gemini-3.8-flash-high',
+  'gemini-3.8-flash-medium',
+  'gemini-3.8-flash-low',
+  'gemini-3.7-flash-high',
+  'gemini-3.7-flash-medium',
+  'gemini-3.7-flash-low',
   'gemini-3.6-flash-high',
   'gemini-3.6-flash-medium',
   'gemini-3.6-flash-low',
-  'gemini-3.5-flash-high',
-  'gemini-3.5-flash-medium',
-  'gemini-3.5-flash-low',
   'gemini-3.1-pro-high',
   'gemini-3.1-pro-low',
-  'claude-sonnet-4-6',
-  'claude-opus-4-6-thinking',
+  'claude-opus-5-5-low',
+  'claude-opus-5-5-medium',
+  'claude-opus-5-5-high',
+  'claude-sonnet-5-5-low',
+  'claude-sonnet-5-5-medium',
+  'claude-sonnet-5-5-high',
   'gpt-oss-120b-medium',
 ] as const;
 
 export type AntigravityModelName = typeof ANTIGRAVITY_MODELS[number];
 
-/** Default model for search / translation through the Antigravity CLI. */
+/**
+ * Default model for search / translation through the Antigravity CLI.
+ *
+ * The lowest Flash tier. It was in the agy 1.1.7 catalogue this file used to
+ * carry and is still in the 1.2.16 listing above; override it with
+ * ANTIGRAVITY_MODEL or `--model` if `agy models` on your machine says otherwise.
+ */
 export const DEFAULT_ANTIGRAVITY_MODEL: AntigravityModelName = 'gemini-3.6-flash-low';
 
 /**

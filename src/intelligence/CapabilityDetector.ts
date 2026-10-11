@@ -134,7 +134,7 @@ export class CapabilityDetector {
       services.claude = 'missing';
     }
     
-    // Gemini CLI status
+    // Antigravity CLI (search layer) status; the field keeps its old name
     if (capabilities.geminiCLI.available && capabilities.geminiCLI.authenticated) {
       services.gemini = 'authenticated';
     } else if (capabilities.geminiCLI.available) {
@@ -247,7 +247,7 @@ export class CapabilityDetector {
   }
 
   /**
-   * Detect Gemini CLI capability
+   * Detect the Antigravity CLI capability (reported under the legacy `geminiCLI` key)
    */
   private async detectGeminiCLI(): Promise<AvailableCapabilities['geminiCLI']> {
     try {

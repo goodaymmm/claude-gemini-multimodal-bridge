@@ -467,7 +467,7 @@ program
             console.log(`     Set ${tool.env}=/path/to/${tool.commands[0]} in your environment`);
           }
           
-          if (options.fix && tool.name === 'Gemini CLI') {
+          if (options.fix && tool.name === 'Antigravity CLI') {
             console.log(`     💡 Install with: ${AGY_INSTALL_HINT}`);
           }
         }
@@ -475,7 +475,7 @@ program
       
       // Check environment variables
       console.log('\n📋 Environment Variables:');
-      const envVars = ['AI_STUDIO_API_KEY', 'CLAUDE_CODE_PATH', 'GEMINI_CLI_PATH'];
+      const envVars = ['AI_STUDIO_API_KEY', 'CLAUDE_CODE_PATH', 'ANTIGRAVITY_CLI_PATH', 'GEMINI_CLI_PATH'];
       for (const envVar of envVars) {
         const value = process.env[envVar];
         if (value) {
@@ -1854,7 +1854,7 @@ program
           console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
           console.log('');
           
-          // Execute via Gemini CLI for web content
+          // Execute via the Antigravity CLI for web content
           const geminiOptions = {
             prompt: analysisPrompt,
             model: DEFAULT_ANTIGRAVITY_MODEL,
@@ -2270,9 +2270,9 @@ program.on('option:*', function(this: any) {
   const unknownOption = this.args[0];
   if (unknownOption === '--search' || unknownOption === '--grounding') {
     console.error(`\nError: Unknown option '${unknownOption}'`);
-    console.error(`\n💡 Web search is enabled by default in Gemini CLI - no flags needed!`);
+    console.error(`\n💡 Web search is enabled by default in the Antigravity CLI (agy) - no flags needed!`);
     console.error(`\nJust use: cgmb gemini -p "your question"`);
-    console.error(`\nGemini will automatically use web search when beneficial.\n`);
+    console.error(`\nagy will automatically use web search when beneficial.\n`);
     process.exit(1);
   }
 });

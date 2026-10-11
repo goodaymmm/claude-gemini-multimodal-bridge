@@ -535,7 +535,7 @@ class AIStudioMCPServer {
     
     try {
       // Sanitize the prompt to replace problematic words  
-      // Translation is now handled by GeminiCLI in AIStudioLayer
+      // Translation is now handled by the Antigravity CLI layer in AIStudioLayer
       const sanitizedPrompt = sanitizePrompt(params.prompt);
       // Log sanitization for debugging if needed
       if (params.prompt !== sanitizedPrompt) {

@@ -105,7 +105,7 @@ export class AuthVerifier {
 
     return safeExecute(
       async () => {
-        logger.info('Verifying Gemini authentication (no cache)...');
+        logger.info('Verifying Antigravity CLI authentication (no cache)...');
 
         try {
           // Priority 1: OAuth authentication (recommended)
@@ -159,7 +159,7 @@ export class AuthVerifier {
           return result;
           
         } catch (error) {
-          logger.error('Gemini authentication verification failed', { error: (error as Error).message });
+          logger.error('Antigravity CLI authentication verification failed', { error: (error as Error).message });
           
           const result: AuthResult = {
             success: false,
@@ -222,7 +222,7 @@ export class AuthVerifier {
             currentVar: 'GEMINI_API_KEY',
             recommendedVar: 'AI_STUDIO_API_KEY',
             migration: 'Update your .env file: GEMINI_API_KEY → AI_STUDIO_API_KEY',
-            reason: 'GEMINI_API_KEY is ambiguous - used for both Gemini CLI and AI Studio'
+            reason: 'GEMINI_API_KEY is ambiguous - the Antigravity CLI (agy) also reads it and switches to API-key mode, while CGMB expects agy to use its keyring sign-in'
           });
         }
         

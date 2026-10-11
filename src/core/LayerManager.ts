@@ -366,7 +366,7 @@ export class LayerManager {
       preferredLayer = 'aistudio';
       reasoning = 'Generation task requiring AI Studio capabilities (Imagen 3, Veo 2)';
     }
-    // Priority 5: Current information needs - Route to Gemini CLI for web search
+    // Priority 5: Current information needs - Route to the Antigravity CLI for web search
     else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
       preferredLayer = 'antigravity';
       reasoning = 'Current information or search required - Antigravity CLI optimal';
@@ -1245,12 +1245,12 @@ export class LayerManager {
     }
 
     // Determine recommended layer with generation priority
-    let recommendedLayer: LayerType = 'antigravity'; // Default to Gemini CLI for simple prompts
+    let recommendedLayer: LayerType = 'antigravity'; // Default to the Antigravity CLI for simple prompts
     
     // Check if this is a simple prompt (no files, no generation, no complex reasoning)
     const isSimplePrompt = !hasMultimodalFiles && !isGenerationRequest && !requiresComplexReasoning && !multipleSteps;
     
-    // HIGHEST PRIORITY: Web search goes to Gemini CLI
+    // HIGHEST PRIORITY: Web search goes to the Antigravity CLI
     if (requiresGrounding && !hasMultimodalFiles) {
       recommendedLayer = 'antigravity';
       logger.info('Routing to Antigravity CLI for web search', {
@@ -1276,7 +1276,7 @@ export class LayerManager {
     } else if (requiresMultimodalProcessing) {
       recommendedLayer = 'aistudio';
     } else if (isSimplePrompt) {
-      // Simple prompts go to Gemini CLI (2.5 Pro) for best performance
+      // Simple prompts go to the Antigravity CLI
       recommendedLayer = 'antigravity';
       logger.info('Routing simple prompt to Antigravity CLI', {
         promptLength: typeof inputData.prompt === 'string' ? inputData.prompt.length : 0,
