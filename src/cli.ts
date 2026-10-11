@@ -846,7 +846,10 @@ program
           name: 'Antigravity CLI',
           check: async () => {
             const binary = await findAntigravityBinary();
-            return binary !== undefined && binary.versionSupported;
+            // `=== true`, not a bare `binary?.versionSupported`: the caller
+            // treats only `false` as a failure, so a missing binary must not
+            // come back as `undefined`.
+            return binary?.versionSupported === true;
           }
         }
       ];

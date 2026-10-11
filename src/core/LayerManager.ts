@@ -1405,7 +1405,7 @@ export class LayerManager {
     const strategyKey = `${failedStep.layer}_unavailable`;
     const strategy = workflow.fallbackStrategies[strategyKey];
 
-    if (!strategy || strategy.replace !== failedStep.id) {
+    if (strategy?.replace !== failedStep.id) {
       return null;
     }
 
