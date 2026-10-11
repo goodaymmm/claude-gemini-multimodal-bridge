@@ -1301,7 +1301,7 @@ Solutions:
   }
 
   /**
-   * Convert input to formats that Claude Code, Gemini CLI, and AI Studio can understand
+   * Convert input to formats that Claude Code, the Antigravity CLI, and AI Studio can understand
    */
   private convertForLayers(prompt: string, files: any[], options: any): {
     prompt: string;
@@ -1311,7 +1311,7 @@ Solutions:
   } {
     // Format for each layer:
     // - Claude Code: text prompt + file references
-    // - Gemini CLI: stdin-compatible, escaped arguments
+    // - Antigravity CLI: prompt on stdin
     // - AI Studio: API format, base64 encoded files
 
     // Determine workflow (simple logic)
@@ -1575,7 +1575,7 @@ Failed steps: ${result.metadata.steps_failed}`
         },
       },
       {
-        name: 'Gemini CLI',
+        name: 'Antigravity CLI',
         check: async () => {
           try {
             const layer = await this.layerManager.getAntigravityLayerAsync();
@@ -1649,7 +1649,7 @@ Failed steps: ${result.metadata.steps_failed}`
     return {
       gemini: {
         api_key: process.env.AI_STUDIO_API_KEY ?? '',
-        model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash',
+        model: process.env.GEMINI_MODEL ?? AI_MODELS.GEMINI_FLASH,
         timeout: parseInt(process.env.GEMINI_TIMEOUT ?? '60000'),
         max_tokens: parseInt(process.env.GEMINI_MAX_OUTPUT_TOKENS ?? '16384'),
         temperature: parseFloat(process.env.GEMINI_TEMPERATURE ?? '0.2'),

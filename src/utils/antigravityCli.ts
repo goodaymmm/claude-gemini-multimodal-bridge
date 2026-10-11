@@ -79,7 +79,8 @@ interface CommandResult {
 async function runCommand(
   command: string,
   args: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  env?: NodeJS.ProcessEnv
 ): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
     // Go through buildSpawnTarget rather than spawning the path directly.
@@ -100,6 +101,7 @@ async function runCommand(
     const child = spawn(target.file, target.args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      ...(env ? { env } : {}),
       ...target.spawnOptions,
     });
 
@@ -411,6 +413,66 @@ export async function findAntigravityBinary(
 }
 
 /**
+ * Environment variables an `agy` child process may inherit.
+ *
+ * Only what agy needs to locate itself, its config and its keyring. Secrets
+ * held by CGMB (AI_STUDIO_API_KEY, CLAUDE_API_KEY, ...) are never exposed to an
+ * agent that can be steered by an untrusted prompt -- and GEMINI_API_KEY in
+ * particular is left out, because agy treats it as a request for API-key mode
+ * instead of the keyring sign-in CGMB relies on.
+ */
+const AGY_ENV_ALLOW_LIST = [
+  'PATH', 'Path', 'PATHEXT',
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+  'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+  'SystemRoot', 'SystemDrive', 'windir', 'TEMP', 'TMP', 'TMPDIR',
+  'LANG', 'LC_ALL', 'TZ',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR',
+  'DBUS_SESSION_BUS_ADDRESS', // Linux Secret Service (keyring) access
+  'DISPLAY', 'WAYLAND_DISPLAY',
+  'CODEX_HOME', 'GEMINI_HOME',
+] as const;
+
+/**
+ * Minimal environment for an `agy` child process.
+ *
+ * Shared by the search layer and the auth probe. They must see the same
+ * environment: the probe exists to predict whether the layer's requests will
+ * authenticate, and it used to inherit the whole of process.env. With
+ * GEMINI_API_KEY set (CGMB's own .env template sets it), `agy models` could
+ * succeed in API-key mode while every `agy -p` from the layer -- which never
+ * receives that key -- ran against an empty keyring.
+ */
+export function buildAgyChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of AGY_ENV_ALLOW_LIST) {
+    const value = source[key];
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
+/**
+ * Wording agy uses for a sign-in that no longer works. 1.3.1 and later print
+ * "Authentication expired. Please log back in." for an expired or revoked
+ * keyring session. These phrases are specific enough to trust even when the
+ * command exits 0 or the message also mentions the network.
+ */
+const AGY_SIGNED_OUT_PATTERN = /authentication expired|log back in|\brevoked\b/i;
+
+/** True when agy output says the keyring sign-in has expired or been revoked. */
+export function looksSignedOut(output: string): boolean {
+  return AGY_SIGNED_OUT_PATTERN.test(output);
+}
+
+/** Weaker signal: "expired" alone, except when it is a TLS certificate talking. */
+function mentionsExpiredCredentials(message: string): boolean {
+  return /\bexpired\b/i.test(message) && !/certificate|CERT_/i.test(message);
+}
+
+/**
  * Probe Antigravity authentication.
  *
  * `agy` keeps its OAuth tokens in the OS keyring (Windows Credential Manager,
@@ -418,6 +480,10 @@ export async function findAntigravityBinary(
  * and no `agy auth` subcommand to call. `agy models` round-trips to the server
  * and therefore succeeds only when the session is authenticated, which makes it
  * the cheapest reliable probe.
+ *
+ * An expired or revoked sign-in ("Authentication expired. Please log back in."
+ * from agy 1.3.1 on) is 'unauthenticated', never 'unavailable': the fix is to
+ * sign in again, not to wait for the network.
  */
 export async function probeAntigravityAuth(
   binaryPath?: string,
@@ -438,7 +504,9 @@ export async function probeAntigravityAuth(
   const timeout = options.timeoutMs ?? 8000;
 
   try {
-    const result = await runCommand(resolved, ['models'], timeout);
+    // Same environment the layer gives `agy -p`, so the answer describes the
+    // session the layer will actually use (see buildAgyChildEnv).
+    const result = await runCommand(resolved, ['models'], timeout, buildAgyChildEnv());
 
     if (result.timedOut) {
       return {
@@ -448,11 +516,27 @@ export async function probeAntigravityAuth(
       };
     }
 
+    const combined = `${result.stderr}\n${result.stdout}`;
+
+    // Checked before the success path: a build that prints the sign-out notice
+    // on stdout and still exits 0 must not read as a model listing.
+    if (looksSignedOut(combined)) {
+      return {
+        authenticated: false,
+        outcome: 'unauthenticated',
+        error: result.stderr.trim() || result.stdout.trim(),
+      };
+    }
+
     if (result.code === 0 && result.stdout.trim()) {
       return { authenticated: true, outcome: 'authenticated' };
     }
 
     const message = result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
+
+    if (mentionsExpiredCredentials(message)) {
+      return { authenticated: false, outcome: 'unauthenticated', error: message };
+    }
 
     // A transport failure says nothing about credentials. Reporting it as
     // "unauthenticated" would send users through a pointless sign-in.

@@ -7,7 +7,7 @@ import os from 'os';
 import { AGY_INSTALL_HINT, findAntigravityBinary, probeAntigravityAuth } from '../utils/antigravityCli.js';
 
 /**
- * OAuthManager handles OAuth flow management and Gemini CLI authentication
+ * OAuthManager handles OAuth flow management and Antigravity CLI (`agy`) authentication
  * Supports both OAuth and API key authentication methods
  */
 export class OAuthManager {
@@ -15,8 +15,7 @@ export class OAuthManager {
   private readonly CACHE_TTL = 3600000; // 1 hour in milliseconds
 
   /**
-   * Check Gemini CLI authentication status
-   * Simplified to check OAuth file and API key without executing gemini commands
+   * Check Antigravity CLI authentication status with a live `agy models` probe
    */
   async checkGeminiAuthentication(): Promise<AuthStatus> {
     return safeExecute(
@@ -88,12 +87,12 @@ export class OAuthManager {
   }
 
   /**
-   * Prompt user for Gemini login and guide through authentication
+   * Prompt the user to sign in to the Antigravity CLI and guide them through it
    */
   async promptGeminiLogin(): Promise<boolean> {
     return safeExecute(
       async () => {
-        logger.info('Prompting Gemini authentication...');
+        logger.info('Prompting Antigravity CLI sign-in...');
         
         const method = await this.detectAuthMethod();
         
@@ -135,7 +134,7 @@ export class OAuthManager {
         }
       },
       {
-        operationName: 'prompt-gemini-login',
+        operationName: 'prompt-antigravity-login',
         layer: 'antigravity',
         timeout: 60000, // OAuth flow can take time
       }
@@ -200,7 +199,7 @@ export class OAuthManager {
     }
     
     // Check for Gemini-specific API keys
-    const geminiApiKey = process.env.GEMINI_API_KEY ??  // Gemini CLI specific
+    const geminiApiKey = process.env.GEMINI_API_KEY ??  // read by the retired Gemini CLI; CGMB never passes it to agy
                          process.env.GOOGLE_API_KEY;   // Legacy support
                    
     if (geminiApiKey && geminiApiKey.length > 10) {
@@ -215,7 +214,7 @@ export class OAuthManager {
    * Only checks Gemini-specific API keys
    */
   private async checkApiKeyAuth(): Promise<AuthStatus> {
-    const apiKey = process.env.GEMINI_API_KEY ??  // Gemini CLI specific
+    const apiKey = process.env.GEMINI_API_KEY ??  // read by the retired Gemini CLI; CGMB never passes it to agy
                    process.env.GOOGLE_API_KEY;    // Legacy support
     
     if (!apiKey) {

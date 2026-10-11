@@ -1,6 +1,6 @@
 import { commandExists } from '../utils/platformUtils.js';
 import { execFileSync } from 'child_process';
-import { AuthResult, VerificationResult } from '../core/types.js';
+import { AI_MODELS, AuthResult, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
 import { buildSpawnTarget, commandAvailable } from '../utils/processUtils.js';
@@ -105,7 +105,7 @@ export class AuthVerifier {
 
     return safeExecute(
       async () => {
-        logger.info('Verifying Gemini authentication (no cache)...');
+        logger.info('Verifying Antigravity CLI authentication (no cache)...');
 
         try {
           // Priority 1: OAuth authentication (recommended)
@@ -159,7 +159,7 @@ export class AuthVerifier {
           return result;
           
         } catch (error) {
-          logger.error('Gemini authentication verification failed', { error: (error as Error).message });
+          logger.error('Antigravity CLI authentication verification failed', { error: (error as Error).message });
           
           const result: AuthResult = {
             success: false,
@@ -222,7 +222,7 @@ export class AuthVerifier {
             currentVar: 'GEMINI_API_KEY',
             recommendedVar: 'AI_STUDIO_API_KEY',
             migration: 'Update your .env file: GEMINI_API_KEY → AI_STUDIO_API_KEY',
-            reason: 'GEMINI_API_KEY is ambiguous - used for both Gemini CLI and AI Studio'
+            reason: 'GEMINI_API_KEY is ambiguous - the Antigravity CLI (agy) also reads it and switches to API-key mode, while CGMB expects agy to use its keyring sign-in'
           });
         }
         
@@ -512,6 +512,10 @@ export class AuthVerifier {
    * no generation quota, and still requires a valid credential. Distinguishes a
    * rejected key from a network fault so a blip is never reported as "your key
    * is invalid".
+   *
+   * The probed model must be one a brand-new key can reach. Gemini 2.5 has
+   * been limited to existing users since 2026-09-18, so probing it would
+   * report a perfectly good new key as broken; probe the layer's default.
    */
   private async probeAIStudioKey(
     apiKey: string
@@ -522,7 +526,7 @@ export class AuthVerifier {
       const { GoogleGenAI } = await import('@google/genai');
       const client = new GoogleGenAI({ apiKey });
 
-      const probe = client.models.get({ model: 'gemini-2.5-flash' });
+      const probe = client.models.get({ model: AI_MODELS.GEMINI_FLASH });
       const timeout = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error(`timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS).unref()
       );

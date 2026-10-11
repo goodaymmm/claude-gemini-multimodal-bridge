@@ -47,7 +47,7 @@ async function main() {
       tips: [
         'Always use "CGMB" keyword in prompts',
         'Relative paths like ./file.pdf are auto-resolved',
-        'URLs are processed directly by Gemini CLI'
+        'URLs are processed directly by the Antigravity CLI (agy)'
       ]
     });
 

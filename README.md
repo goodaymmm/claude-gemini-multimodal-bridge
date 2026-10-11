@@ -10,7 +10,7 @@
 
 ---
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.2-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
+[![npm version](https://img.shields.io/badge/npm-v1.2.3-CB3837?style=flat-square&logo=npm)](https://www.npmjs.com/package/claude-gemini-multimodal-bridge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.0.0-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 179 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 197 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -58,7 +58,22 @@ Follows the Anthropic Model Context Protocol. 179 tests run on Linux, Windows an
 
 ---
 
-## ✨ What's New in v1.2.2
+## ✨ What's New in v1.2.3
+
+A fix release. Since 2026-09-18 Google serves the Gemini 2.5 models only to
+accounts that already used them, so with a new API key the AI Studio layer
+returned nothing. Not run against the live Gemini API or a real `agy` — see
+Version History.
+
+| Fix | Description |
+|-----|-------------|
+| 🚀 **AI Studio defaults moved off Gemini 2.5** | `gemini-3.5-flash-lite` for general, document and multimodal work (same price as 2.5 Flash), `gemini-3.1-flash-lite-image` for images, `gemini-3.8-flash-tts` for speech |
+| 🔑 **A new API key is no longer reported as broken** | The key check probed `gemini-2.5-flash`, which refuses new keys |
+| 🎵 **Speech files get one WAV header** | 3.8 TTS returns a complete WAV file; it is written as-is instead of being wrapped a second time |
+| 🔐 **The Antigravity sign-in check matches real requests** | It no longer receives `GEMINI_API_KEY`, and an expired sign-in reads as signed out, not as an outage |
+| 🧭 **Antigravity CLI named throughout** | Remaining "Gemini CLI" hints now say `agy`; `cgmb detect-paths --fix` prints the `agy` install hint it never showed |
+
+### Previously, in v1.2.2
 
 Housekeeping. Nothing users can reach behaves differently — the code removed
 could not be reached at all.
@@ -78,19 +93,6 @@ could not be reached at all.
 | 🔑 **`.env` stays in your project** | Installation directories and `~/.cgmb` are opt-in via `CGMB_ENV_PATH`, not read by default |
 | 🔍 **Search cache answers the question asked** | Different years and different models are no longer treated as one entry |
 | 🧩 **Workflow steps see their inputs** | Parallel steps publish output; hybrid runs honour `dependsOn` |
-
-### Previously, in v1.2.0
-
-| Feature | Description |
-|---------|-------------|
-| 🔄 **Antigravity CLI** | The search layer moved off the discontinued Gemini CLI to `agy` |
-| 🖥️ **Three-OS Support** | Linux, Windows and macOS verified in CI on every push |
-| 🚀 **Updated Models** | `gemini-3-pro-image`, `gemini-3.1-flash-tts-preview`; the retired `gemini-2.0-flash-exp` is gone |
-| 🎯 **`targetLayer` Honoured** | Naming a layer routes there — including `claude` |
-| 🔧 **`CLAUDE_CODE_PATH`** | Now reaches the executable search, as documented |
-| 🪟 **Full Windows Support** | Native support for both CLI and MCP (since v1.1.0) |
-| 🔐 **OAuth Authentication** | OS keyring for `agy`; file-based auth for Claude Code |
-| 📊 **Smart Routing** | PDF URLs to AI Studio, web pages to Antigravity CLI |
 
 ---
 
@@ -214,15 +216,18 @@ CGMB integrates seamlessly with Claude Code. Just use the **"CGMB" keyword**:
 | Purpose | Model ID | Layer |
 |:-------:|:---------|:-----:|
 | 🔍 Web Search | `gemini-3.6-flash-low` | Antigravity CLI |
-| 🎨 Image Generation | `gemini-2.5-flash-image` | AI Studio |
+| 🎨 Image Generation | `gemini-3.1-flash-lite-image` | AI Studio |
 | 🖼️ Image Generation (high quality) | `gemini-3-pro-image` | AI Studio |
-| 🎵 Audio Generation | `gemini-3.1-flash-tts-preview` | AI Studio |
-| 📄 Document Processing | `gemini-2.5-flash` | AI Studio |
-| 📝 OCR/Text Extraction | `gemini-2.5-flash` | AI Studio |
-| 🔮 General Multimodal | `gemini-2.5-flash` | AI Studio |
+| 🎵 Audio Generation | `gemini-3.8-flash-tts` | AI Studio |
+| 📄 Document Processing | `gemini-3.5-flash-lite` | AI Studio |
+| 📝 OCR/Text Extraction | `gemini-3.5-flash-lite` | AI Studio |
+| 🔮 General Multimodal | `gemini-3.5-flash-lite` | AI Studio |
 
-Antigravity model IDs must appear in `agy models`; AI Studio IDs live in
-`AI_MODELS` in `src/core/types.ts`.
+The Antigravity row is the default. Which Antigravity IDs are valid is decided
+by `agy models` on your machine — the catalogue varies by account and plan (a
+listing reported on agy 1.2.16 has the `gemini-3.6`, `3.7` and `3.8` Flash
+tiers, `-low` / `-medium` / `-high`); pick another with `ANTIGRAVITY_MODEL` or
+`--model`. AI Studio IDs live in `AI_MODELS` in `src/core/types.ts`.
 
 ---
 
@@ -495,6 +500,72 @@ src/
 ---
 
 ## 📜 Version History
+
+### v1.2.3 (2026-10-11)
+
+A fix release. Every change addresses something a user installing today could
+hit; no features were added.
+
+- 🔑 **A new AI Studio API key works again**: on 2026-09-18 Google limited the
+  Gemini 2.5 models to accounts that had already been using them. They are not
+  deprecated, but a fresh API key is refused — and `gemini-2.5-flash` was
+  CGMB's default for general requests, document processing and multimodal
+  analysis, and the model the key check probed. A valid new key was reported as
+  broken before any request was made. The defaults move to models a new key can
+  reach:
+  - `gemini-2.5-flash` → `gemini-3.5-flash-lite` for general, document and
+    multimodal work. Same 1M-token context and the same $0.30 / $2.50 per 1M
+    tokens, so the bill does not change
+  - `gemini-2.5-flash-image` → `gemini-3.1-flash-lite-image`, Google's named
+    replacement: about $0.034 per image, output limited to 1K resolution
+  - `gemini-3.1-flash-tts-preview` → `gemini-3.8-flash-tts`; the old ID is now a
+    legacy preview
+  - `gemini-3-pro-preview` → `gemini-3.1-pro-preview`; the old ID was shut down
+    on 2026-03-09 and survives only as an alias
+- 🎵 **Speech files are no longer wrapped twice**: 3.8 TTS returns a complete WAV
+  file where earlier models returned raw PCM, and both places that added a WAV
+  header would have added a second one. WAV output is now written as-is; PCM
+  from an older TTS model chosen by override is still wrapped, and the sample
+  rate and bit depth reported are the ones the audio actually has
+- 🔒 **Model IDs cannot drift again**: every model literal in `src/` now comes
+  from `AI_MODELS`, and a test fails on any `gemini-2.5-*` literal, as it
+  already did for `gemini-2.0-*`. The config schema default for `gemini.model`
+  was still `gemini-2.5-pro`; it now follows the same constant
+- 🔐 **The Antigravity sign-in check tests the session real requests use**: it
+  ran `agy models` with the whole environment, while the layer gives `agy -p` a
+  short allow-list without `GEMINI_API_KEY`. agy treats that key as a request
+  for API-key mode, so with it set — CGMB's own `.env` template sets it — the
+  check could say "signed in" while every real request ran against an empty
+  keyring. Both now use one allow-list, and no CGMB secret is passed to `agy`
+- ⏳ **An expired sign-in reads as signed out**: from agy 1.3.1 an expired or
+  revoked sign-in prints "Authentication expired. Please log back in.", which
+  could be classified as an outage. It is now reported as signed out, and the
+  error says to run `agy` again
+- 📋 **Antigravity model list refreshed**: the reference list now copies an
+  `agy models` listing reported on agy 1.2.16 — Gemini 3.6, 3.7 and 3.8 Flash
+  tiers, 3.1 Pro, Claude Opus and Sonnet 5.5 tiers, `gpt-oss-120b-medium`. It is
+  informational: nothing is rejected against it, and `agy models` on your
+  machine decides what is valid
+- 🧭 **"Gemini CLI" wording replaced**: CLI hints, the startup tip, the
+  dependency check and log lines now name the Antigravity CLI (`agy`). One of
+  these was a defect: `cgmb detect-paths --fix` compared against the old name,
+  so the `agy` install hint never printed. `detect-paths` also lists
+  `ANTIGRAVITY_CLI_PATH`
+- 🧹 **Stale version numbers and pins**: the `mcp` block in `package.json` said
+  v1.2.0 and now says 1.2.3; the GitHub Pages landing page (`docs/index.html`)
+  was at v1.1.0 and still described Gemini CLI; `.claude/settings.json` pinned
+  the legacy `claude-sonnet-5` for the headless Claude Code process and now pins
+  `claude-sonnet-5-5`
+
+**Unchanged**: `gemini-3-pro-image` for high-quality images, the Antigravity
+default `gemini-3.6-flash-low`, and `MIN_AGY_VERSION` (1.1.7). No exported
+identifier is renamed. Tests: 179 → 197 (7 for the WAV helper, 1 for the schema
+default, 2 for the model table, 8 for the Antigravity probe and environment).
+
+**Not verified live**: none of this ran against the real Gemini API or a real
+`agy`. The model IDs and the 3.8 TTS WAV behaviour come from Google's
+documentation and release notes; the agy 1.3.1 wording and the 1.2.16 model
+listing come from release notes and the GitHub issues cited in the code.
 
 ### v1.2.2 (2026-08-03)
 
