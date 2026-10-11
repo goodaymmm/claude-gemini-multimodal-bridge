@@ -7,7 +7,7 @@ import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { SearchCache } from '../utils/SearchCache.js';
-import { AGY_INSTALL_HINT, MIN_AGY_VERSION, buildAgyChildEnv, findAntigravityBinary, isVersionAtLeast, looksSignedOut, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
+import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary, isVersionAtLeast, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
  * Task interface for better type safety
@@ -500,14 +500,10 @@ export class AntigravityCLILayer implements LayerInterface {
 
         if (code !== 0) {
           // The stderr vocabulary of `agy` is not documented and differs from Gemini
-          // CLI's. Surface it verbatim rather than pattern-matching on guesses;
-          // the one exception is the sign-out notice agy 1.3.1+ prints, which
-          // gets a pointer to the fix.
-          const detail = stderr.trim() || 'no stderr output';
-          const hint = looksSignedOut(`${stderr}\n${stdout}`)
-            ? ' Sign in again by running `agy` in a terminal.'
-            : '';
-          reject(new Error(`Antigravity CLI failed (exit code ${code}): ${detail}${hint}`));
+          // CLI's. Surface it verbatim rather than pattern-matching on guesses.
+          reject(new Error(
+            `Antigravity CLI failed (exit code ${code}): ${stderr.trim() || 'no stderr output'}`
+          ));
           return;
         }
 
@@ -595,13 +591,29 @@ export class AntigravityCLILayer implements LayerInterface {
    *
    * Passes only what agy needs to locate itself, its config and its keyring,
    * so secrets held by CGMB (AI_STUDIO_API_KEY, CLAUDE_API_KEY, ...) are never
-   * exposed to an agent that can be steered by an untrusted prompt, and
-   * GEMINI_API_KEY cannot switch agy from the keyring sign-in to API-key mode.
+   * exposed to an agent that can be steered by an untrusted prompt.
    */
   private buildChildEnv(): NodeJS.ProcessEnv {
-    // The allow-list lives next to the auth probe so both run agy under the
-    // same environment. GEMINI_API_KEY is deliberately not on it.
-    return buildAgyChildEnv();
+    const allowed = [
+      'PATH', 'Path', 'PATHEXT',
+      'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+      'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+      'SystemRoot', 'SystemDrive', 'windir', 'TEMP', 'TMP', 'TMPDIR',
+      'LANG', 'LC_ALL', 'TZ',
+      'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR',
+      'DBUS_SESSION_BUS_ADDRESS', // Linux Secret Service (keyring) access
+      'DISPLAY', 'WAYLAND_DISPLAY',
+      'CODEX_HOME', 'GEMINI_HOME',
+    ];
+
+    const env: NodeJS.ProcessEnv = {};
+    for (const key of allowed) {
+      const value = process.env[key];
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
+    return env;
   }
 
   /**

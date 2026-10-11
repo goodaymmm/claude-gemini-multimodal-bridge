@@ -26,7 +26,6 @@ import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
 import { AI_MODELS } from '../core/types.js';
 import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
-import { describeTtsAudio } from '../utils/wavAudio.js';
 import pkg from 'wavefile';
 const { WaveFile } = pkg;
 // pdf-parse is dynamically imported within the extractPDFText() method
@@ -229,7 +228,7 @@ class AIStudioMCPServer {
         tools: [
           {
             name: 'generate_image',
-            description: `Generate high-quality images using Google AI Studio's Gemini image model (default ${AI_MODELS.IMAGE_GENERATION}). All generated content complies with Google's content policies and is suitable for professional, educational, and creative use cases. The tool automatically applies safety prefixes to ensure appropriate content generation.`,
+            description: 'Generate high-quality images using Google AI Studio\'s Gemini 2.0 Flash model. All generated content complies with Google\'s content policies and is suitable for professional, educational, and creative use cases. The tool automatically applies safety prefixes to ensure appropriate content generation.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -408,7 +407,7 @@ class AIStudioMCPServer {
           },
           {
             name: 'generate_audio',
-            description: `Generate high-quality audio using Google AI Studio's Gemini TTS model (default ${AI_MODELS.AUDIO_GENERATION}). Produces clear, natural-sounding speech with multiple voice options. All audio is generated in WAV format with proper headers for universal compatibility.`,
+            description: 'Generate high-quality audio using Google AI Studio\'s Gemini 2.5 Flash TTS model. Produces clear, natural-sounding speech with multiple voice options. All audio is generated in WAV format with proper headers for universal compatibility.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -535,7 +534,7 @@ class AIStudioMCPServer {
     
     try {
       // Sanitize the prompt to replace problematic words  
-      // Translation is now handled by the Antigravity CLI layer in AIStudioLayer
+      // Translation is now handled by GeminiCLI in AIStudioLayer
       const sanitizedPrompt = sanitizePrompt(params.prompt);
       // Log sanitization for debugging if needed
       if (params.prompt !== sanitizedPrompt) {
@@ -629,7 +628,7 @@ class AIStudioMCPServer {
           {
             type: 'text',
             text: imageData 
-              ? `✅ Successfully generated image using ${params.model || AI_MODELS.IMAGE_GENERATION}
+              ? `✅ Successfully generated image using Gemini 2.0 Flash
 
 📁 File saved to: ${savedFilePath}
 📏 Size: ${(fileSize / 1024).toFixed(2)} KB
@@ -717,7 +716,7 @@ To retrieve this file, use:
       ];
 
       const response = await this.genAI.models.generateContent({
-        model: params.model || AI_MODELS.MULTIMODAL_ANALYSIS,
+        model: 'gemini-2.5-flash',
         contents: parts,
         config: {
           responseModalities: [Modality.TEXT],
@@ -824,7 +823,7 @@ To retrieve this file, use:
 
       console.error(`Sending request to Gemini with ${parts.length} parts (instructions + ${parts.length - 1} files)`);
       const response = await this.genAI.models.generateContent({
-        model: params.model || AI_MODELS.MULTIMODAL_ANALYSIS,
+        model: params.model || 'gemini-2.5-flash',
         contents: parts,
         config: {
           responseModalities: [Modality.TEXT],
@@ -893,7 +892,7 @@ To retrieve this file, use:
 
       console.error(`Sending document analysis request to Gemini with ${parts.length} parts`);
       const response = await this.genAI.models.generateContent({
-        model: options.model || AI_MODELS.DOCUMENT_PROCESSING,
+        model: options.model || 'gemini-2.5-flash',
         contents: parts,
         config: {
           responseModalities: [Modality.TEXT],
@@ -1234,8 +1233,7 @@ To retrieve this file, use:
       });
 
       // Extract audio data from response
-      const inlineAudio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-      const audioData = inlineAudio?.data;
+      const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
 
       if (!audioData) {
         throw new Error('Audio generation failed: No audio data received from API');
@@ -1249,26 +1247,24 @@ To retrieve this file, use:
       const filename = `generated-audio-${timestamp}.wav`;
       const absolutePath = path.join(outputDir, filename);
 
+      // Create proper WAV file with headers using WaveFile library
       const rawAudioBuffer = Buffer.from(audioData, 'base64');
-      // gemini-3.8-flash-tts returns a finished WAV file; older TTS models
-      // return headerless L16 PCM. Only the latter needs a header.
-      const { isWav, format: audioFormat } = describeTtsAudio(rawAudioBuffer, inlineAudio?.mimeType);
 
-      let wavBuffer: Uint8Array;
-      if (isWav) {
-        wavBuffer = rawAudioBuffer;
-      } else {
-        // L16 PCM (16-bit signed little-endian). Convert to samples for
-        // WaveFile.fromScratch(), which writes the RIFF/WAVE header.
-        const pcmSamples = [];
-        for (let i = 0; i + 1 < rawAudioBuffer.length; i += 2) {
-          pcmSamples.push(rawAudioBuffer.readInt16LE(i));
-        }
-
-        const wav = new WaveFile();
-        wav.fromScratch(audioFormat.channels, audioFormat.sampleRate, String(audioFormat.bitDepth), pcmSamples);
-        wavBuffer = wav.toBuffer();
+      // Google AI Studio returns L16 PCM data (16-bit signed integers)
+      // Convert Buffer to Int16Array for WaveFile.fromScratch()
+      const pcmSamples = [];
+      for (let i = 0; i < rawAudioBuffer.length; i += 2) {
+        // Read 16-bit signed little-endian integers
+        const sample = rawAudioBuffer.readInt16LE(i);
+        pcmSamples.push(sample);
       }
+
+      // Create WAV file with proper headers per google_docs.md specification
+      const wav = new WaveFile();
+      wav.fromScratch(1, 24000, '16', pcmSamples);
+
+      // Get complete WAV file buffer with headers
+      const wavBuffer = wav.toBuffer();
 
       // Write to disk
       await fsPromises.writeFile(absolutePath, wavBuffer);
@@ -1286,7 +1282,7 @@ To retrieve this file, use:
         content: [
           {
             type: 'text',
-            text: `✅ Successfully generated audio using ${params.model || AI_MODELS.AUDIO_GENERATION}
+            text: `✅ Successfully generated audio using Gemini 2.5 Flash TTS
 
 📁 File saved to: ${savedFilePath}
 📏 Size: ${(fileSize / 1024).toFixed(2)} KB
@@ -1310,10 +1306,7 @@ To retrieve this file, use:
           model: params.model || AI_MODELS.AUDIO_GENERATION,
           voice: params.voice,
           textLength: params.text.length,
-          originalText: params.text,
-          sampleRate: audioFormat.sampleRate,
-          bitDepth: audioFormat.bitDepth,
-          channels: audioFormat.channels
+          originalText: params.text
         }
       };
 
