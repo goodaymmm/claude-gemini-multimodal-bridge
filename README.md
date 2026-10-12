@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 653 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 654 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -992,12 +992,20 @@ dependencies to new major versions. 1.2.3 was never published.
     credential-name check; it now checks the files before the layer starts.
     `analyze`, `multimodal` and `process` already went through the check, and
     `generate-image` / `generate-audio` take no files
+  - that realpath lookup ran before the allowed-directories check, so the
+    credential-name check itself touched any path a caller named: on Windows a
+    `\\host\share` path made the server connect to that host, on macOS a
+    `/net/host` path did the same, and a symlink outside the allowed
+    directories gave away whether it points at a credential-shaped name. The
+    lookup now runs only for a path the allowed-directories check places
+    inside, a UNC or `//host` path is never handed to it, and the refusal
+    names the file as given (`notes.txt`), not where it points
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
 `resolveWindowsCommand` alias and the three `AI_MODELS` keys above are removed.
 `gemini-3-pro-image`, listed until now as the high-quality image model, is no
-longer listed: no code path ever selected it. Tests: 179 → 653 (7 for the WAV
+longer listed: no code path ever selected it. Tests: 179 → 654 (7 for the WAV
 helper, 1 for the schema default, 2 for the model table, 8 for the Antigravity
 probe and environment, 3 for the API-key sign-in, 10 for the dependency moves,
 24 for the PDF mode, 106 for routing, 81 for the PDF URL address rules, 5 for
@@ -1007,7 +1015,7 @@ for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
 retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass, 20 for the last roots items, 3 for the
 denylist on both names, 3 for display names on stderr and typing by the given
-name, 22 for the last log and name items); on Linux 652 pass and 1 is skipped. The routing changes are
+name, 22 for the last log and name items, 1 for the denylist staying inside the allowed directories); on Linux 653 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

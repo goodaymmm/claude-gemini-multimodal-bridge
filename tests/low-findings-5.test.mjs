@@ -363,18 +363,38 @@ describe('2. a display name over 200 characters keeps its extension for the type
 });
 
 // =====================================================================================
-// 3. The denylist sees where a link points, on every tool
+// 3. The denylist sees where a link points, on every tool -- inside the allowed directories
 // =====================================================================================
 
+// The realpath lookup runs only for paths inside the allowed roots (the cwd here), so
+// this block keeps its own fixture under process.cwd() rather than in the tmpdir workspace.
 describe('3. assertNoCredentialFiles checks the realpath\'s name too', { skip: SKIP_LINKS }, () => {
+  let inside;
+
+  before(() => {
+    inside = mkdtempSync(join(process.cwd(), '.cgmb-low5-'));
+    mkdirSync(join(inside, 'gone'), { recursive: true });
+    writeFileSync(join(inside, '.env'), `${SECRET}\n`);
+    writeFileSync(join(inside, 'plain.txt'), 'PLAIN-CONTENT\n');
+    symlinkSync('.env', join(inside, 'notes.txt'));
+  });
+
+  after(() => {
+    rmSync(inside, { recursive: true, force: true });
+  });
+
   it('refuses a harmless name that resolves to a credential file, given relative or absolute', async () => {
     const { assertNoCredentialFiles } = await import('../dist/core/LayerManager.js');
     for (const task of [
-      { files: [{ path: join(workspace, 'notes.txt'), type: 'document' }] },
-      { documents: [join(workspace, 'notes.txt')] },
+      { files: [{ path: join(inside, 'notes.txt'), type: 'document' }] },
+      { documents: [join(inside, 'notes.txt')] },
+      { files: [{ path: relative(process.cwd(), join(inside, 'notes.txt')), type: 'document' }] },
     ]) {
       assert.throws(() => assertNoCredentialFiles(task), error => {
         assert.equal(error.code, 'CREDENTIAL_FILE_REFUSED');
+        // The refusal names the file as given, not where the link points.
+        assert.match(error.message, /Refusing to process notes\.txt/);
+        assert.ok(!error.message.includes('.env'), error.message);
         return true;
       });
     }
@@ -382,15 +402,15 @@ describe('3. assertNoCredentialFiles checks the realpath\'s name too', { skip: S
 
   it('judges a path that does not resolve by its given name alone', async () => {
     const { assertNoCredentialFiles } = await import('../dist/core/LayerManager.js');
-    assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: join(workspace, 'missing.txt'), type: 'document' }] }));
+    assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: join(inside, 'missing.txt'), type: 'document' }] }));
     assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: 'https://example.com/.env/report.pdf', type: 'pdf' }] }));
-    assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: join(workspace, 'plain.txt'), type: 'document' }] }));
-    assert.throws(() => assertNoCredentialFiles({ files: [{ path: join(workspace, 'gone', '.env'), type: 'document' }] }), /credential file pattern/);
+    assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: join(inside, 'plain.txt'), type: 'document' }] }));
+    assert.throws(() => assertNoCredentialFiles({ files: [{ path: join(inside, 'gone', '.env'), type: 'document' }] }), /credential file pattern/);
   });
 
   it('keeps checking givenPath as before', async () => {
     const { assertNoCredentialFiles } = await import('../dist/core/LayerManager.js');
-    assert.throws(() => assertNoCredentialFiles({ files: [{ path: join(workspace, 'plain.txt'), givenPath: join(workspace, '.env'), type: 'document' }] }), /credential file pattern/);
+    assert.throws(() => assertNoCredentialFiles({ files: [{ path: join(inside, 'plain.txt'), givenPath: join(inside, '.env'), type: 'document' }] }), /credential file pattern/);
   });
 
   it('a workflow refuses before its first step', async () => {
@@ -401,7 +421,7 @@ describe('3. assertNoCredentialFiles checks the realpath\'s name too', { skip: S
     await assert.rejects(
       manager.executeWorkflow(
         { steps: [{ id: 'one', layer: 'claude', action: 'analyze', input: {} }] },
-        { files: [{ path: join(workspace, 'notes.txt'), type: 'document' }] },
+        { files: [{ path: join(inside, 'notes.txt'), type: 'document' }] },
         { executionMode: 'sequential' }
       ),
       error => error.code === 'CREDENTIAL_FILE_REFUSED'
@@ -448,7 +468,9 @@ describe('3. cgmb serve: notes.txt -> .env is refused on cgmb_multimodal_process
   for (const [name, args] of cases('notes.txt')) {
     it(`${name}: refused with CREDENTIAL_FILE_REFUSED, no layer called`, async () => {
       const result = await callTool(name, args);
-      assert.match(result.text ?? '', /\(CREDENTIAL_FILE_REFUSED\): Refusing to process \.env: it matches a credential file pattern/, JSON.stringify(result.response).slice(0, 500));
+      // Named by the name the caller used, never by the link's target.
+      assert.match(result.text ?? '', /\(CREDENTIAL_FILE_REFUSED\): Refusing to process notes\.txt: it matches a credential file pattern/, JSON.stringify(result.response).slice(0, 500));
+      assert.ok(!(result.text ?? '').includes('.env'), result.text);
       assert.deepEqual(result.calls, [], 'no layer was asked');
     });
   }
@@ -513,7 +535,7 @@ describe('4. the CLI applies the denylist before any request', { skip: SKIP_SHIM
   it('cgmb aistudio -f notes.txt (a link to .env) is refused the same way', { skip: SKIP_LINKS }, async () => {
     const result = await run(['aistudio', '-p', 'Summarise this file', '-f', 'plain.txt', 'notes.txt']);
     assert.notEqual(result.status, 0, result.stdout);
-    assert.match(result.stderr, /Refusing to process \.env: it matches a credential file pattern/);
+    assert.match(result.stderr, /Refusing to process notes\.txt: it matches a credential file pattern/);
     assert.deepEqual(result.calls, []);
   });
 
@@ -530,5 +552,41 @@ describe('4. the CLI applies the denylist before any request', { skip: SKIP_SHIM
     const sent = result.calls.filter(entry => entry.layer === 'aistudio' && entry.kind === 'call');
     assert.equal(sent.length, 1, JSON.stringify(result.calls));
     assert.match(sent[0].promptHead, /PLAIN-CONTENT/);
+  });
+});
+
+describe('the denylist never touches the disk outside the allowed directories', () => {
+  it('a path outside the roots is judged by its given name only, and the refusal names the given name', async () => {
+    const { assertNoCredentialFiles } = await import('../dist/core/LayerManager.js');
+    const { mkdtempSync, writeFileSync, symlinkSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const outside = mkdtempSync(join(tmpdir(), 'cgmb-outside-'));
+    try {
+      writeFileSync(join(outside, 'prod.pem'), 'x');
+      let linked = true;
+      try { symlinkSync('prod.pem', join(outside, 'harmless')); } catch { linked = false; }
+      // Outside the roots: not resolved, so the link's target name is never learned.
+      if (linked) {
+        assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: join(outside, 'harmless'), type: 'document' }] }));
+      }
+      // A UNC or //host path is never handed to realpath at all; its own name still counts.
+      assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: '\\\\attacker.example\\share\\report.pdf', type: 'document' }] }));
+      assert.throws(() => assertNoCredentialFiles({ files: [{ path: '//attacker.example/share/id_rsa', type: 'document' }] }), /credential file pattern/);
+      // Inside the roots (cwd), a link to a credential is refused and named by the given name.
+      const inside = mkdtempSync(join(process.cwd(), '.cgmb-denylist-'));
+      try {
+        writeFileSync(join(inside, '.env'), 'SECRET=1');
+        if (linked) {
+          symlinkSync('.env', join(inside, 'notes.txt'));
+          assert.throws(() => assertNoCredentialFiles({ files: [{ path: join(inside, 'notes.txt'), type: 'document' }] }),
+            err => /Refusing to process notes\.txt/.test(err.message) && !err.message.includes('.env'));
+        }
+      } finally {
+        rmSync(inside, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

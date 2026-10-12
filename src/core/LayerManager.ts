@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, statSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { basename } from 'path';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
 import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
@@ -63,13 +63,25 @@ const CREDENTIAL_FILE_PATTERNS = [
   /\.(pem|key|pfx|p12|keystore|jks)$/i,
 ];
 
-/** The basename of `path`'s realpath, or undefined when it does not resolve. */
+/**
+ * The basename of `path`'s realpath, or undefined.
+ *
+ * Only for a path the allowed-directories check places inside: that check is
+ * lexical first, so nothing on disk is consulted for a path outside them. It
+ * matters because this runs before any other look at the file, on the raw
+ * MCP argument: a realpath of `\\\\host\\share\\x` on Windows opens an SMB
+ * session and sends the user's NTLM credentials, `/net/host/...` on macOS
+ * contacts an NFS host, and an outside symlink's target name would otherwise
+ * show up in the refusal. A URL, a path outside the roots or one that does
+ * not resolve is judged by its given name alone.
+ */
 function realBasename(path: string): string | undefined {
-  if (/^https?:\/\//i.test(path)) {
+  if (/^https?:\/\//i.test(path) || /^(\\\\|\/\/)/.test(path)) {
     return undefined;
   }
   try {
-    return basename(realpathSync(path));
+    const verdict = checkAgainstRoots(path, allowedRoots());
+    return verdict.kind === 'inside' ? basename(verdict.resolved) : undefined;
   } catch {
     return undefined;
   }
@@ -104,8 +116,11 @@ export function assertNoCredentialFiles(task: unknown): void {
     if (real !== undefined) {
       names.add(real);
     }
-    const name = [...names].find(candidate => CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(candidate)));
-    if (name !== undefined) {
+    const matched = [...names].some(candidate => CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(candidate)));
+    if (matched) {
+      // Named by the name the caller used: a symlink's target name is the
+      // file system's business, not the caller's.
+      const name = basename(file.givenPath ?? file.path);
       throw new CGMBError(
         `Refusing to process ${name}: it matches a credential file pattern, and the AI Studio ` +
         `layer transmits file contents to Google.`,
