@@ -812,11 +812,6 @@
             <td>AI Studio</td>
           </tr>
           <tr>
-            <td>🖼️ Image Generation (high quality)</td>
-            <td><code>gemini-3-pro-image</code></td>
-            <td>AI Studio</td>
-          </tr>
-          <tr>
             <td>🎵 Audio Generation</td>
             <td><code>gemini-3.8-flash-tts</code></td>
             <td>AI Studio</td>
@@ -871,7 +866,7 @@
           <ul>
             <li>Checks for the Antigravity CLI and prints install instructions if missing</li>
             <li>Sets up Claude Code MCP integration</li>
-            <li>Creates .env template</li>
+            <li>Tells you where your API key goes (it no longer writes a .env)</li>
             <li>Verifies system requirements</li>
           </ul>
           <p style="margin-top: 12px;">Then install the Antigravity CLI (<code>agy</code> 1.1.7 or newer) separately and run <code>agy</code> once to sign in. The token is stored in your OS keyring; there is no API key. Finally, add <code>AI_STUDIO_API_KEY</code> to a <code>.env</code> file in your project.</p>
@@ -883,7 +878,6 @@
     <section>
       <h2 class="section-title">📸 Screenshots</h2>
       <div class="media-grid">
-        <img src="./architecture.png" alt="Architecture Diagram" />
         <img src="./image-demo.png" alt="Image Generation Demo" />
         <img src="./audio-demo.png" alt="Audio Generation Demo" />
       </div>

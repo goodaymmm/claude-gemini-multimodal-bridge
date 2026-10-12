@@ -3,15 +3,15 @@
  *
  * This is a credential and egress boundary, not a convenience.
  *
- * The default search list includes the package's own installation directory,
- * the global npm directory, and ~/.cgmb unconditionally.
+ * Up to 1.2.0 the default search list included the package's own installation
+ * directory, the global npm directory, and ~/.cgmb unconditionally; since 1.2.1
+ * they are read only when CGMB_ENV_PATH names them.
  *
- * The ancestor walk in findProjectRoot() also has no ceiling at the user's
- * home -- but it could not be made to bite: planting a package.json named
- * claude-gemini-multimodal-bridge at an ancestor returns null on both Windows
- * and POSIX under Node 22, because the walk loads it with a dynamic import that
- * no longer works and swallows the failure. That is a separate defect (the
- * detection is dead), not a boundary that leaks, so it is not asserted here.
+ * There was also an ancestor walk, findProjectRoot(), with no ceiling at the
+ * user's home. It never added a directory under Node 22 -- it loaded
+ * package.json with a dynamic import that no longer works and swallowed the
+ * failure -- and it was removed in 1.3.0, so the default list is now
+ * CGMB_ENV_PATH, then the working directory, and nothing else.
  *
  * A .env picked up that way supplies AI_STUDIO_API_KEY -- another project's key,
  * billed to someone else -- and CGMB_ALLOWED_ROOTS, which decides which files

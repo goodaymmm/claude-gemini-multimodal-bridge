@@ -256,9 +256,9 @@ describe('routing matrix', { skip: SKIP }, () => {
       GOOGLE_GEMINI_BASE_URL: gemini.baseUrl,
       ANTIGRAVITY_CLI_PATH: stubs.agyPath,
       CLAUDE_CODE_PATH: stubs.claudePath,
-      // The search cache is in-memory and keyed by prompt. ENABLE_CACHING only
-      // switches its metrics; a 1 ms TTL is what keeps it from answering a
-      // request without reaching agy.
+      // The search cache is in-memory and keyed by prompt. ENABLE_CACHING=false
+      // turns it off, so no request is answered without reaching agy;
+      // CACHE_TTL (seconds) is kept at 1 as a second guard.
       ENABLE_CACHING: 'false',
       CACHE_TTL: '1',
       // Auth caches go under HOME. The agy layer's per-request workspaces go

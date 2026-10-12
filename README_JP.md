@@ -50,7 +50,7 @@ Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生�
 
 ### 🎯 MCP標準対応
 
-Anthropic Model Context Protocol準拠。421件のテストを Linux / Windows / macOS の CI で push ごとに実行
+Anthropic Model Context Protocol準拠。517件のテストを Linux / Windows / macOS の CI で push ごとに実行
 
 </td>
 </tr>
@@ -65,7 +65,7 @@ Google は 2026-09-18 以降、Gemini 2.5 系モデルをそれ以前から利�
 返せませんでした。このリリースでは AI Studio の既定モデルを Gemini 2.5 から移し、
 テキストを含む PDF をアップロードせずローカルで読む PDF モードを追加し、Node.js
 の下限を 22.12.0 に引き上げます。あわせて、ルーティングを「自動ルーティング」の
-説明どおりに動くようにしました。いずれも実際の Gemini API・実際の `agy` では
+説明どおりに、環境変数を「設定」の説明どおりに動くようにしました。いずれも実際の Gemini API・実際の `agy` では
 実行していません（バージョン履歴を参照）。
 
 | 変更 | 説明 |
@@ -85,6 +85,10 @@ Google は 2026-09-18 以降、Gemini 2.5 系モデルをそれ以前から利�
 | 🧹 **`layer_priority` と `--strategy` を案内から削除** | どちらも読まれていませんでした。受け付けはしますが、効果はありません |
 | 🚫 **`--layer` は読めないファイルを拒否** | MCP ツールの `targetLayer` がすでにそうしていたのと同じです |
 | 🔁 **MCP の検索も CLI と同じくフォールバック** | `agy` → AI Studio → Claude Code。回答にその旨を書き、すべてのレイヤーが失敗したときはエラーに各レイヤーの名前を示します |
+| 🗑️ **到達不能なコードと未使用パッケージを削除** | どこからも到達できない 1,584 行と未使用の依存 4 つ（インストールされるパッケージは 19 減）。公開ファイルは 112 から 68 になり、`.claude/worktrees` のものは含みません |
+| 🧩 **ワークフローを実行前に検査** | 存在しないステップを指す `dependsOn`、自己依存、循環、重複したステップ ID は、どのステップも実行する前に拒否します。`synthesize_response` はすべての入力を受け取ります |
+| ⚙️ **README に書いた設定が効くように** | `CACHE_TTL` は秒単位、`ENABLE_CACHING=false` で検索キャッシュを無効化、`MAX_RETRIES` / `RETRY_DELAY` を読み取り、`--debug` は全コマンドで有効、`cgmb info` は `AI_STUDIO_API_KEY` を確認します |
+| 🔇 **プロンプトをログに残さず、ツールのスキーマを修正** | 出力に「AI Studio」が含まれるたびにエラー行とスタックトレースが出ることはなくなりました。debug 未満のログには引数のキー・長さ・URL のホストだけを記録し、プロンプトは記録しません。`cgmb` ツールは案内どおりの `{prompt, args}` を受け付けます |
 
 ### v1.2.2 の変更
 
@@ -145,7 +149,7 @@ npm install -g claude-gemini-multimodal-bridge
 > 💡 postinstallスクリプトが自動で:
 > - Antigravity CLI の有無を確認し、未導入ならインストール手順を表示
 > - Claude Code MCP統合をセットアップ
-> - `.env` テンプレートを作成
+> - API キーの置き場所を案内（`.env` は書き込みません）
 > - システム要件を検証
 
 ### 🔑 環境設定
@@ -181,6 +185,11 @@ agy
 
 `agy models` で確認できます。CGMB は **agy 1.1.7 以上**が必要です
 （それ以前のビルドは stdout が端末でない場合に何も出力しません）。
+
+`cgmb detect-paths` は CGMB が見つけた `agy` を表示し、`cgmb info` とともに
+`ANTIGRAVITY_CLI_PATH` が設定されているかを表示します。Gemini CLI 時代の
+`GEMINI_CLI_PATH` が残っていても、`agy` を指していなければ無視されます。
+代わりに `ANTIGRAVITY_CLI_PATH` を設定してください。
 
 ### 💬 Claude Code で使い始める
 
@@ -240,7 +249,6 @@ Antigravity CLI に送ります。Web ページの URL は Antigravity CLI が�
 |:----:|:---------|:-------:|
 | 🔍 Web検索 | `gemini-3.6-flash-low` | Antigravity CLI |
 | 🎨 画像生成 | `gemini-3.1-flash-lite-image` | AI Studio |
-| 🖼️ 画像生成（高品質） | `gemini-3-pro-image` | AI Studio |
 | 🎵 音声生成 | `gemini-3.8-flash-tts` | AI Studio |
 | 📄 ドキュメント処理 | `gemini-3.5-flash-lite` | AI Studio |
 | 📝 OCR/テキスト抽出 | `gemini-3.5-flash-lite` | AI Studio |
@@ -354,10 +362,22 @@ CGMB_PDF_MODE=auto
 CGMB_PDF_TEXT_MIN_CHARS=100
 CGMB_ALLOW_PRIVATE_URLS=false            # true でプライベート/ループバックのアドレスの PDF URL も取得
 
-# キャッシュ・ログ
-ENABLE_CACHING=true
-CACHE_TTL=3600
-LOG_LEVEL=info
+# 検索キャッシュ
+ENABLE_CACHING=true                      # false（または 0 / no / off）で無効
+CACHE_TTL=3600                           # 秒、既定 1800。100000 以上は従来のミリ秒として読み、警告を出す
+MAX_CACHE_ENTRIES=1000
+
+# リトライ -- 空なら各レイヤーの既定値。不正な値は警告を出して無視
+MAX_RETRIES=                             # 最初の試行のあとのリトライ回数、0-10（0 = リトライなし）
+RETRY_DELAY=                             # 最初のリトライまでの ms、0-60000。以降は間隔を延ばす
+
+# MCP サーバ
+REQUEST_TIMEOUT=300000                   # ms、cgmb / cgmb_multimodal_process / cgmb_document_analysis 1 回あたりの上限
+
+# ログ（stderr）
+LOG_LEVEL=info                           # error | warn | info | debug。どのコマンドでも --debug で debug
+CGMB_DEBUG=false                         # true で debug レベル（--debug と同じ）
+LOG_FILE=                                # ログをこのファイルにも書き出す
 
 # AI_STUDIO_API_KEY の非推奨フォールバック（前者を推奨）
 GEMINI_API_KEY=your_api_key_here
@@ -392,13 +412,21 @@ CGMB_ENV_PATH=/home/me/.cgmb/.env
 
 全一覧は `.env.example` にあります。パースされるだけで誰も読まない項目も
 明記してあるので、設定が効くかどうかは先にそちらを確認してください。
+`GEMINI_MODEL`、`GEMINI_TIMEOUT`、`GEMINI_MAX_OUTPUT_TOKENS`、
+`GEMINI_TEMPERATURE`、`GEMINI_MAX_FILES`、`GEMINI_MAX_TOTAL_FILE_SIZE`、
+`AISTUDIO_MCP_ENABLED` もその一部で、設定しても何も変わりません。AI Studio の
+モデル ID は `AI_MODELS` で固定です。
 
 ### MCP統合
 
-CGMBは自動的にClaude Code MCP統合を設定:
-- 📍 設定パス: `~/.claude-code/mcp_servers.json`
-- ⚡ 直接Node.js実行
-- 🔒 既存サーバーを上書きしない安全なマージ
+インストーラーが `cgmb setup-mcp` を実行し、CGMB を Claude Code に登録します:
+- ⚡ `claude mcp add claude-gemini-multimodal-bridge <node> <cgmb>/dist/cli.js serve`。
+  絶対パスで登録するため、Claude Code を起動したプロジェクトの PATH に左右され
+  ません
+- ✅ `claude mcp list` で確認できます。CGMB がなければ `cgmb setup-mcp` を実行して
+  ください（`--dry-run` で実行するコマンドを表示します）
+- 🔒 `claude mcp` コマンドのない Claude Code では、代わりに `mcp_servers.json` に
+  既存サーバーを上書きせずマージして登録します
 
 ---
 
@@ -469,10 +497,19 @@ node --test "tests/**/*.test.mjs"
 ### デバッグモード
 
 ```bash
-export CGMB_DEBUG=true
-export LOG_LEVEL=debug
+# --debug はグローバルオプションで、どのコマンドでも使えます
 cgmb serve --debug
+cgmb analyze /full/path/to/report.pdf --debug
+
+# 環境変数でも指定できます（Claude Code が起動するサーバなど）
+export LOG_LEVEL=debug   # CGMB_DEBUG=true でも同じ
 ```
+
+ログは stderr に、`LOG_FILE` を設定した場合はそのファイルにも出力します。debug
+未満のレベルでは、ツール呼び出しを引数のキー・プロンプトの長さ・ファイル数・URL の
+ホストとして記録し、プロンプトそのものは記録しません。debug レベルでは引数を
+そのまま記録し、URL はホストだけに切り詰めます。debug ログはプロンプトと同じように
+扱ってください。
 
 ### OCRとPDF処理の問題
 
@@ -735,13 +772,95 @@ src/
   エラーに各レイヤーの名前と理由を示します。ファイルを伴う依頼をファイルを読めない
   レイヤーにフォールバックしないこと、生成の依頼はフォールバックしないことは
   変わりません。`cgmb_get_layer_requirements` の説明に Claude レイヤーを加えました
+- 🗑️ **到達不能なコードと未使用パッケージを削除**: `proxy/ClaudeProxy`、
+  `proxy/RequestAnalyzer`、`intelligence/CapabilityDetector`、
+  `services/IntelligentRouter`、`auth/types` の 5 モジュール（1,584 行）は、
+  `claude` コマンドを横取りする旧設計の名残で、`src/index.ts`・`src/cli.ts`・
+  AI Studio サーバのいずれからも到達できませんでした。非推奨の
+  `resolveWindowsCommand` エイリアスとともに削除しました。`package.json` では:
+  - `@modelcontextprotocol/sdk` ^1.0.0 → ^1.23.0。CGMB がすでに使っている zod 4 を
+    依存範囲に含む最初のリリースです
+  - `ansi-escapes`、`async-retry`、`node-cache`、`wav` はどこからも import されて
+    おらず削除し、インストールされるパッケージが 19 減りました。存在しないファイルを
+    指していた `benchmark` スクリプトも削除しました
+  - `files` が `.claude` を指定していたため、`.claude/worktrees/` に残ったものは
+    `.env` ファイルも含めて公開されるおそれがありました。`.claude/README.md` と
+    `.claude/settings.json` だけを指定するようにしました。公開しないソースを指して
+    いた宣言マップは出力しません。パッケージは 112 ファイルから 68 ファイルになり、
+    `npm pack --dry-run` を実行するテストで確認しています
+- 🧩 **ワークフローをどのステップよりも先に検査**: 逐次実行のワークフローは、
+  `dependsOn` が存在しないステップを指していても、依存なしでそのステップを実行して
+  いました。並列モードは一般的なエラーで失敗し、重複したステップ ID は何も言わずに
+  読み飛ばされていました。どのモードでも、存在しないステップ・自己依存・循環
+  （ループとして表示）・重複したステップ ID は、どのステップも実行する前に、ステップと
+  ID を示して拒否します。MCP の呼び出し元には「Invalid workflow: …」が返ります
+  - `synthesize_response` はプロンプトを `request`・`prompt`・`input`・`inputs`
+    だけから組み立てていたため、`analysis: "@s1.output"` のような名前付きの入力は
+    Claude に届かず、オブジェクトは「[object Object]」になっていました。すべての
+    入力がプロンプトに届きます。名前付きの入力はラベル付きのセクションに、
+    オブジェクトと配列はインデント付きの JSON（20,000 文字まで）になり、配列や
+    オブジェクトの中の `@step` 参照も解決します
+- ⚙️ **README に書いた環境変数が書いたとおりに効くように**:
+  - `CACHE_TTL` はミリ秒として読まれていたため、この README の `CACHE_TTL=3600` は
+    3.6 秒のキャッシュになっていました。秒単位になりました（既定 1800）。100000
+    以上の値は従来どおりミリ秒として読み、警告を出します
+  - `ENABLE_CACHING=false` は何もしていませんでした。検索キャッシュを無効にします
+  - `MAX_RETRIES`（最初の試行のあとのリトライ回数、0–10）と `RETRY_DELAY`（最初の
+    リトライまでの ms、0–60000）は記載されていましたが、何にも読まれていません
+    でした。リトライ処理がこれらを使います。空または不正な値なら各レイヤーの既定値の
+    ままです
+  - `--debug` は `serve` にしかなく、フラグの解析前に作られたロガーには届いて
+    いませんでした。全コマンド共通のグローバルオプションになり、実行時にレベルを
+    切り替えます
+  - `cgmb info` と認証情報の確認は `AI_STUDIO_API_KEY` を見ず、CGMB の何も読まない
+    `CLAUDE_API_KEY` を設定済みと数え、廃止済みの `GEMINI_CLI_PATH` を表示して
+    いました。`AI_STUDIO_API_KEY` と非推奨の別名 `GOOGLE_AI_STUDIO_API_KEY`・
+    `GEMINI_API_KEY` を確認し、`ANTIGRAVITY_CLI_PATH` と `CLAUDE_CODE_PATH` を表示
+    します。`detect-paths` は非推奨のキーの値を全桁表示しなくなりました
+  - postinstall は、1.2.1 以降何にも読まれないグローバルのインストール先に `.env` を
+    書き、キーとして `${GEMINI_API_KEY}` という文字列そのものを入れていました。
+    何も書かず、キーの置き場所を案内するだけにしました。`CI=false` を CI とみなす
+    こともなくなりました
+  - Node 22 では常に失敗していたプロジェクトルートの `.env` 探索を削除しました。
+    `.env` は実際にそうだったとおり、`CGMB_ENV_PATH`、次に作業ディレクトリから
+    読みます。`setup.sh` と `verify-dependencies.sh` は Node.js 22.12 を要求し、
+    MCP の登録を `claude mcp list` で確認します。`--pdf-mode` のヘルプを修正し、
+    2 バイトしかなかった `docs/architecture.png` を削除しました
+- 🔇 **プロンプトをログに残さず、`cgmb` ツールが案内どおりの形を受け付けるように**:
+  - `AIStudioLayer` は `console.log` と `console.debug` を差し替え、行に「AI Studio」
+    や「API」が含まれるたびにエラーとスタックトレースを出力していました。
+    インスタンスごとに差し替えが重なっていました。この仕組みは削除しました
+  - すべてのツール呼び出しの引数全体と AI Studio 子プロセスの stderr 全体をログに
+    記録していたため、署名付き URL や貼り付けた秘密情報を含むプロンプトがそのまま
+    `LOG_FILE` に残っていました。ログには引数のキー・プロンプトの長さ・ファイル数・
+    URL のホストと、子プロセスの出力の 1 行目だけを記録します。引数全体を記録する
+    のは debug レベルだけで、そこでも URL はホストだけに切り詰めます
+  - `formattedData.geminiFormat` は `{prompt, args}` と案内されていたのに検証では
+    `stdin` が必須だったため、案内どおりの呼び出しは `targetLayer` を失っていました。
+    どちらの形も受け付け、どの `formattedData` でも `targetLayer` に従い、レイヤーを
+    指定したのに検証に失敗した依頼は、別のレイヤーに回さず拒否します。何にも
+    読まれていなかった `aistudioFormat` はスキーマから外し、警告付きで受け付けます
+  - `cgmb_get_layer_requirements` は Imagen 3 と Veo 2 を説明していました。
+    各レイヤーが実際にできることを現在のモデル ID とともに返し、動画は未実装と
+    明記します。何にも読まれていなかった `AI_MODELS` のキー
+    `IMAGE_GENERATION_PRO`（`gemini-3-pro-image`）、`GEMINI_FLASH_3`、
+    `GEMINI_FLASH_3_PRO` を削除しました
+  - AI Studio サブサーバのモジュールを（`node -e` や REPL から）import すると、
+    そのプロセスの stdio で MCP サーバが起動していました。そのファイル自体を実行した
+    ときだけ起動します
 
-**変更なし**: 高品質な画像生成の `gemini-3-pro-image`、Antigravity の既定
-`gemini-3.6-flash-low`、`MIN_AGY_VERSION`（1.1.7）。export している識別子の名前は
-変えていません。テスト: 179 → 421（WAV ヘルパー 7 件、スキーマ既定値 1 件、
-モデル表 2 件、Antigravity の確認と環境 8 件、API キーとサインイン 3 件、依存の
-更新 10 件、PDF モード 24 件、ルーティング 106 件、PDF URL のアドレス規則 81 件）。
-Linux では 419 件が成功し、2 件はスキップです。
+**変更なし**: Antigravity の既定 `gemini-3.6-flash-low`、`MIN_AGY_VERSION`
+（1.1.7）。export している識別子の名前は変えていません。`resolveWindowsCommand`
+エイリアスと上記の `AI_MODELS` のキー 3 つは削除しました。これまで高品質な画像
+生成のモデルとして載せていた `gemini-3-pro-image` は一覧から外しました。どの
+コード経路からも選ばれていませんでした。テスト: 179 → 517（WAV ヘルパー 7 件、
+スキーマ既定値 1 件、モデル表 2 件、Antigravity の確認と環境 8 件、API キーと
+サインイン 3 件、依存の更新 10 件、PDF モード 24 件、ルーティング 106 件、PDF URL の
+アドレス規則 81 件、公開ファイル一覧 5 件、ワークフローの検査と統合の入力 24 件、
+キャッシュとリトライの変数 17 件、`cgmb info` 8 件、postinstall の `.env` の案内
+3 件、CI の判定 3 件、Node.js の確認 1 件、console の差し替え 2 件、サブサーバの
+import 6 件、`cgmb` ツールのスキーマ 14 件、各レイヤーのリトライ変数 13 件）。
+Linux では 516 件が成功し、1 件はスキップです。
 ルーティングの変更は、実際のサーバと CLI を動かす `tests/routing-matrix.test.mjs`
 で固定しており、両方の README の使用例をすべて確認しています。
 

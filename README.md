@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 421 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 517 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -65,7 +65,8 @@ already used them, so with a new API key the AI Studio layer returned nothing.
 This release moves the AI Studio defaults off Gemini 2.5, adds a PDF mode that
 reads PDFs with a text layer locally instead of uploading them, and raises the
 Node.js floor to 22.12.0. It also makes routing do what the Automatic Routing
-section says. None of it ran against the live Gemini API or a real `agy` — see
+section says, and the environment variables do what the Configuration section
+says. None of it ran against the live Gemini API or a real `agy` — see
 Version History.
 
 | Change | Description |
@@ -85,6 +86,10 @@ Version History.
 | 🧹 **`layer_priority` and `--strategy` no longer advertised** | Nothing read them; still accepted, with no effect |
 | 🚫 **`--layer` refuses files the layer cannot read** | As the MCP tool's `targetLayer` already did |
 | 🔁 **MCP search falls back like the CLI** | `agy` → AI Studio → Claude Code; the answer says so, and when every layer fails the error names each one |
+| 🗑️ **Unreachable code and unused packages removed** | 1,584 lines nothing could reach and four unused dependencies (19 fewer installed packages); the package ships 68 files instead of 112, and nothing from `.claude/worktrees` |
+| 🧩 **Workflows checked before they run** | A `dependsOn` naming a missing step, a self-dependency, a cycle or a duplicate step id is refused before any step runs; `synthesize_response` now receives every input |
+| ⚙️ **Documented settings take effect** | `CACHE_TTL` is in seconds, `ENABLE_CACHING=false` turns the search cache off, `MAX_RETRIES` / `RETRY_DELAY` are read, `--debug` works on every command, `cgmb info` checks `AI_STUDIO_API_KEY` |
+| 🔇 **Prompts kept out of the log, tool schema fixed** | No more error lines and stack traces when output mentions "AI Studio"; below debug level, logs carry argument keys, lengths and URL hosts, not prompts; the `cgmb` tool accepts the `{prompt, args}` it advertises |
 
 ### Previously, in v1.2.2
 
@@ -145,7 +150,7 @@ npm install -g claude-gemini-multimodal-bridge
 > 💡 The postinstall script automatically:
 > - Checks for the Antigravity CLI and prints install instructions if missing
 > - Sets up Claude Code MCP integration
-> - Creates `.env` template
+> - Tells you where the API key goes (it does not write a `.env`)
 > - Verifies system requirements
 
 ### 🔑 Environment Setup
@@ -181,6 +186,10 @@ agy
 
 Verify with `agy models`; CGMB requires **agy 1.1.7 or newer** (earlier builds
 print nothing when stdout is not a terminal).
+
+`cgmb detect-paths` shows which `agy` CGMB found, and it and `cgmb info` show
+whether `ANTIGRAVITY_CLI_PATH` is set. A `GEMINI_CLI_PATH` left over from Gemini
+CLI is ignored unless it points at `agy`; set `ANTIGRAVITY_CLI_PATH` instead.
 
 ### 💬 Get Started with Claude Code
 
@@ -241,7 +250,6 @@ in, its requests go to the Antigravity CLI.
 |:-------:|:---------|:-----:|
 | 🔍 Web Search | `gemini-3.6-flash-low` | Antigravity CLI |
 | 🎨 Image Generation | `gemini-3.1-flash-lite-image` | AI Studio |
-| 🖼️ Image Generation (high quality) | `gemini-3-pro-image` | AI Studio |
 | 🎵 Audio Generation | `gemini-3.8-flash-tts` | AI Studio |
 | 📄 Document Processing | `gemini-3.5-flash-lite` | AI Studio |
 | 📝 OCR/Text Extraction | `gemini-3.5-flash-lite` | AI Studio |
@@ -354,10 +362,22 @@ CGMB_PDF_MODE=auto
 CGMB_PDF_TEXT_MIN_CHARS=100
 CGMB_ALLOW_PRIVATE_URLS=false            # true lets PDF URLs reach private/loopback addresses
 
-# Caching and logging
-ENABLE_CACHING=true
-CACHE_TTL=3600
-LOG_LEVEL=info
+# Search cache
+ENABLE_CACHING=true                      # false (or 0 / no / off) turns it off
+CACHE_TTL=3600                           # seconds, default 1800; 100000 or more is read as legacy ms, with a warning
+MAX_CACHE_ENTRIES=1000
+
+# Retries -- empty keeps each layer's own default; an invalid value is ignored with a warning
+MAX_RETRIES=                             # retries after the first attempt, 0-10 (0 = no retry)
+RETRY_DELAY=                             # ms before the first retry, 0-60000; later retries back off
+
+# MCP server
+REQUEST_TIMEOUT=300000                   # ms, limit for one cgmb / cgmb_multimodal_process / cgmb_document_analysis call
+
+# Logging (stderr)
+LOG_LEVEL=info                           # error | warn | info | debug; --debug on any command sets debug
+CGMB_DEBUG=false                         # true = debug level, like --debug
+LOG_FILE=                                # also write the log to this file
 
 # Deprecated fallback for AI_STUDIO_API_KEY -- prefer the latter
 GEMINI_API_KEY=your_api_key_here
@@ -393,13 +413,21 @@ missing.
 
 `.env.example` carries the full list, including the keys that are parsed but
 that nothing reads back — worth checking before assuming a setting has an effect.
+`GEMINI_MODEL`, `GEMINI_TIMEOUT`, `GEMINI_MAX_OUTPUT_TOKENS`,
+`GEMINI_TEMPERATURE`, `GEMINI_MAX_FILES`, `GEMINI_MAX_TOTAL_FILE_SIZE` and
+`AISTUDIO_MCP_ENABLED` are among them: setting them changes nothing, and the
+AI Studio model IDs are fixed in `AI_MODELS`.
 
 ### MCP Integration
 
-CGMB automatically configures Claude Code MCP integration:
-- 📍 Config path: `~/.claude-code/mcp_servers.json`
-- ⚡ Direct Node.js execution
-- 🔒 Safe merge without overwriting existing servers
+The installer runs `cgmb setup-mcp`, which registers CGMB with Claude Code:
+- ⚡ `claude mcp add claude-gemini-multimodal-bridge <node> <cgmb>/dist/cli.js serve`,
+  with absolute paths, so the server does not depend on the PATH of the project
+  Claude Code is started in
+- ✅ Check with `claude mcp list`; if CGMB is missing, run `cgmb setup-mcp`
+  (`--dry-run` prints the command instead)
+- 🔒 A Claude Code without the `claude mcp` command gets an `mcp_servers.json`
+  entry instead, merged without overwriting existing servers
 
 ---
 
@@ -471,10 +499,18 @@ node --test "tests/**/*.test.mjs"
 ### Debug Mode
 
 ```bash
-export CGMB_DEBUG=true
-export LOG_LEVEL=debug
+# --debug is a global option and works on every command
 cgmb serve --debug
+cgmb analyze /full/path/to/report.pdf --debug
+
+# Or through the environment, e.g. for the server Claude Code starts
+export LOG_LEVEL=debug   # CGMB_DEBUG=true does the same
 ```
+
+Logs go to stderr, and to `LOG_FILE` when it is set. Below debug level a tool
+call is logged as its argument keys, prompt length, file count and URL hosts,
+never the prompt itself. At debug level the arguments are logged in full, with
+every URL cut to its host — treat a debug log as you would the prompts in it.
 
 ### OCR and PDF Processing Issues
 
@@ -743,14 +779,100 @@ dependencies to new major versions. 1.2.3 was never published.
   the error names each one with its reason. File requests still never fall back
   to a layer that cannot read the file, generation requests do not fall back,
   and `cgmb_get_layer_requirements` now lists the Claude layer
+- 🗑️ **Unreachable code and unused packages removed**: five modules —
+  `proxy/ClaudeProxy`, `proxy/RequestAnalyzer`, `intelligence/CapabilityDetector`,
+  `services/IntelligentRouter` and `auth/types`, 1,584 lines — were what remained
+  of a design that intercepted the `claude` command, and none was reachable from
+  `src/index.ts`, `src/cli.ts` or the AI Studio server. They are deleted, with
+  the deprecated `resolveWindowsCommand` alias. In `package.json`:
+  - `@modelcontextprotocol/sdk` ^1.0.0 → ^1.23.0, the first release whose zod
+    range admits zod 4, which CGMB already uses
+  - `ansi-escapes`, `async-retry`, `node-cache` and `wav` were imported nowhere
+    and are removed, taking 19 installed packages with them; the `benchmark`
+    script pointed at a file that does not exist and is removed too
+  - `files` listed `.claude`, which would have published anything left under
+    `.claude/worktrees/`, `.env` files included; it now names
+    `.claude/README.md` and `.claude/settings.json`. Declaration maps, which
+    pointed at sources that are not published, are off. The package goes from
+    112 files to 68, checked by a test that runs `npm pack --dry-run`
+- 🧩 **Workflows are checked before any step runs**: a sequential workflow whose
+  `dependsOn` named a step that did not exist ran the step anyway, without its
+  dependency; parallel mode failed with a generic error, and a duplicated step
+  id was skipped without a word. In every mode, a missing step, a
+  self-dependency, a cycle (shown as the loop) and a duplicate step id are now
+  refused before any step runs, with the step and id named, and the MCP caller
+  receives "Invalid workflow: …"
+  - `synthesize_response` built its prompt from `request`, `prompt`, `input` and
+    `inputs` only, so a named input such as `analysis: "@s1.output"` never
+    reached Claude, and an object arrived as "[object Object]". Every input now
+    reaches the prompt: named inputs as labelled sections, objects and arrays as
+    indented JSON capped at 20,000 characters, and `@step` references nested in
+    arrays and objects are resolved
+- ⚙️ **The documented environment variables do what this README says**:
+  - `CACHE_TTL` was read as milliseconds, so this README's `CACHE_TTL=3600` gave
+    a 3.6-second cache. It is seconds now (default 1800); a value of 100000 or
+    more is still read as legacy milliseconds, with a warning
+  - `ENABLE_CACHING=false` did nothing; it now turns the search cache off
+  - `MAX_RETRIES` (retries after the first attempt, 0–10) and `RETRY_DELAY` (ms
+    before the first retry, 0–60000) were documented and read by nothing; the
+    retry loops now use them, and an empty or invalid value keeps each layer's
+    own default
+  - `--debug` existed on `serve` only and never reached the logger, which was
+    built before the flag was parsed. It is now a global option on every
+    command and changes the level at run time
+  - `cgmb info` and the credential check ignored `AI_STUDIO_API_KEY`, counted
+    `CLAUDE_API_KEY` (which nothing in CGMB reads) as configured and showed the
+    retired `GEMINI_CLI_PATH`. They now check `AI_STUDIO_API_KEY` and its
+    deprecated aliases `GOOGLE_AI_STUDIO_API_KEY` and `GEMINI_API_KEY`, and show
+    `ANTIGRAVITY_CLI_PATH` and `CLAUDE_CODE_PATH`; `detect-paths` no longer
+    prints a deprecated key's full value
+  - postinstall wrote a `.env` into the global install directory, which nothing
+    has read since 1.2.1, with the literal `${GEMINI_API_KEY}` as the key. It now
+    writes nothing and says where the key goes, and `CI=false` no longer counts
+    as CI
+  - the project-root `.env` lookup, which always failed on Node 22, is removed:
+    `.env` comes from `CGMB_ENV_PATH`, then the working directory, as it did in
+    practice. `setup.sh` and `verify-dependencies.sh` require Node.js 22.12 and
+    check the MCP registration with `claude mcp list`, the `--pdf-mode` help is
+    corrected, and the two-byte `docs/architecture.png` is removed
+- 🔇 **Prompts kept out of the log, and the `cgmb` tool takes what it
+  advertises**:
+  - `AIStudioLayer` replaced `console.log` and `console.debug` with wrappers that
+    printed an error and a stack trace whenever a line mentioned "AI Studio" or
+    "API", one more wrapper per instance. The patch is gone
+  - every tool call's full arguments and the AI Studio child's whole stderr were
+    logged, so a prompt carrying a signed URL or a pasted secret reached
+    `LOG_FILE`. Logs now carry argument keys, prompt length, file count, URL
+    hosts and the first line of child output; the full arguments appear only
+    at debug level, and there with every URL cut to its host
+  - `formattedData.geminiFormat` was advertised as `{prompt, args}` while the
+    validator required `stdin`, so a call shaped as advertised lost its
+    `targetLayer`. Both shapes are accepted, `targetLayer` is honoured with any
+    `formattedData`, and a request that names a layer but fails validation is
+    refused rather than re-routed. `aistudioFormat`, which nothing read, leaves
+    the schema and is still accepted, with a warning
+  - `cgmb_get_layer_requirements` described Imagen 3 and Veo 2; it now reports
+    what the layers do, with the current model IDs, and says video is not
+    implemented. The `AI_MODELS` keys `IMAGE_GENERATION_PRO`
+    (`gemini-3-pro-image`), `GEMINI_FLASH_3` and `GEMINI_FLASH_3_PRO`, which
+    nothing read, are removed
+  - importing the AI Studio sub-server module (from `node -e` or a REPL) started
+    an MCP server on that process's stdio; it now starts only when run as its
+    own file
 
-**Unchanged**: `gemini-3-pro-image` for high-quality images, the Antigravity
-default `gemini-3.6-flash-low`, and `MIN_AGY_VERSION` (1.1.7). No exported
-identifier is renamed. Tests: 179 → 421 (7 for the WAV helper, 1 for the schema
-default, 2 for the model table, 8 for the Antigravity probe and environment, 3
-for the API-key sign-in, 10 for the dependency moves, 24 for the PDF mode, 106
-for routing, 81 for the PDF URL address rules); on Linux 419 pass and 2 are
-skipped. The routing changes are
+**Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
+`MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
+`resolveWindowsCommand` alias and the three `AI_MODELS` keys above are removed.
+`gemini-3-pro-image`, listed until now as the high-quality image model, is no
+longer listed: no code path ever selected it. Tests: 179 → 517 (7 for the WAV
+helper, 1 for the schema default, 2 for the model table, 8 for the Antigravity
+probe and environment, 3 for the API-key sign-in, 10 for the dependency moves,
+24 for the PDF mode, 106 for routing, 81 for the PDF URL address rules, 5 for
+the published file list, 24 for workflow validation and synthesis inputs, 17
+for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
+`.env` message, 3 for the CI check, 1 for the Node.js check, 2 for the console
+patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
+retry variables in every layer); on Linux 516 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 
