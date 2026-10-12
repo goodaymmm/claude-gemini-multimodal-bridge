@@ -463,9 +463,11 @@ describe('4. inlineCodeFiles reads exactly what canInlineForClaude validated', (
       unlinkSync(swap);
       symlinkSync(join(outside, 'target.ts'), swap);
 
-      const inlined = await manager.inlineCodeFiles('Review this.', resolved);
+      const inlined = await manager.inlineCodeFiles('Review this.', resolved, [swap]);
       assert.match(inlined, /A-CONTENT/);
-      assert.ok(inlined.includes(`File: ${join(workspace, 'a.ts')}`));
+      // The header names the file as given, not its realpath (low-findings-4, item 4).
+      assert.ok(inlined.includes(`File: ${swap}`));
+      assert.ok(!inlined.includes(`File: ${join(workspace, 'a.ts')}`));
       assert.ok(!inlined.includes(SENTINEL));
     } finally {
       unlinkSync(swap);

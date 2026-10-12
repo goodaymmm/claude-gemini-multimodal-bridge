@@ -73,7 +73,21 @@ export const FileReferenceSchema = z.object({
   encoding: z.string().optional(),
   content: z.string().optional(), // base64 for small files
 });
-export type FileReference = z.infer<typeof FileReferenceSchema>;
+export type FileReference = z.infer<typeof FileReferenceSchema> & {
+  /**
+   * The path as the caller gave it (resolved lexically, not through links),
+   * set by the main server once `path` has been replaced with the realpath it
+   * checked against the roots. `path` is what every reader opens; this is what
+   * a message or a header names, so neither shows the realpath. Not part of
+   * the schema: a caller cannot send it.
+   */
+  givenPath?: string;
+};
+
+/** The name to show for a file: as the caller gave it, never its realpath. */
+export function shownPath(file: Pick<FileReference, 'path' | 'givenPath'>): string {
+  return file.givenPath ?? file.path;
+}
 
 /**
  * Every file a task refers to, whichever key it used.
@@ -1107,11 +1121,27 @@ const REDACTABLE_IN_TEXT = new RegExp(
  * "basic auth is disabled" are not labels.
  */
 const SECRET_CHARS = String.raw`[A-Za-z0-9._~+/=-]`;
+/**
+ * A quoted value up to its first unescaped closing quote (`qv`): any character
+ * but a backslash or that quote, or a backslash and the character it escapes,
+ * so `"a\"b"` is one value. With no closing quote it runs to the end of the
+ * line.
+ */
+const QUOTED_VALUE = String.raw`(?:(?!\k<qv>)[^\\\r\n]|\\.)+`;
+/**
+ * The same inside a JSON string, where the quotes are escaped (`eqv` is `\"`
+ * or `\'`): an escaped quote in the value is `\\\"` there -- an escaped
+ * backslash, then the escaped quote -- so the value ends at the first `\"`
+ * that is not preceded by an escaped backslash. A unit is a plain character,
+ * a backslash escape other than the closing quote (`\n`, `\t`, `\u…`), or an
+ * escaped backslash and whatever it escapes.
+ */
+const ESCAPED_QUOTED_VALUE = String.raw`(?:[^\\\r\n]|(?!\k<eqv>)\\[^\\\r\n]|\\\\(?:\\.|[^\\\r\n]))+`;
 const LABELLED_SECRET = new RegExp(
   String.raw`(?<basic>(?<![A-Za-z0-9-])(?:proxy-)?authorization["']?\s*[=:]\s*["']?basic\s+)(?<basicValue>${SECRET_CHARS}+)` +
   String.raw`|(?<bearer>\bbearer\s+)(?<bearerValue>${SECRET_CHARS}+)` +
-  String.raw`|(?<quoted>(?<q>\\?["'])(?:key|secret|password|passwd|client_secret|access_token|refresh_token)\k<q>\s*:\s*(?<qv>\\?["']))` +
-    String.raw`(?<quotedValue>(?:(?!\k<qv>)(?:[^\\\r\n]|\\.))+)` +
+  String.raw`|(?<quoted>(?<q>\\?["'])(?:key|secret|password|passwd|client_secret|access_token|refresh_token)\k<q>\s*:\s*)` +
+    String.raw`(?:(?<qv>["'])${QUOTED_VALUE}|(?<eqv>\\["'])${ESCAPED_QUOTED_VALUE})` +
   String.raw`|(?<form>(?<![A-Za-z0-9])(?:password|passwd|client_secret|secret)=)(?<formValue>[^\s"'<>,;&\x60]+)` +
   String.raw`|(?<apiKey>(?<![A-Za-z0-9])api[_-]?key["']?\s*[=:]\s*["']?)(?<apiKeyValue>[^\s"'<>,;&\x60]+)` +
   String.raw`|(?<token>(?<![A-Za-z0-9])token["']?\s*[=:]\s*["']?)(?<tokenValue>${SECRET_CHARS}+)`,
@@ -1197,13 +1227,13 @@ function redactSchemeUrl(scheme: string, rest: string): string {
 export function redactUrls(text: string): string {
   const unlabelled = text.replace(LABELLED_SECRET, (match: string, ...args: unknown[]) => {
     const groups = args[args.length - 1] as Partial<Record<
-      'basic' | 'bearer' | 'bearerValue' | 'quoted' | 'form' | 'apiKey' | 'apiKeyValue' | 'token' | 'tokenValue', string
+      'basic' | 'bearer' | 'bearerValue' | 'quoted' | 'qv' | 'eqv' | 'form' | 'apiKey' | 'apiKeyValue' | 'token' | 'tokenValue', string
     >>;
     if (groups.basic !== undefined) {
       return `${groups.basic}…`;
     }
     if (groups.quoted !== undefined) {
-      return `${groups.quoted}…`;
+      return `${groups.quoted}${groups.qv ?? groups.eqv ?? ''}…`;
     }
     if (groups.form !== undefined) {
       return `${groups.form}…`;
@@ -1450,7 +1480,18 @@ function leadsOutside(target: string, roots: AllowedRoots, budget: { hops: numbe
         if (budget.hops-- <= 0) {
           return false;
         }
-        if (leadsOutside(resolvePath(dirname(current), readlinkSync(current)), roots, budget)) {
+        // The target is relative to the directory the link is really in:
+        // with a link on the way to it (`<root>/dirA -> real/a`), `..` in the
+        // target climbs from real/a, not from dirA. Resolving it lexically
+        // judged `dirA/link -> ../../b` by a place it never reaches. The
+        // corrected target is then checked as written before anything else.
+        let base = dirname(current);
+        try {
+          base = realpathSync(base);
+        } catch {
+          // The directory does not resolve: the lexical one is all there is.
+        }
+        if (leadsOutside(resolvePath(base, readlinkSync(current)), roots, budget)) {
           return true;
         }
       }

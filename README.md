@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 605 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 625 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -940,12 +940,34 @@ dependencies to new major versions. 1.2.3 was never published.
     `password=`, `passwd=`, `client_secret=` or `secret=`; `"keyboard": "us"`,
     `secretary`, `password policy: 12 chars` and "basic auth is disabled" are
     left alone
+  - an attached file inside the allowed directories was checked by its
+    realpath but handed on by the path as given, which the layers then resolved
+    again. The main `cgmb` tool now hands on the realpath it checked, so the
+    file read is the one that was verified, and keeps the path as given for
+    names: messages, the `File:` / `Document:` line the model is sent,
+    `files_processed`, and a PDF's name in `metadata.pdfs` and its upload show
+    the path as given, never the realpath (the AI Studio sub-server's
+    `multimodal_process` takes an optional `displayName` per file and
+    `analyze_documents` an optional `display_names` list for this)
+  - a symlink's target was resolved from the link's own name, so under a
+    directory that is itself a symlink (`dirA -> real/a`), `..` in the target
+    climbed from `dirA` rather than from `real/a`: a missing file behind such a
+    link could be refused as outside, and a symlink loop inside reported as
+    outside instead of `ELOOP`. The target is now resolved from the directory
+    the link is really in; one that lands outside is still refused
+  - log redaction of a quoted value inside a JSON string stopped at an escaped
+    quote in the value (`\"a\\\"b\"`), leaving the rest of it in the log; a
+    quoted value now runs to its first unescaped closing quote, in plain and in
+    escaped JSON, with double or single quotes
+  - code-file routing to Claude headed each inlined file, and named a binary
+    file in its "not a text file" error, by its realpath; both now use the path
+    as given, so a symlink does not reveal its target
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
 `resolveWindowsCommand` alias and the three `AI_MODELS` keys above are removed.
 `gemini-3-pro-image`, listed until now as the high-quality image model, is no
-longer listed: no code path ever selected it. Tests: 179 → 605 (7 for the WAV
+longer listed: no code path ever selected it. Tests: 179 → 625 (7 for the WAV
 helper, 1 for the schema default, 2 for the model table, 8 for the Antigravity
 probe and environment, 3 for the API-key sign-in, 10 for the dependency moves,
 24 for the PDF mode, 106 for routing, 81 for the PDF URL address rules, 5 for
@@ -953,7 +975,7 @@ the published file list, 25 for workflow validation and synthesis inputs, 17
 for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 `.env` message, 3 for the CI check, 1 for the Node.js check, 2 for the console
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
-retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass); on Linux 604 pass and 1 is skipped. The routing changes are
+retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass, 20 for the last roots items); on Linux 624 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

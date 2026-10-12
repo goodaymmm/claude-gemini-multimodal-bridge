@@ -17,6 +17,7 @@ import {
   LayerResult,
   LayerType,
   ProcessingOptions,
+  shownPath,
   WorkflowResult,
   WorkflowStep,
   WorkflowType,
@@ -592,19 +593,28 @@ export class LayerManager {
    * `resolved` is what canInlineForClaude returned: the realpaths it checked
    * against the roots. They are read as they are -- checked against the roots
    * once more, but not resolved again.
+   *
+   * `shown` names them, index for index: the paths as the caller gave them
+   * (shownPath). The `File:` header and the "not a text file" error use these,
+   * never the realpath -- a link inside the roots does not reveal where it
+   * points.
    */
-  private async inlineCodeFiles(prompt: string, resolved: readonly string[]): Promise<string> {
+  private async inlineCodeFiles(prompt: string, resolved: readonly string[], shown: readonly string[]): Promise<string> {
     const roots = allowedRoots();
     const sections: string[] = [];
     let total = 0;
 
-    for (const realPath of resolved) {
+    for (const [index, realPath] of resolved.entries()) {
       if (!isWithinRoots(realPath, roots.real)) {
+        throw claudeCannotRead(resolved.length);
+      }
+      const name = shown[index];
+      if (name === undefined) {
         throw claudeCannotRead(resolved.length);
       }
       const content = readFileSync(realPath, 'utf8');
       if (content.includes('\u0000')) {
-        throw new CGMBError(`${basename(realPath)} is not a text file; the Claude layer reads source code only.`, 'LAYER_CANNOT_READ_FILES');
+        throw new CGMBError(`${basename(name)} is not a text file; the Claude layer reads source code only.`, 'LAYER_CANNOT_READ_FILES');
       }
       total += Buffer.byteLength(content, 'utf8');
       if (total > CLAUDE_INLINE_MAX_BYTES) {
@@ -616,7 +626,7 @@ export class LayerManager {
       }
       const longestFence = Math.max(0, ...(content.match(/`+/g) ?? []).map(run => run.length));
       const fence = '`'.repeat(Math.max(3, longestFence + 1));
-      sections.push(`File: ${realPath}\n${fence}\n${content}${content.endsWith('\n') ? '' : '\n'}${fence}`);
+      sections.push(`File: ${name}\n${fence}\n${content}${content.endsWith('\n') ? '' : '\n'}${fence}`);
     }
 
     return `${prompt}\n\n` +
@@ -746,7 +756,7 @@ export class LayerManager {
     if (resolved === null) {
       throw claudeCannotRead(files.length);
     }
-    const inlined = await this.inlineCodeFiles(prompt, resolved);
+    const inlined = await this.inlineCodeFiles(prompt, resolved, files.map(shownPath));
     const claudeTask = { type: 'text_processing', prompt: inlined, files: [], options: task.options ?? {} };
 
     if (!fallback) {

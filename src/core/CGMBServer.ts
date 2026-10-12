@@ -1023,10 +1023,14 @@ Use a specific file path instead.`);
             throw new FileCheckError(`Permission denied: ${filePath}
 File exists but cannot be read.`);
           }
-          // File is accessible, add resolved path
+          // Attach the realpath that was checked, not the lexical path: every
+          // reader downstream opens exactly what was verified, so a link
+          // repointed after this check is not followed. The path as given
+          // (lexically resolved) goes with it for the names in messages and
+          // headers (shownPath), which never show the realpath.
           resolvedFiles.push(typeof file === 'string'
-            ? { path: resolvedPath, type: 'document' }
-            : { ...file, path: resolvedPath, type: file.type || 'document' });
+            ? { path: verdict.resolved, givenPath: resolvedPath, type: 'document' }
+            : { ...file, path: verdict.resolved, givenPath: resolvedPath, type: file.type || 'document' });
         } catch (error) {
           if (error instanceof FileCheckError) {
             throw error; // Already says what is wrong, in the caller's terms
@@ -1087,9 +1091,13 @@ File exists but cannot be read.`);
             // not depend on whether it exists.
             const verdict = checkAgainstRoots(resolvedPath, allowedRoots());
             if (verdict.kind === 'inside') {
-              if (fsSync.statSync(verdict.resolved).isFile()) {
+              // Attached already under another name (a link to it, or
+              // `files` naming it): once is enough.
+              const attached = resolvedFiles.some(f => typeof f !== 'string' && f.path === verdict.resolved);
+              if (!attached && fsSync.statSync(verdict.resolved).isFile()) {
                 const detectedType = this.layerManager.detectFileType(resolvedPath);
-                resolvedFiles.push({ path: resolvedPath, type: detectedType });
+                // The realpath that was checked, as for `files` above.
+                resolvedFiles.push({ path: verdict.resolved, givenPath: resolvedPath, type: detectedType });
                 logger.info('File path extracted from prompt', {
                   original: detectedPath,
                   resolved: resolvedPath,

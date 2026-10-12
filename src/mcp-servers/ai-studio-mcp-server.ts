@@ -82,7 +82,7 @@ function notReadable(filePath: string): McpError {
  * resolves outside and is refused. Only inside the roots does a caller learn
  * that a file is missing.
  */
-export function readableRootOrMissing(filePath: string): string | null {
+export function readableRootOrMissing(filePath: string, shown: string = filePath): string | null {
   const verdict = checkAgainstRoots(filePath, ALLOWED_ROOTS);
   switch (verdict.kind) {
     case 'inside':
@@ -90,9 +90,9 @@ export function readableRootOrMissing(filePath: string): string | null {
     case 'missing':
       return null;
     case 'error':
-      throw new McpError(ErrorCode.InvalidRequest, `Cannot resolve ${filePath}: ${verdict.code}`);
+      throw new McpError(ErrorCode.InvalidRequest, `Cannot resolve ${shown}: ${verdict.code}`);
     default:
-      throw notReadable(filePath);
+      throw notReadable(shown);
   }
 }
 
@@ -128,7 +128,11 @@ const AnalyzeImageSchema = z.object({
 const MultimodalProcessSchema = z.object({
   files: z.array(z.object({
     path: z.string(),
-    type: z.string()
+    type: z.string(),
+    // The name to show for the file -- in the prompt's `File:` line and the
+    // result's metadata -- when `path` is not the name the user gave: the main
+    // server sends the realpath it checked, and the path as given here.
+    displayName: z.string().optional()
   })),
   instructions: z.string(),
   model: z.string().optional().default(AI_MODELS.MULTIMODAL_ANALYSIS),
@@ -314,7 +318,11 @@ class AIStudioMCPServer {
                     type: 'object',
                     properties: {
                       path: { type: 'string' },
-                      type: { type: 'string' }
+                      type: { type: 'string' },
+                      displayName: {
+                        type: 'string',
+                        description: 'Optional: the name the prompt and the result use for this file (default: path). The file read is always path.'
+                      }
                     },
                     required: ['path', 'type']
                   },
@@ -344,6 +352,11 @@ class AIStudioMCPServer {
                   type: 'array',
                   items: { type: 'string' },
                   description: 'Array of document paths'
+                },
+                display_names: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Optional: the name the prompt and the result use for each document, index for index (default: its path). The file read is always the path in documents.'
                 },
                 instructions: {
                   type: 'string',
@@ -772,7 +785,10 @@ To retrieve this file, use:
 
       // Process each file
       for (const file of params.files) {
-        console.error(`Processing file: ${file.path}`);
+        // What the prompt, the metadata and any message call the file; the
+        // file read is always `path`.
+        const shown = file.displayName ?? file.path;
+        console.error(`Processing file: ${shown}`);
         
         // Check if the path is a URL
         const isUrl = file.path.startsWith('http://') || file.path.startsWith('https://');
@@ -784,9 +800,9 @@ To retrieve this file, use:
           // inside the roots, and a path outside them is refused whether or
           // not it exists. Read through the checked path, not the
           // caller-supplied one: resolving twice would reopen the gap.
-          const localPath = readableRootOrMissing(file.path);
+          const localPath = readableRootOrMissing(file.path, shown);
           if (localPath === null) {
-            console.warn(`File not found: ${file.path}`);
+            console.warn(`File not found: ${shown}`);
             continue;
           }
           const fileData = fs.readFileSync(localPath);
@@ -802,11 +818,11 @@ To retrieve this file, use:
             });
           } else if (mimeType === 'application/pdf') {
             // Text when the PDF has a text layer, the File API when it does not.
-            parts.push(await this.pdfPart(localPath, pdfMode, pdfs));
+            parts.push(await this.pdfPart(localPath, pdfMode, pdfs, shown));
           } else {
             // For other text files, add as text content
             parts.push({
-              text: `File: ${file.path}\nContent: ${fileData.toString('utf-8')}`
+              text: `File: ${shown}\nContent: ${fileData.toString('utf-8')}`
             });
           }
         }
@@ -850,6 +866,8 @@ To retrieve this file, use:
   private async analyzeDocuments(args: any) {
     // Enhanced document analysis implementation with File API support
     const { documents, instructions, options = {} } = args;
+    // Optional, index for index with `documents`: the name to show for each.
+    const displayNames: unknown[] = Array.isArray(args?.display_names) ? args.display_names : [];
     const pdfMode = this.requestPdfMode(args?.pdf_mode);
     const pdfs: PdfHandling[] = [];
     const downloads: DownloadedPdf[] = [];
@@ -858,7 +876,9 @@ To retrieve this file, use:
       const parts: any[] = [{ text: instructions }];
 
       // Read and process documents
-      for (const docPath of documents) {
+      for (const [index, docPath] of (documents as string[]).entries()) {
+        const named = displayNames[index];
+        const shown = typeof named === 'string' && named !== '' ? named : docPath;
         // A URL is not a path: existsSync() was false for it, so it was
         // skipped here and Gemini was asked about the prompt alone.
         if (/^https?:\/\//i.test(docPath)) {
@@ -867,9 +887,9 @@ To retrieve this file, use:
         }
 
         // Roots first, then existence (see processMultimodal).
-        const allowedDocPath = readableRootOrMissing(docPath);
+        const allowedDocPath = readableRootOrMissing(docPath, shown);
         if (allowedDocPath === null) {
-          console.warn(`Document not found: ${docPath}`);
+          console.warn(`Document not found: ${shown}`);
           continue;
         }
         const mimeType = this.getMimeType(allowedDocPath);
@@ -878,12 +898,12 @@ To retrieve this file, use:
         if (mimeType === 'application/pdf') {
           // Text when the PDF has a text layer, the File API (and its OCR) when
           // it does not.
-          parts.push(await this.pdfPart(allowedDocPath, pdfMode, pdfs));
+          parts.push(await this.pdfPart(allowedDocPath, pdfMode, pdfs, shown));
         } else {
           // For text files, read as UTF-8
           const docData = fs.readFileSync(allowedDocPath, 'utf-8');
           parts.push({
-            text: `Document: ${docPath}\nContent: ${docData}`
+            text: `Document: ${shown}\nContent: ${docData}`
           });
         }
       }
@@ -988,13 +1008,18 @@ To retrieve this file, use:
    * file is uploaded as before so Gemini can OCR it. planPdf holds the rule;
    * pdf_mode or CGMB_PDF_MODE overrides it. Either way the decision is logged
    * on stderr and reported in the result's metadata.
+   *
+   * `shown` is the name the request gave the file (its displayName, or the
+   * path); the report and the upload's display name use its base name, never
+   * the realpath's. `localPath` is what is read.
    */
   private async pdfPart(
     localPath: string,
     mode: PdfMode,
-    report: PdfHandling[]
+    report: PdfHandling[],
+    shown: string = localPath
   ): Promise<{ text: string } | { fileData: { fileUri: string; mimeType: string } }> {
-    const file = path.basename(localPath);
+    const file = path.basename(shown);
     const plan = await planPdf(localPath, mode, resolveMinCharsPerPage());
 
     if (plan.action === 'text') {
@@ -1014,7 +1039,7 @@ To retrieve this file, use:
     if (plan.chars !== undefined) { handling.chars = plan.chars; }
     report.push(handling);
 
-    const uploadedFile = await this.uploadPDFWithFileAPI(localPath);
+    const uploadedFile = await this.uploadPDFWithFileAPI(localPath, file);
     return { fileData: { fileUri: uploadedFile.uri, mimeType: 'application/pdf' } };
   }
 
@@ -1370,9 +1395,9 @@ To retrieve this file, use:
    * Upload PDF using Gemini File API for native processing
    * Supports OCR and complex PDF layouts
    */
-  private async uploadPDFWithFileAPI(pdfPath: string): Promise<any> {
+  private async uploadPDFWithFileAPI(pdfPath: string, displayName: string = path.basename(pdfPath)): Promise<any> {
     try {
-      console.error(`Starting PDF upload via File API: ${pdfPath}`);
+      console.error(`Starting PDF upload via File API: ${displayName}`);
       
       // Check file size (50MB limit)
       const stats = fs.statSync(pdfPath);
@@ -1390,7 +1415,7 @@ To retrieve this file, use:
         file: pdfPath,
         config: {
           mimeType: 'application/pdf',
-          displayName: path.basename(pdfPath)
+          displayName
         }
       });
       
@@ -1427,7 +1452,7 @@ To retrieve this file, use:
       };
       
     } catch (error) {
-      console.error(`Failed to upload PDF via File API: ${pdfPath}`, error);
+      console.error(`Failed to upload PDF via File API: ${displayName}`, error);
       throw new Error(`PDF upload failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

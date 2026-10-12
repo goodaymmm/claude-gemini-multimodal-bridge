@@ -25,7 +25,7 @@ import {
   MultimodalResult,
 } from '../core/types.js';
 import { AntigravityCLILayer } from './AntigravityCLILayer.js';
-import { describeToolArgs, errorForLog, firstLineForLog, hostsOf, taskFileRefs } from '../core/types.js';
+import { describeToolArgs, errorForLog, firstLineForLog, hostsOf, shownPath, taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { type RetryPolicy, retryPolicyFromEnv } from '../utils/envLoader.js';
@@ -524,7 +524,9 @@ export class AIStudioLayer implements LayerInterface {
         return {
           content: result.content || result.response || 'Processing completed',
           success: true,
-          files_processed: files.map(f => f.path),
+          // The names as given: `path` may be the realpath the main server
+          // checked (FileReference.givenPath).
+          files_processed: files.map(f => shownPath(f)),
           processing_time: processingTime,
           workflow_used: 'analysis' as const,
           layers_involved: ['aistudio'] as const,
@@ -1048,6 +1050,11 @@ export class AIStudioLayer implements LayerInterface {
 
     const result = await this.executeMCPCommand('analyze_documents', {
       documents: files.map(f => f.path),
+      // What the sub-server names each document by (in the prompt and the
+      // result), index for index; it reads `documents`.
+      ...(files.some(f => f.givenPath !== undefined)
+        ? { display_names: files.map(f => this.normalizeInputPath(shownPath(f))) }
+        : {}),
       instructions,
       options: {
         extract_structure: true,
@@ -1509,9 +1516,37 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * The sub-server's `displayName` for every file that carries a givenPath.
+   *
+   * The main server replaces a file's `path` with the realpath it checked
+   * against the roots and keeps the path as given in `givenPath`. The
+   * sub-server reads `path` and shows `displayName` -- in the `File:` line it
+   * puts into the prompt and in the result's metadata -- so neither the model
+   * nor the caller sees the realpath. givenPath itself is not sent.
+   */
+  private withDisplayNames<T>(params: T): T {
+    const files = (params as { files?: unknown } | null | undefined)?.files;
+    if (!Array.isArray(files)) {
+      return params;
+    }
+    return {
+      ...params,
+      files: files.map((file: unknown) => {
+        const givenPath = (file as { givenPath?: unknown } | null | undefined)?.givenPath;
+        if (typeof givenPath !== 'string') {
+          return file;
+        }
+        const { givenPath: _given, ...rest } = file as Record<string, unknown>;
+        return { ...rest, displayName: this.normalizeInputPath(givenPath) };
+      }),
+    };
+  }
+
+  /**
    * Execute MCP command with optimized persistent process
    */
-  private async executeMCPCommandOptimized(command: string, params: any): Promise<any> {
+  private async executeMCPCommandOptimized(command: string, rawParams: any): Promise<any> {
+    const params = this.withDisplayNames(rawParams);
     const mcpProcess = await this.getPersistentMCPProcess();
     const timeout = this.calculateOptimizedTimeout(command, params);
     const id = this.nextOptimizedRequestId();
@@ -1579,7 +1614,8 @@ export class AIStudioLayer implements LayerInterface {
   /**
    * Execute MCP command
    */
-  private async executeMCPCommand(command: string, params: any): Promise<any> {
+  private async executeMCPCommand(command: string, rawParams: any): Promise<any> {
+    let params = this.withDisplayNames(rawParams);
     // Normalize file paths in params for cross-platform compatibility
     // This ensures Windows backslashes are converted to forward slashes before MCP transmission
     if (params) {
@@ -2051,7 +2087,7 @@ export class AIStudioLayer implements LayerInterface {
       const size = file.size;
 
       if (size && size > this.MAX_FILE_SIZE) {
-        throw new Error(`File ${path} is too large. Maximum ${this.MAX_FILE_SIZE / 1024 / 1024}MB allowed.`);
+        throw new Error(`File ${shownPath(file)} is too large. Maximum ${this.MAX_FILE_SIZE / 1024 / 1024}MB allowed.`);
       }
 
       const ext = path.toLowerCase().match(/\.[^.]+$/)?.[0];
@@ -2087,11 +2123,15 @@ export class AIStudioLayer implements LayerInterface {
       // Normalize file path for cross-platform compatibility (Windows backslashes -> forward slashes)
       const normalizedPath = this.normalizeInputPath(file.path);
 
-      // Both types have path, so we can safely access it
+      // Both types have path, so we can safely access it. givenPath, when
+      // the main server set it, becomes the name the sub-server shows
+      // (withDisplayNames).
+      const givenPath = 'givenPath' in file ? file.givenPath : undefined;
       const fileData = {
         path: normalizedPath,
         type: file.type,
         size: file.size,
+        ...(givenPath !== undefined ? { givenPath } : {}),
       };
 
       // Check if this is a MultimodalFile (has content property)
@@ -2465,7 +2505,7 @@ export class AIStudioLayer implements LayerInterface {
       const fileSizeMB = stats.size / (1024 * 1024);
       
       if (fileSizeMB > 50) {
-        throw new Error(`PDF file ${file.path} is ${fileSizeMB.toFixed(1)}MB, which exceeds the 50MB limit for Gemini File API`);
+        throw new Error(`PDF file ${shownPath(file)} is ${fileSizeMB.toFixed(1)}MB, which exceeds the 50MB limit for Gemini File API`);
       }
       
       logger.debug('PDF file validation passed', {
