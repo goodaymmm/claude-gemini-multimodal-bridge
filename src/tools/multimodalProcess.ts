@@ -13,6 +13,7 @@ import { defaultLayerConfig, isOneOf } from '../core/types.js';
 import { LayerManager } from '../core/LayerManager.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
+import { retryPolicyFromEnv } from '../utils/envLoader.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import path from 'path';
 import fs from 'fs/promises';
@@ -307,8 +308,7 @@ export class MultimodalProcess {
         return processedFiles;
       },
       {
-        maxAttempts: 2,
-        delay: 1000,
+        ...retryPolicyFromEnv({ maxRetries: 2, delay: 1000 }),
         operationName: 'prepare-files',
       }
     );
@@ -463,8 +463,7 @@ export class MultimodalProcess {
         return await this.layerManager.processMultimodal(workflowTask.instructions, workflowTask.files, workflowTask.workflowType, workflowTask.options);
       },
       {
-        maxAttempts: 3,
-        delay: 2000,
+        ...retryPolicyFromEnv({ maxRetries: 3, delay: 2000 }),
         operationName: 'execute-workflow',
       }
     );

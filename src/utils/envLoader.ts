@@ -97,8 +97,11 @@ export function searchCacheSettingsFromEnv(env: NodeJS.ProcessEnv = process.env)
 }
 
 export interface RetryPolicy {
-  /** Retries after the first attempt (ErrorHandler.retry's maxAttempts/maxRetries). */
-  maxAttempts: number;
+  /**
+   * Retries after the first attempt, i.e. ErrorHandler.retry's maxRetries: the
+   * operation runs at most maxRetries + 1 times, and 0 means it runs once.
+   */
+  maxRetries: number;
   /** Delay before the first retry, in milliseconds; later ones back off from it. */
   delay: number;
 }
@@ -118,7 +121,10 @@ function parseBoundedInt(raw: string | undefined, min: number, max: number): num
 
 /**
  * The retry policy a layer should hand to `retry()`, with MAX_RETRIES and
- * RETRY_DELAY overriding the layer's own defaults.
+ * RETRY_DELAY overriding the layer's own defaults. Its fields are named as
+ * retry() names them, so `retry(fn, { ...policy, operationName })` is the whole
+ * mapping. Call it per request, not at import, so a changed environment (or a
+ * test) takes effect.
  *
  * - MAX_RETRIES: retries after the first attempt, an integer 0..10. 0 means
  *   "do not retry".
@@ -130,15 +136,15 @@ function parseBoundedInt(raw: string | undefined, min: number, max: number): num
  * keeps its tuning unless the user asks otherwise.
  */
 export function retryPolicyFromEnv(defaults: RetryPolicy, env: NodeJS.ProcessEnv = process.env): RetryPolicy {
-  const maxAttempts = parseBoundedInt(env.MAX_RETRIES, 0, MAX_RETRIES_LIMIT);
+  const maxRetries = parseBoundedInt(env.MAX_RETRIES, 0, MAX_RETRIES_LIMIT);
   const delay = parseBoundedInt(env.RETRY_DELAY, 0, RETRY_DELAY_LIMIT_MS);
-  for (const [name, parsed] of [['MAX_RETRIES', maxAttempts], ['RETRY_DELAY', delay]] as const) {
+  for (const [name, parsed] of [['MAX_RETRIES', maxRetries], ['RETRY_DELAY', delay]] as const) {
     if (parsed === undefined && (env[name] ?? '').trim() !== '') {
       logger.warn(`${name} is not a valid value; using the default`, { [name]: env[name] });
     }
   }
   return {
-    maxAttempts: maxAttempts ?? defaults.maxAttempts,
+    maxRetries: maxRetries ?? defaults.maxRetries,
     delay: delay ?? defaults.delay,
   };
 }

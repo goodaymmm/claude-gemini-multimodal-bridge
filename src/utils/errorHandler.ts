@@ -6,8 +6,13 @@ import { logger } from './logger.js';
 // ===================================
 
 export interface RetryOptions {
+  /**
+   * Retries after the first attempt: the operation runs at most maxRetries + 1
+   * times, and 0 means it runs once. This is what MAX_RETRIES means.
+   */
   maxRetries: number;
-  maxAttempts?: number; // Alias for maxRetries for compatibility
+  /** Older alias of maxRetries with the same meaning -- retries, not total runs. */
+  maxAttempts?: number;
   delay: number;
   backoffMultiplier: number;
   maxDelay: number;
@@ -32,8 +37,10 @@ export class ErrorHandler {
     const opts = { 
       ...this.defaultRetryOptions, 
       ...options,
-      // Handle maxAttempts alias
-      maxRetries: options.maxAttempts || options.maxRetries || this.defaultRetryOptions.maxRetries
+      // maxRetries and its alias maxAttempts both count retries after the first
+      // attempt (total runs = value + 1). `??`, not `||`: 0 is a real setting
+      // (MAX_RETRIES=0, "do not retry") and must not fall back to the default.
+      maxRetries: options.maxRetries ?? options.maxAttempts ?? this.defaultRetryOptions.maxRetries
     };
     let lastError: Error | undefined;
 

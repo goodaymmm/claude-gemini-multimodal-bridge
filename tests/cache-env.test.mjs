@@ -124,7 +124,7 @@ describe('MAX_CACHE_ENTRIES', () => {
 });
 
 describe('MAX_RETRIES and RETRY_DELAY', () => {
-  const defaults = { maxAttempts: 2, delay: 3000 };
+  const defaults = { maxRetries: 2, delay: 3000 };
 
   it('keep the layer defaults when unset', () => {
     assert.deepEqual(retryPolicyFromEnv(defaults, {}), defaults);
@@ -133,14 +133,14 @@ describe('MAX_RETRIES and RETRY_DELAY', () => {
   it('override them when set', () => {
     assert.deepEqual(
       retryPolicyFromEnv(defaults, { MAX_RETRIES: '5', RETRY_DELAY: '250' }),
-      { maxAttempts: 5, delay: 250 }
+      { maxRetries: 5, delay: 250 }
     );
   });
 
   it('allow 0, meaning no retries and no wait', () => {
     assert.deepEqual(
       retryPolicyFromEnv(defaults, { MAX_RETRIES: '0', RETRY_DELAY: '0' }),
-      { maxAttempts: 0, delay: 0 }
+      { maxRetries: 0, delay: 0 }
     );
   });
 
@@ -156,7 +156,7 @@ describe('MAX_RETRIES and RETRY_DELAY', () => {
   it('accept the upper bounds', () => {
     assert.deepEqual(
       retryPolicyFromEnv(defaults, { MAX_RETRIES: '10', RETRY_DELAY: '60000' }),
-      { maxAttempts: 10, delay: 60000 }
+      { maxRetries: 10, delay: 60000 }
     );
   });
 });

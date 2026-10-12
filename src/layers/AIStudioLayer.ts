@@ -28,6 +28,7 @@ import { AntigravityCLILayer } from './AntigravityCLILayer.js';
 import { firstLineForLog, hostsOf, redactUrls, taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
+import { type RetryPolicy, retryPolicyFromEnv } from '../utils/envLoader.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { isPlatformWindows, normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import pkg from 'wavefile';
@@ -184,6 +185,7 @@ export class AIStudioLayer implements LayerInterface {
   private lastAuthCheck = 0; // Timestamp of last auth verification
   private readonly AUTH_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days auth cache (API keys are typically long-lived)
   private readonly DEFAULT_TIMEOUT = 300000; // 5 minutes for file processing (increased to fix timeout issues)
+  /** Default retries after the first attempt; MAX_RETRIES overrides it per call. */
   private readonly MAX_RETRIES = 2;
   private readonly MAX_FILES = 10;
   private readonly MAX_FILE_SIZE = AISTUDIO_MAX_FILE_BYTES;
@@ -481,6 +483,14 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
+   * This layer's retry settings with MAX_RETRIES / RETRY_DELAY applied. Read on
+   * every call rather than at construction, so the environment can change.
+   */
+  private retryPolicy(defaultDelayMs: number): RetryPolicy {
+    return retryPolicyFromEnv({ maxRetries: this.MAX_RETRIES, delay: defaultDelayMs });
+  }
+
+  /**
    * Process multimodal files
    */
   async processMultimodal(files: MultimodalFile[], instructions: string, pdfMode?: unknown): Promise<MultimodalResult> {
@@ -525,8 +535,7 @@ export class AIStudioLayer implements LayerInterface {
         };
       },
       {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 3000,
+        ...this.retryPolicy(3000),
         operationName: 'process-multimodal',
       }
     );
@@ -570,8 +579,7 @@ export class AIStudioLayer implements LayerInterface {
         };
       },
       {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 3000,
+        ...this.retryPolicy(3000),
         operationName: analysisType === 'ocr' ? 'ocr-extraction' : 'analyze-image',
       }
     );

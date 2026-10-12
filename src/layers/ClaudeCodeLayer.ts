@@ -17,6 +17,7 @@ interface ClaudeCodeTask {
 }
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
+import { type RetryPolicy, retryPolicyFromEnv } from '../utils/envLoader.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { buildSpawnTarget, resolveTrustedCommand } from '../utils/processUtils.js';
 
@@ -83,6 +84,7 @@ export class ClaudeCodeLayer implements LayerInterface {
   private lastAuthCheck = 0; // Timestamp of last auth verification
   private readonly AUTH_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours auth cache (same as normal Claude Code session)
   private readonly DEFAULT_TIMEOUT = 300000; // 5 minutes
+  /** Default retries after the first attempt; MAX_RETRIES overrides it per call. */
   private readonly MAX_RETRIES = 3;
 
   /**
@@ -307,6 +309,14 @@ export class ClaudeCodeLayer implements LayerInterface {
   }
 
   /**
+   * This layer's retry settings with MAX_RETRIES / RETRY_DELAY applied. Read on
+   * every call rather than at construction, so the environment can change.
+   */
+  private retryPolicy(defaultDelayMs: number): RetryPolicy {
+    return retryPolicyFromEnv({ maxRetries: this.MAX_RETRIES, delay: defaultDelayMs });
+  }
+
+  /**
    * Execute complex reasoning task
    */
   async executeComplexReasoning(task: ClaudeCodeTask): Promise<ReasoningResult> {
@@ -337,8 +347,7 @@ export class ClaudeCodeLayer implements LayerInterface {
         });
       },
       {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 2000,
+        ...this.retryPolicy(2000),
         operationName: 'complex-reasoning',
       }
     );
@@ -364,8 +373,7 @@ export class ClaudeCodeLayer implements LayerInterface {
         return result.trim();
       },
       {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 1500,
+        ...this.retryPolicy(1500),
         operationName: 'synthesize-response',
       }
     );
@@ -392,8 +400,7 @@ export class ClaudeCodeLayer implements LayerInterface {
         return this.parseWorkflowResult(result, workflowDef);
       },
       {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 3000,
+        ...this.retryPolicy(3000),
         operationName: 'orchestrate-workflow',
       }
     );
