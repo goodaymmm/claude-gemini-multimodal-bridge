@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 537 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 583 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -879,12 +879,50 @@ dependencies to new major versions. 1.2.3 was never published.
     characters, and the stack only at debug level. The error the caller gets is
     unchanged. AI Studio no longer logs the first 500 characters of each task
     at info level, only its keys, prompt length, file count and URL hosts
+  - a caught error was still logged whole one layer up: a PDF URL that
+    answered 403 put "Could not fetch <the URL with its signed query>" on
+    stderr and in `LOG_FILE`. Every warn and error line that logs a caught
+    error -- in every layer, the MCP server, the sign-in checks, the config and
+    `.env` helpers, the error handler and the CLI -- now logs its first line,
+    redacted and capped, as the retry warning does, and `logger.error` given
+    an Error does the same and keeps the stack for debug level. The file-path
+    warnings name the path as given, not where it resolved. A test reads every
+    `logger.warn` / `logger.error` call in the build and fails if one passes a
+    raw error again. The error the caller gets is unchanged
+  - the AI Studio sub-server's `get_generated_file` and `get_file_info` read
+    and stat'ed any path; they are now held to the allowed directories like
+    the other tools. Generated files land in `output/` under the server's
+    working directory, which is always allowed
+  - a request's `model` went to `agy --model` unchecked. Anything that is not
+    a model ID (letters, digits, `.`, `_`, `-`, at most 64 characters, not
+    starting with `-`) is replaced by the default model, with a warning that
+    does not repeat the value
+  - files were looked up before the allowed-directories check, so a path
+    outside them answered differently depending on whether it existed, and the
+    refusal named its resolved path. The check now runs first, on the path as
+    given: outside the allowed directories, a missing and an existing file get
+    the same "File is not readable: <path as given>", and a symlink pointing
+    out is refused by its own name, not its target's. "Not found" is reported
+    only inside them, and code-file routing no longer stats a file outside
+    them. A path that reaches an allowed directory only through a symlink
+    outside it is now refused; name it by its real path
+  - log redaction now also cuts a bare `host.tld?query`, the value after
+    `Bearer`, `api_key=` / `api-key:` and `token=` / `token:` (the label is
+    kept, and `token: 3 retries` or "the Bearer scheme" are left alone), and a
+    token-shaped path segment (20+ characters with a digit) in a path with no
+    query. `cgmb info` and `cgmb detect-paths` show the first 4 characters of
+    a key and its length, instead of 12 and 8; an invalid key is logged by its
+    length and first 2 characters instead of 8
+  - a step reference's path followed inherited properties, so
+    `@s1.__proto__.constructor` handed a step a function from the runtime.
+    Only a step output's own properties are followed; anything else resolves
+    to the "step missing" marker
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
 `resolveWindowsCommand` alias and the three `AI_MODELS` keys above are removed.
 `gemini-3-pro-image`, listed until now as the high-quality image model, is no
-longer listed: no code path ever selected it. Tests: 179 → 537 (7 for the WAV
+longer listed: no code path ever selected it. Tests: 179 → 583 (7 for the WAV
 helper, 1 for the schema default, 2 for the model table, 8 for the Antigravity
 probe and environment, 3 for the API-key sign-in, 10 for the dependency moves,
 24 for the PDF mode, 106 for routing, 81 for the PDF URL address rules, 5 for
@@ -892,7 +930,7 @@ the published file list, 25 for workflow validation and synthesis inputs, 17
 for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 `.env` message, 3 for the CI check, 1 for the Node.js check, 2 for the console
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
-retry variables in every layer, 19 for log redaction and step references); on Linux 536 pass and 1 is skipped. The routing changes are
+retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening); on Linux 582 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

@@ -1,4 +1,5 @@
 import winston from 'winston';
+import { firstLineForLog, redactUrls } from '../core/types.js';
 
 // ===================================
 // Logging Utility
@@ -164,7 +165,21 @@ class Logger {
     this.logger.info(message, meta);
   }
 
+  /**
+   * Log at error level. Given an Error, the line carries its message's first
+   * line, URLs cut to their hosts and at most 200 characters, and the stack
+   * goes to debug only (redacted the same way). winston would otherwise append
+   * the whole message and stack -- which can quote signed URLs, prompts or a
+   * child's output -- to stderr and LOG_FILE.
+   */
   public error(message: string, error?: Error | Record<string, unknown>): void {
+    if (error instanceof Error) {
+      this.logger.error(message, { error: firstLineForLog(error.message) });
+      if (error.stack) {
+        this.logger.debug(`Error stack: ${message}`, { stack: redactUrls(error.stack) });
+      }
+      return;
+    }
     this.logger.error(message, error);
   }
 

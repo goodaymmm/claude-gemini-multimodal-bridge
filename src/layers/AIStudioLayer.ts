@@ -25,7 +25,7 @@ import {
   MultimodalResult,
 } from '../core/types.js';
 import { AntigravityCLILayer } from './AntigravityCLILayer.js';
-import { describeToolArgs, firstLineForLog, hostsOf, redactUrls, taskFileRefs } from '../core/types.js';
+import { describeToolArgs, errorForLog, firstLineForLog, hostsOf, taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { type RetryPolicy, retryPolicyFromEnv } from '../utils/envLoader.js';
@@ -277,7 +277,7 @@ export class AIStudioLayer implements LayerInterface {
         } catch (mcpError) {
           logger.warn(`[${this.instanceId}] AI Studio MCP server prerequisites check failed, using MCP-only architecture`, {
             instanceId: this.instanceId,
-            error: (mcpError as Error).message,
+            error: errorForLog(mcpError),
             architecture: 'MCP-only (direct API integration disabled for consistency)'
           });
           // Continue initialization - MCP server will be started when needed
@@ -687,7 +687,7 @@ export class AIStudioLayer implements LayerInterface {
             });
           } catch (translationError) {
             logger.warn('Translation unavailable. Continuing with image generation in the input language.', {
-              error: translationError instanceof Error ? translationError.message : String(translationError),
+              error: errorForLog(translationError),
               originalLanguage: detectedLang,
               languageName,
               promptLength: prompt.length
@@ -898,7 +898,7 @@ export class AIStudioLayer implements LayerInterface {
       
     } catch (error) {
       logger.error('Failed to download generated media', {
-        error: redactUrls((error as Error).message),
+        error: errorForLog(error),
         host: hostsOf([downloadUrl])[0],
         mediaType
       });
@@ -1495,7 +1495,7 @@ export class AIStudioLayer implements LayerInterface {
       };
 
       child.on('error', (error: Error) => {
-        logger.warn('Persistent MCP process error', { error: error.message });
+        logger.warn('Persistent MCP process error', { error: errorForLog(error) });
         forget();
       });
 
@@ -1886,7 +1886,7 @@ export class AIStudioLayer implements LayerInterface {
         if (!isCompleted) {
           isCompleted = true;
           clearTimeout(timeoutId);
-          logger.error('MCP command process error', { command, error: error.message });
+          logger.error('MCP command process error', { command, error: errorForLog(error) });
           reject(error);
         }
       });
@@ -1910,7 +1910,7 @@ export class AIStudioLayer implements LayerInterface {
       hasPreferredKey: !!preferredKey,
       hasFallback1: !!fallback1,
       hasFallback2: !!fallback2,
-      selectedKey: apiKey ? `${apiKey.substring(0, 8)}...` : 'none',
+      selectedKey: apiKey ? `${apiKey.substring(0, 2)}… (${apiKey.length} characters)` : 'none',
       keyLength: apiKey?.length || 0
     });
 
@@ -1933,8 +1933,10 @@ export class AIStudioLayer implements LayerInterface {
 
     // Validate API key format if present
     if (apiKey && !this.validateApiKeyFormat(apiKey)) {
+      // Length and the first two characters are enough to tell a wrong
+      // variable from a truncated key; more is part of the secret.
       logger.error('Invalid AI Studio API key format detected', {
-        keyPrefix: apiKey.substring(0, 8),
+        keyStart: apiKey.substring(0, 2),
         keyLength: apiKey.length,
         expectedFormat: 'Should start with "AI" and be at least 20 characters',
         troubleshooting: 'Get a new key from https://aistudio.google.com/app/apikey'
@@ -1980,7 +1982,7 @@ export class AIStudioLayer implements LayerInterface {
       if (!this.validateApiKeyFormat(apiKey)) {
         const errorMsg = 'Invalid AI Studio API key format detected.';
         logger.error('AI Studio API key format invalid', {
-          keyPrefix: apiKey.substring(0, 8),
+          keyStart: apiKey.substring(0, 2),
           keyLength: apiKey.length,
           expectedFormat: 'Should start with "AI" and be at least 20 characters',
           currentFormat: `Starts with "${apiKey.substring(0, 2)}", length: ${apiKey.length}`,
@@ -2003,7 +2005,7 @@ export class AIStudioLayer implements LayerInterface {
         
         logger.debug('AI Studio MCP dependencies validation', {
           hasValidApiKey: true,
-          apiKeyPrefix: apiKey.substring(0, 8),
+          apiKeyStart: apiKey.substring(0, 2),
           npxAvailable: true,
           mcpServerCommand: 'npx -y aistudio-mcp-server',
           status: 'ready'
@@ -2023,7 +2025,7 @@ export class AIStudioLayer implements LayerInterface {
     } catch (error) {
       const enhancedError = new Error(`AI Studio MCP server not available: ${(error as Error).message}`);
       logger.error('AI Studio MCP initialization failed', {
-        originalError: (error as Error).message,
+        originalError: errorForLog(error),
         troubleshooting: [
           '1. Set AI_STUDIO_API_KEY environment variable',
           '2. Get API key from https://aistudio.google.com/app/apikey',
@@ -2406,7 +2408,7 @@ export class AIStudioLayer implements LayerInterface {
 
         } catch (wavError) {
           logger.error('WAV creation failed in saveGeneratedAudio, using manual header', {
-            error: (wavError as Error).message
+            error: errorForLog(wavError)
           });
 
           // Fallback to manual WAV header creation

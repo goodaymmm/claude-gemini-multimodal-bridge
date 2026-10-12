@@ -1,4 +1,4 @@
-import { AuthenticationError, AuthErrorCode, AuthStatus } from '../core/types.js';
+import { AuthenticationError, AuthErrorCode, AuthStatus, errorForLog, firstLineForLog } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AGY_INSTALL_HINT, findAntigravityBinary, probeAntigravityAuth } from '../utils/antigravityCli.js';
@@ -66,7 +66,8 @@ export class OAuthManager {
         if (probe.outcome === 'timeout' || probe.outcome === 'unavailable') {
           logger.warn('Antigravity CLI reachable but the auth probe did not complete', {
             outcome: probe.outcome,
-            error: probe.error,
+            // agy's own output: first line, redacted.
+            error: probe.error === undefined ? undefined : firstLineForLog(probe.error),
           });
         } else {
           logger.debug('Antigravity CLI is installed but not signed in', { error: probe.error });
@@ -162,7 +163,7 @@ export class OAuthManager {
           default:
             logger.warn(
               'Antigravity CLI is not signed in. Sign in again by running `agy` in a terminal.',
-              { error: probe.error }
+              { error: probe.error === undefined ? undefined : firstLineForLog(probe.error) }
             );
             return false;
         }
@@ -195,7 +196,7 @@ export class OAuthManager {
           // promptGeminiLogin only throws when the sign-in state is unknown
           // (not installed, unreachable, timed out); its message says which.
           logger.warn('Could not re-check the Antigravity CLI sign-in', {
-            error: (error as Error).message,
+            error: errorForLog(error),
           });
           return false;
         }
@@ -284,13 +285,22 @@ export class OAuthManager {
     return apiKey.length >= 20 && apiKey.startsWith('AI');
   }
 
-  /**
-   * Mask API key for logging
-   */
+  /** An API key as it may be shown: see maskApiKey() below. */
   maskApiKey(apiKey: string): string {
-    if (!apiKey || apiKey.length < 8) {
-      return '***';
-    }
-    return apiKey.substring(0, 8) + '***';
+    return maskApiKey(apiKey);
   }
+}
+
+/**
+ * An API key as it may be shown on screen or in a log: the first four
+ * characters -- enough to tell which kind of key it is -- and its length, which
+ * shows a truncated paste. A key shorter than twelve characters shows only its
+ * length, since four characters would be a third of it.
+ */
+export function maskApiKey(apiKey: string): string {
+  if (!apiKey) {
+    return '(empty)';
+  }
+  const prefix = apiKey.length >= 12 ? apiKey.substring(0, 4) : '';
+  return `${prefix}… (${apiKey.length} characters)`;
 }

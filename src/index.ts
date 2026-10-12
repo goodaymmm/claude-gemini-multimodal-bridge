@@ -3,6 +3,7 @@
 import { createRequire } from 'module';
 import { CGMBServer } from './core/CGMBServer.js';
 import { logger } from './utils/logger.js';
+import { errorForLog } from './core/types.js';
 import { loadDotenvFile } from './utils/envLoader.js';
 import { shutdownAIStudio } from './layers/AIStudioLayer.js';
 
@@ -65,7 +66,7 @@ async function main() {
     });
 
   } catch (error) {
-    logger.error('Failed to start CGMB MCP server', error as Error);
+    logger.error('Failed to start CGMB MCP server', { error: errorForLog(error) });
     process.exit(1);
   }
 }

@@ -36,7 +36,7 @@ import { LegacyCGMBRequestSchema, ProcessingOptionsSchema } from './types.js';
 import { extractResultText, pickFinalResultText } from '../utils/workflowUtils.js';
 import { LayerType } from './types.js';
 import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL } from './types.js';
-import { describeToolArgs, firstLineForLog, hostsOf, preformattedPrompt, redactUrls } from './types.js';
+import { describeToolArgs, errorForLog, firstLineForLog, hostsOf, preformattedPrompt, redactUrls } from './types.js';
 import type { GeminiFormat } from './types.js';
 import { PDF_MODES } from '../utils/pdfText.js';
 import { AISTUDIO_MAX_FILE_BYTES } from '../layers/AIStudioLayer.js';
@@ -109,7 +109,7 @@ export class CGMBServer {
       this.initialized = true;
       logger.info('CGMB Server initialized successfully');
     } catch (error) {
-      logger.error('Failed to initialize CGMB Server', error as Error);
+      logger.error('Failed to initialize CGMB Server', { error: errorForLog(error) });
       throw new CGMBError(
         'Server initialization failed',
         'INIT_ERROR',
@@ -150,7 +150,7 @@ export class CGMBServer {
       
       logger.info('CGMB Server stopped successfully');
     } catch (error) {
-      logger.error('Error stopping CGMB Server', error as Error);
+      logger.error('Error stopping CGMB Server', { error: errorForLog(error) });
       throw error;
     }
   }
@@ -984,7 +984,9 @@ export class CGMBServer {
                   ? { path: resolvedPath, type: 'document' }
                   : { ...file, path: resolvedPath, type: file.type || 'document' });
               } catch (permError) {
-                logger.warn(`File permission denied: ${filePath} -> ${resolvedPath}`);
+                // The path as given only: its resolved form says more about
+                // the filesystem than the caller told us.
+                logger.warn('File permission denied', { path: firstLineForLog(filePath) });
                 throw new Error(`Permission denied: ${filePath}
 Resolved to: ${resolvedPath}
 File exists but cannot be read.
@@ -992,7 +994,7 @@ File exists but cannot be read.
 Fix: chmod +r "${resolvedPath}"`);
               }
             } else {
-              logger.warn(`Path is not a file: ${filePath} -> ${resolvedPath}`);
+              logger.warn('Path is not a file', { path: firstLineForLog(filePath) });
               throw new Error(`Not a file: ${filePath}
 Resolved to: ${resolvedPath}
 This path points to a directory or special file.
@@ -1000,7 +1002,7 @@ This path points to a directory or special file.
 Use a specific file path instead.`);
             }
           } else {
-            logger.warn(`File not found: ${filePath} -> ${resolvedPath}`);
+            logger.warn('File not found', { path: firstLineForLog(filePath) });
             throw new Error(`File not found: ${filePath}
 Resolved path: ${resolvedPath}
 Working directory: ${workingDirectory || 'not provided'}
@@ -1019,8 +1021,9 @@ Solutions:
           // logger.warn takes a metadata bag, not an Error. Passing the Error
           // straight in logged an object with no enumerable keys -- the message
           // and stack were dropped.
-          logger.warn(`File path resolution error: ${filePath}`, {
-            error: (error as Error).message,
+          logger.warn('File path resolution error', {
+            path: firstLineForLog(filePath),
+            error: errorForLog(error),
           });
           throw new Error(`Invalid file path: ${filePath}`);
         }
@@ -1079,14 +1082,13 @@ Solutions:
               }
             } else {
               logger.warn('File path in prompt does not exist', {
-                original: detectedPath,
-                resolved: resolvedPath
+                path: firstLineForLog(detectedPath),
               });
             }
           } catch (error) {
             logger.warn('Failed to process file path from prompt', {
-              path: detectedPath,
-              error: (error as Error).message
+              path: firstLineForLog(detectedPath),
+              error: errorForLog(error)
             });
           }
         }
@@ -1462,12 +1464,15 @@ Failed steps: ${result.metadata.steps_failed}`
    * Setup global error handling
    */
   private setupErrorHandling(): void {
-    process.on('unhandledRejection', (reason, promise) => {
-      logger.error('Unhandled Rejection at:', { promise, reason });
+    process.on('unhandledRejection', (reason) => {
+      // The reason's first line only: a rejected request's message can quote
+      // URLs and child output. The promise itself serialises to nothing.
+      logger.error('Unhandled Rejection', { reason: errorForLog(reason) });
     });
 
     process.on('uncaughtException', (error) => {
-      logger.error('Uncaught Exception:', error);
+      logger.error('Uncaught Exception', { error: errorForLog(error) });
+      logger.debug('Uncaught exception stack', { stack: redactUrls(error.stack ?? '') });
       process.exit(1);
     });
   }

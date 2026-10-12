@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
-import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN, taskFileRefs } from '../core/types.js';
+import { DEFAULT_ANTIGRAVITY_MODEL, FileReference, firstLineForLog, GroundedResult, GroundingContext, LayerInterface, LayerResult, MultimodalResult, RETIRED_GEMINI_CLI_MODEL_PATTERN, taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
@@ -26,6 +26,13 @@ interface AntigravityTask {
   model?: string;
   [key: string]: unknown;
 }
+
+/**
+ * What a model ID passed to `agy --model` may look like: letters, digits, `.`,
+ * `_` and `-`, at most 64 characters, and not starting with `-` (which agy
+ * could read as a flag of its own). Every ID `agy models` lists fits.
+ */
+const AGY_MODEL_ID = /^(?!-)[A-Za-z0-9._-]{1,64}$/;
 
 /**
  * AntigravityCLILayer - wrapper around the Antigravity CLI (`agy`) binary.
@@ -244,14 +251,14 @@ export class AntigravityCLILayer implements LayerInterface {
                 layer: 'antigravity' as const,
                 duration: Date.now() - startTime,
                 cache_hit: true,
-                model: this.normalizeModel(task.model, this.DEFAULT_MODEL),
+                model: cacheModel,
               }
             };
           }
         }
 
         const result = await this.executeAntigravityCLI(prompt, {
-          model: this.normalizeModel(task.model, this.DEFAULT_MODEL)
+          model: cacheModel
         });
 
         const duration = Date.now() - startTime;
@@ -274,7 +281,7 @@ export class AntigravityCLILayer implements LayerInterface {
             layer: 'antigravity' as const,
             duration,
             cache_hit: false,
-            model: this.normalizeModel(task.model, this.DEFAULT_MODEL),
+            model: cacheModel,
             search_enabled: task.useSearch !== false,
           }
         };
@@ -412,9 +419,10 @@ export class AntigravityCLILayer implements LayerInterface {
       // benefit, keeps caller-controlled text off the command line.
       const args: string[] = ['--print-timeout', `${printTimeoutSec}s`];
 
-      // Only add model flag if explicitly specified and not 'auto'
+      // Only add model flag if explicitly specified and not 'auto'. Checked
+      // again here, at the one place it reaches argv, whatever the caller did.
       if (options.model && options.model !== 'auto') {
-        args.push('--model', options.model);
+        args.push('--model', this.normalizeModel(options.model, this.DEFAULT_MODEL));
       }
 
       logger.debug('Executing Antigravity CLI', {
@@ -615,10 +623,24 @@ export class AntigravityCLILayer implements LayerInterface {
    * in saved configs, .env files and CLI defaults. Forwarding those to `agy` yields
    * a hard failure, so they are downgraded to the default with a warning instead.
    */
-  private normalizeModel(requested: string | undefined, fallback: string): string {
-    const model = (requested ?? '').trim();
+  private normalizeModel(requested: unknown, fallback: string): string {
+    if (requested === undefined || requested === null) {
+      return fallback;
+    }
+    const model = typeof requested === 'string' ? requested.trim() : undefined;
 
-    if (!model || model === 'auto') {
+    if (model === '' || model === 'auto') {
+      return fallback;
+    }
+
+    // The model goes into agy's argv. A request's `model` is caller input, so
+    // anything that is not plainly a model ID -- a space, a newline, a leading
+    // `--flag` smuggled in after one -- is dropped for the default. The value
+    // is not logged: it is the part that was not trusted.
+    if (model === undefined || !AGY_MODEL_ID.test(model)) {
+      logger.warn('The requested Antigravity model was rejected (not a model ID); using the default model', {
+        fallback,
+      });
       return fallback;
     }
 
@@ -851,7 +873,7 @@ export class AntigravityCLILayer implements LayerInterface {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
 
-      logger.error('Translation failed', { error: reason, sourceLang, length: text.length });
+      logger.error('Translation failed', { error: firstLineForLog(reason), sourceLang, length: text.length });
 
       // Rethrow rather than returning the input.
       //

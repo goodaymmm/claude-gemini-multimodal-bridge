@@ -2,6 +2,7 @@ import { config, type DotenvConfigOutput } from 'dotenv';
 import { existsSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { logger } from './logger.js';
+import { errorForLog } from '../core/types.js';
 
 /**
  * Read one .env file into process.env without writing anything to stdout.
@@ -232,9 +233,9 @@ export class SmartEnvLoader {
           if (result.error) {
             this.loadResult.errors.push(`Failed to load ${envPath}: ${result.error.message}`);
             if (verbose) {
-              logger.warn('Failed to load .env file', { 
-                path: envPath, 
-                error: result.error.message 
+              logger.warn('Failed to load .env file', {
+                path: envPath,
+                error: errorForLog(result.error)
               });
             }
           } else {
@@ -255,7 +256,7 @@ export class SmartEnvLoader {
           const errorMsg = `Error loading ${envPath}: ${(error as Error).message}`;
           this.loadResult.errors.push(errorMsg);
           if (verbose) {
-            logger.error('Error loading .env file', { path: envPath, error });
+            logger.error('Error loading .env file', { path: envPath, error: errorForLog(error) });
           }
         }
       }

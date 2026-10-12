@@ -1,6 +1,6 @@
 import { commandExists } from '../utils/platformUtils.js';
 import { execFileSync } from 'child_process';
-import { AI_MODELS, AuthResult, VerificationResult } from '../core/types.js';
+import { AI_MODELS, AuthResult, errorForLog, VerificationResult } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { AGY_INSTALL_HINT } from '../utils/antigravityCli.js';
 import { buildSpawnTarget, commandAvailable } from '../utils/processUtils.js';
@@ -159,7 +159,7 @@ export class AuthVerifier {
           return result;
           
         } catch (error) {
-          logger.error('Antigravity CLI authentication verification failed', { error: (error as Error).message });
+          logger.error('Antigravity CLI authentication verification failed', { error: errorForLog(error) });
           
           const result: AuthResult = {
             success: false,
@@ -211,7 +211,9 @@ export class AuthVerifier {
           hasPreferredKey: !!preferredKey,
           hasFallback1: !!fallback1,
           hasFallback2: !!fallback2,
-          selectedKey: apiKey ? `${apiKey.substring(0, 8)}...` : 'none',
+          // Length and two characters: enough to tell a wrong variable from a
+          // truncated key, and no more of the secret.
+          selectedKey: apiKey ? `${apiKey.substring(0, 2)}… (${apiKey.length} characters)` : 'none',
           searchOrder: ['AI_STUDIO_API_KEY', 'GOOGLE_AI_STUDIO_API_KEY', 'GEMINI_API_KEY'],
           errorReference: 'Addressing authentication issues from Error.md lines 70-86'
         });
@@ -269,7 +271,7 @@ export class AuthVerifier {
         // Enhanced API key format validation
         if (!this.validateAIStudioApiKeyFormat(apiKey)) {
           logger.error('Invalid AI Studio API key format detected', {
-            keyPrefix: apiKey.substring(0, 8),
+            keyStart: apiKey.substring(0, 2),
             keyLength: apiKey.length,
             expectedFormat: 'Should start with "AI" and be at least 20 characters',
             currentFormat: `Starts with "${apiKey.substring(0, 2)}", length: ${apiKey.length}`,
@@ -465,7 +467,7 @@ export class AuthVerifier {
           return result;
 
         } catch (error) {
-          logger.error('Claude Code verification failed', { error: (error as Error).message });
+          logger.error('Claude Code verification failed', { error: errorForLog(error) });
           
           return {
             success: false,

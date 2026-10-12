@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
+import { errorForLog, firstLineForLog, LayerInterface, LayerResult, ReasoningResult, ReasoningTask, WorkflowDefinition, WorkflowResult } from '../core/types.js';
 
 // Task interface for better type safety
 interface ClaudeCodeTask {
@@ -618,14 +618,16 @@ export class ClaudeCodeLayer implements LayerInterface {
           ));
         } else {
           const error = `Claude Code exited with code ${code}: ${errorOutput}`;
-          logger.error('Claude command failed', { code, error: errorOutput });
+          // First line, redacted: Claude's stderr can quote the prompt. The
+          // caller gets all of it.
+          logger.error('Claude command failed', { code, error: firstLineForLog(errorOutput), stderrLength: errorOutput.length });
           reject(new Error(error));
         }
       });
 
       child.on('error', (error) => {
         clearTimeout(timeoutId);
-        logger.error('Claude command process error', { error: error.message });
+        logger.error('Claude command process error', { error: errorForLog(error) });
         reject(error);
       });
     });
@@ -813,8 +815,8 @@ export class ClaudeCodeLayer implements LayerInterface {
         }
       } catch (helpError) {
         logger.warn('Both --version and --help failed for Claude Code', {
-          versionError: (versionError as Error).message,
-          helpError: (helpError as Error).message,
+          versionError: errorForLog(versionError),
+          helpError: errorForLog(helpError),
         });
         throw new Error(`Claude Code connection test failed: ${(helpError as Error).message}`);
       }

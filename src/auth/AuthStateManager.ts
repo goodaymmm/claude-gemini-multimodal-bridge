@@ -1,4 +1,4 @@
-import { AuthStatus } from '../core/types.js';
+import { AuthStatus, errorForLog } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from './AuthVerifier.js';
@@ -139,8 +139,8 @@ export class AuthStateManager {
           try {
             results[service] = await this.getAuthStatus(service);
           } catch (error) {
-            logger.error(`Failed to refresh auth status for ${service}`, { 
-              error: (error as Error).message 
+            logger.error(`Failed to refresh auth status for ${service}`, {
+              error: errorForLog(error)
             });
             
             // Set default failed status
@@ -294,7 +294,7 @@ export class AuthStateManager {
       
     } catch (error) {
       logger.error('Periodic authentication check failed', {
-        error: (error as Error).message,
+        error: errorForLog(error),
       });
     }
   }

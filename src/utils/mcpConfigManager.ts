@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { commandAvailable } from './processUtils.js';
 import { logger } from './logger.js';
+import { errorForLog } from '../core/types.js';
 
 /** Absolute path to this package's own CLI entry point. */
 function resolveBundledCli(): string {
@@ -89,7 +90,7 @@ export class MCPConfigManager {
       return parsed as MCPConfiguration;
     } catch (error) {
       logger.warn('Failed to parse existing MCP config, starting with empty config', {
-        error: (error as Error).message,
+        error: errorForLog(error),
         configPath
       });
       return { mcpServers: {} };
@@ -117,7 +118,7 @@ export class MCPConfigManager {
       return backupPath;
     } catch (error) {
       logger.error('Failed to create backup', {
-        error: (error as Error).message,
+        error: errorForLog(error),
         configPath
       });
       return null;
@@ -338,7 +339,7 @@ export class MCPConfigManager {
       } catch (writeError) {
         logger.error('Failed to write MCP configuration file', {
           configPath,
-          error: (writeError as Error).message
+          error: errorForLog(writeError)
         });
         
         return {
@@ -368,7 +369,7 @@ export class MCPConfigManager {
 
     } catch (error) {
       logger.error('Failed to add CGMB configuration', {
-        error: (error as Error).message
+        error: errorForLog(error)
       });
 
       return {
@@ -447,7 +448,7 @@ export class MCPConfigManager {
 
     } catch (error) {
       logger.error('Failed to remove CGMB configuration', {
-        error: (error as Error).message
+        error: errorForLog(error)
       });
 
       return {

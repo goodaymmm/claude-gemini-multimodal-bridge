@@ -244,7 +244,7 @@ export class ErrorHandler {
     recoveryStrategies: Array<() => Promise<T>>
   ): Promise<T> {
     logger.warn('Attempting error recovery', {
-      error: error.message,
+      error: firstLineForLog(error.message),
       strategiesCount: recoveryStrategies.length,
     });
 

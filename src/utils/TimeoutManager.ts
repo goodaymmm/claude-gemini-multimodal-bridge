@@ -1,4 +1,5 @@
 import { logger } from './logger.js';
+import { errorForLog } from '../core/types.js';
 import { findProcesses } from './platformUtils.js';
 
 
@@ -117,7 +118,7 @@ export class TimeoutManager {
       logger.error('Operation failed', {
         operation: options.name,
         elapsed,
-        error: error instanceof Error ? error.message : String(error)
+        error: errorForLog(error)
       });
       
       throw error;

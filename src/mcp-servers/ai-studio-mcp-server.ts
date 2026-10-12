@@ -24,7 +24,7 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
-import { AI_MODELS } from '../core/types.js';
+import { AI_MODELS, type AllowedRoots, checkAgainstRoots, resolveAllowedRoots } from '../core/types.js';
 import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import { describeTtsAudio } from '../utils/wavAudio.js';
 import pkg from 'wavefile';
@@ -59,68 +59,61 @@ const VERSION = packageJson.version;
  * Resolved once, at startup, from the directory the server was launched in.
  * Additional roots come from CGMB_ALLOWED_ROOTS, delimiter-separated.
  */
-function resolveAllowedRoots(): string[] {
-  const raw = [
-    process.cwd(),
-    ...(process.env.CGMB_ALLOWED_ROOTS ?? '')
-      .split(path.delimiter)
-      .map(entry => entry.trim())
-      .filter(entry => entry !== ''),
-  ];
+const ALLOWED_ROOTS: AllowedRoots = resolveAllowedRoots(entry => {
+  console.error(`Ignoring CGMB_ALLOWED_ROOTS entry that does not exist: ${entry}`);
+});
 
-  const roots: string[] = [];
-  for (const entry of raw) {
-    try {
-      // realpath here too: a root reached through a symlink must compare equal
-      // to the resolved paths checked against it.
-      const resolved = fs.realpathSync(path.resolve(entry));
-      if (!roots.includes(resolved)) {
-        roots.push(resolved);
-      }
-    } catch {
-      console.error(`Ignoring CGMB_ALLOWED_ROOTS entry that does not exist: ${entry}`);
-    }
-  }
-
-  return roots;
+/**
+ * The one refusal for a path outside the allowed directories.
+ *
+ * It names the path as the caller gave it -- never its realpath -- and is the
+ * same whether or not anything exists there, so it cannot be used to probe the
+ * filesystem outside the roots.
+ */
+function notReadable(filePath: string): McpError {
+  return new McpError(
+    ErrorCode.InvalidRequest,
+    `File is not readable: ${filePath}. It is outside every allowed directory: file contents are ` +
+    `uploaded, so this server only reads from the directory it was started in. Set CGMB_ALLOWED_ROOTS ` +
+    `to add others, delimiter-separated with "${path.delimiter}".`
+  );
 }
 
-const ALLOWED_ROOTS = resolveAllowedRoots();
+/**
+ * Resolve a path and confirm it sits inside an allowed root; null when it is
+ * inside the roots and does not exist.
+ *
+ * The roots check runs on the path as given before anything on disk is looked
+ * at, then again on its realpath (checkAgainstRoots): realpath is what makes
+ * `..` and symlinks harmless -- a link inside a root that points outside it
+ * resolves outside and is refused. Only inside the roots does a caller learn
+ * that a file is missing.
+ */
+export function readableRootOrMissing(filePath: string): string | null {
+  const verdict = checkAgainstRoots(filePath, ALLOWED_ROOTS);
+  switch (verdict.kind) {
+    case 'inside':
+      return verdict.resolved;
+    case 'missing':
+      return null;
+    case 'error':
+      throw new McpError(ErrorCode.InvalidRequest, `Cannot resolve ${filePath}: ${verdict.code}`);
+    default:
+      throw notReadable(filePath);
+  }
+}
 
 /**
  * Resolve a path and confirm it sits inside an allowed root.
  *
  * Returns the resolved path so callers read through the same value that was
- * checked -- resolving twice would reopen the gap this closes. realpath is what
- * makes `..` and symlinks harmless: a link inside a root that points outside it
- * resolves outside and is refused.
+ * checked -- resolving twice would reopen the gap this closes.
  */
 export function assertReadableRoot(filePath: string): string {
-  let resolved: string;
-  try {
-    resolved = fs.realpathSync(path.resolve(filePath));
-  } catch (error) {
-    throw new McpError(
-      ErrorCode.InvalidRequest,
-      `Cannot resolve ${filePath}: ${(error as Error).message}`
-    );
+  const resolved = readableRootOrMissing(filePath);
+  if (resolved === null) {
+    throw new McpError(ErrorCode.InvalidRequest, `Cannot resolve ${filePath}: no such file or directory`);
   }
-
-  const inside = ALLOWED_ROOTS.some(root => {
-    const relative = path.relative(root, resolved);
-    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-  });
-
-  if (!inside) {
-    throw new McpError(
-      ErrorCode.InvalidRequest,
-      `Refusing to send ${resolved} to Google: it is outside every allowed directory ` +
-      `(${ALLOWED_ROOTS.join(', ')}). File contents are uploaded, so this server only reads ` +
-      `from the directory it was started in. Set CGMB_ALLOWED_ROOTS to add others, ` +
-      `delimiter-separated with "${path.delimiter}".`
-    );
-  }
-
   return resolved;
 }
 
@@ -725,12 +718,12 @@ To retrieve this file, use:
     const params = AnalyzeImageSchema.parse(args);
     
     try {
-      // Read the image file
-      if (!fs.existsSync(params.imagePath)) {
+      // The roots check comes before anything is looked up on disk, so a path
+      // outside them is refused the same way whether or not it exists.
+      const imagePath = readableRootOrMissing(params.imagePath);
+      if (imagePath === null) {
         throw new Error(`Image file not found: ${params.imagePath}`);
       }
-
-      const imagePath = assertReadableRoot(params.imagePath);
       const imageData = fs.readFileSync(imagePath);
       const mimeType = this.getMimeType(params.imagePath);
 
@@ -794,15 +787,15 @@ To retrieve this file, use:
         if (isUrl) {
           parts.push(await this.pdfUrlPart(file.path, pdfs, downloads));
         } else {
-          // Handle local files (existing logic)
-          if (!fs.existsSync(file.path)) {
+          // Roots first, then existence: a missing file is skipped only
+          // inside the roots, and a path outside them is refused whether or
+          // not it exists. Read through the checked path, not the
+          // caller-supplied one: resolving twice would reopen the gap.
+          const localPath = readableRootOrMissing(file.path);
+          if (localPath === null) {
             console.warn(`File not found: ${file.path}`);
             continue;
           }
-
-          // Read through the checked path, not the caller-supplied one:
-          // resolving twice would reopen the gap the check closes.
-          const localPath = assertReadableRoot(file.path);
           const fileData = fs.readFileSync(localPath);
           const mimeType = this.getMimeType(localPath);
           console.error(`File detected as MIME type: ${mimeType}`);
@@ -880,12 +873,12 @@ To retrieve this file, use:
           continue;
         }
 
-        if (!fs.existsSync(docPath)) {
+        // Roots first, then existence (see processMultimodal).
+        const allowedDocPath = readableRootOrMissing(docPath);
+        if (allowedDocPath === null) {
           console.warn(`Document not found: ${docPath}`);
           continue;
         }
-
-        const allowedDocPath = assertReadableRoot(docPath);
         const mimeType = this.getMimeType(allowedDocPath);
         console.error(`Document detected as MIME type: ${mimeType}`);
 
@@ -1078,13 +1071,11 @@ To retrieve this file, use:
     const params = GetGeneratedFileSchema.parse(args);
     
     try {
-      // Resolve the file path
-      const filePath = path.isAbsolute(params.filePath) 
-        ? params.filePath 
-        : path.join(process.cwd(), params.filePath);
-      
-      // Check if file exists
-      if (!fs.existsSync(filePath)) {
+      // The same boundary as every tool that reads files. Generated files land
+      // in <cwd>/output (generateImage, generateAudio), and the working
+      // directory is always an allowed root, so they stay reachable.
+      const filePath = readableRootOrMissing(params.filePath);
+      if (filePath === null) {
         throw new McpError(ErrorCode.InvalidRequest, `File not found: ${params.filePath}`);
       }
       
@@ -1216,13 +1207,10 @@ To retrieve this file, use:
     const params = GetFileInfoSchema.parse(args);
     
     try {
-      // Resolve the file path
-      const filePath = path.isAbsolute(params.filePath) 
-        ? params.filePath 
-        : path.join(process.cwd(), params.filePath);
-      
-      // Check if file exists
-      if (!fs.existsSync(filePath)) {
+      // The same boundary as get_generated_file: a stat outside the roots
+      // would say what exists there.
+      const filePath = readableRootOrMissing(params.filePath);
+      if (filePath === null) {
         throw new McpError(ErrorCode.InvalidRequest, `File not found: ${params.filePath}`);
       }
       

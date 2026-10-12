@@ -2,7 +2,7 @@
 
 import { Command, Option } from 'commander';
 import { CGMBServer } from './core/CGMBServer.js';
-import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } from './core/types.js';
+import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, errorForLog, isOneOf } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
 import { logger, setLogLevel } from './utils/logger.js';
@@ -16,6 +16,7 @@ import fs from 'fs';
 import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
 import { AuthCache } from './auth/AuthCache.js';
+import { maskApiKey } from './auth/OAuthManager.js';
 import { LayerManager } from './core/LayerManager.js';
 import { Logger } from './utils/logger.js';
 import { withCLITimeout } from './utils/TimeoutManager.js';
@@ -232,7 +233,7 @@ program
             await server.stop();
           }
         } catch (error) {
-          logger.error('Error during server shutdown', error as Error);
+          logger.error('Error during server shutdown', { error: errorForLog(error) });
         }
 
         // The MCP child this server started while it was running. Its stdio
@@ -245,7 +246,7 @@ program
       process.on('SIGTERM', gracefulShutdown);
       
     } catch (error) {
-      logger.error('Failed to start CGMB server', error as Error);
+      logger.error('Failed to start CGMB server', { error: errorForLog(error) });
       process.exit(1);
     }
   });
@@ -306,7 +307,7 @@ program
       logger.info('💡 Tip: OAuth authentication is recommended (no API keys needed)');
       
     } catch (error) {
-      logger.error('Setup failed', error as Error);
+      logger.error('Setup failed', { error: errorForLog(error) });
       process.exit(1);
     }
   });
@@ -376,7 +377,7 @@ program
       process.exit(0);
       
     } catch (error) {
-      logger.error('Authentication setup failed', error as Error);
+      logger.error('Authentication setup failed', { error: errorForLog(error) });
       process.exit(1);
     }
   });
@@ -435,7 +436,7 @@ program
       process.exit(result.overall ? 0 : 1);
       
     } catch (error) {
-      logger.error('Failed to check authentication status', error as Error);
+      logger.error('Failed to check authentication status', { error: errorForLog(error) });
       process.exit(1);
     }
   });
@@ -536,8 +537,8 @@ program
         const value = process.env[envVar];
         if (value) {
           // Mask API keys
-          const displayValue = envVar.includes('API_KEY') ? 
-            `${value.substring(0, 8)}...` : value;
+          const displayValue = envVar.includes('API_KEY') ?
+            maskApiKey(value) : value;
           console.log(`  ✅ ${envVar}: ${displayValue}`);
         } else {
           console.log(`  ❌ ${envVar}: Not set`);
@@ -555,7 +556,7 @@ program
       for (const { old, new: newVar, purpose } of deprecatedVars) {
         const value = process.env[old];
         if (value) {
-          console.log(`  ⚠️  ${old}: ${value.substring(0, 8)}... (DEPRECATED)`);
+          console.log(`  ⚠️  ${old}: ${maskApiKey(value)} (DEPRECATED)`);
           console.log(`     → Migrate to: ${newVar} (for ${purpose})`);
           console.log(`     → Add to .env: ${newVar}=<the value of ${old}>`);
         }
@@ -577,7 +578,7 @@ program
       }
       
     } catch (error) {
-      logger.error('Failed to detect paths', error as Error);
+      logger.error('Failed to detect paths', { error: errorForLog(error) });
       console.error('❌ Failed to detect paths:', (error as Error).message);
       process.exit(1);
     }
@@ -795,7 +796,7 @@ program
       }
       
     } catch (error) {
-      logger.error('MCP setup failed', error as Error);
+      logger.error('MCP setup failed', { error: errorForLog(error) });
       console.log('❌ Failed to setup MCP configuration');
       console.log('');
       console.log('🔧 Try manual setup instead:');
@@ -853,7 +854,7 @@ program
       }
       
     } catch (error) {
-      logger.error('Failed to check MCP status', error as Error);
+      logger.error('Failed to check MCP status', { error: errorForLog(error) });
       process.exit(1);
     }
   });
@@ -929,7 +930,7 @@ program
             logger.info(`✓ ${name}`);
           }
         } catch (error) {
-          logger.error(`✗ ${name}: ${(error as Error).message}`);
+          logger.error(`✗ ${name}: ${errorForLog(error)}`);
           systemChecksPassed = false;
         }
       }
@@ -997,7 +998,7 @@ program
           await server.initialize();
           logger.info('✓ Server initialization test passed');
         } catch (initError) {
-          logger.error('✗ Server initialization failed', initError as Error);
+          logger.error('✗ Server initialization failed', { error: errorForLog(initError) });
           logger.info('`cgmb serve` will fail with the same error until this is resolved.');
           process.exit(1);
         } finally {
@@ -1035,7 +1036,7 @@ program
             logger.info('✓ Authentication setup completed');
             logger.info('💡 Please run "cgmb verify" again to confirm fixes');
           } catch (fixError) {
-            logger.error('❌ Automatic fix failed', fixError as Error);
+            logger.error('❌ Automatic fix failed', { error: errorForLog(fixError) });
             logger.info('💡 Please run "cgmb auth --interactive" for manual setup');
           }
         } else if (!authChecksPassed) {
@@ -1072,7 +1073,7 @@ program
       }
       
     } catch (error) {
-      logger.error('❌ Verification failed', error as Error);
+      logger.error('❌ Verification failed', { error: errorForLog(error) });
       logger.info('\n💡 Try:');
       logger.info('   1. cgmb setup');
       logger.info('   2. cgmb auth --interactive');
@@ -1151,7 +1152,7 @@ program
       process.exit(0);
       
     } catch (error) {
-      logger.error('❌ Test failed', error as Error);
+      logger.error('❌ Test failed', { error: errorForLog(error) });
       logger.error('This might indicate authentication or configuration issues');
       logger.info('💡 Try running: cgmb verify');
       process.exit(1);
@@ -1212,12 +1213,12 @@ program
       const errorMessage = (error as Error).message;
       
       if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
-        logger.error('❌ Chat API Error', error as Error);
+        logger.error('❌ Chat API Error', { error: errorForLog(error) });
         logger.info('🔧 This looks like an authentication issue:');
         logger.info('   • Sign in: run `agy` in a terminal');
         logger.info('   • Check status: cgmb auth-status --verbose');
       } else {
-        logger.error('❌ Chat command failed', error as Error);
+        logger.error('❌ Chat command failed', { error: errorForLog(error) });
         logger.info('💡 Troubleshooting:');
         logger.info('   • Check auth: cgmb auth-status');
         logger.info('   • Verify setup: cgmb verify');
@@ -1284,37 +1285,37 @@ program
       
       // Enhanced error handling with specific guidance
       if (errorMessage.includes('function response parts') || errorMessage.includes('function call parts')) {
-        logger.error('❌ API Function Call Error', error as Error);
+        logger.error('❌ API Function Call Error', { error: errorForLog(error) });
         logger.info('🔧 This error usually indicates an authentication issue:');
         logger.info('   1. Sign in: run `agy` in a terminal');
         logger.info('   2. Check API key configuration');
         logger.info('   3. Verify Antigravity CLI version: agy --version');
         logger.info('   4. Check status: cgmb auth-status --verbose');
       } else if (errorMessage.includes('UNAUTHENTICATED') || errorMessage.includes('API_KEY')) {
-        logger.error('❌ Authentication Error', error as Error);
+        logger.error('❌ Authentication Error', { error: errorForLog(error) });
         logger.info('🔧 Fix authentication:');
         logger.info('   • Sign in (recommended): run `agy` in a terminal');
         logger.info('   • Check status: cgmb auth-status');
       } else if (errorMessage.includes('quota exceeded') || errorMessage.includes('Quota exceeded') || errorMessage.includes('Resource exhausted')) {
-        logger.error('❌ Antigravity CLI Service Quota Exceeded', error as Error);
+        logger.error('❌ Antigravity CLI Service Quota Exceeded', { error: errorForLog(error) });
         logger.info('🔧 This is an Antigravity CLI service limitation (separate from the Gemini API):');
         logger.info('   • Wait a few minutes for quota reset');
         logger.info('   • Try AI Studio layer: cgmb aistudio -p "your question"');
         logger.info('   • Check AI Studio quota: cgmb quota-status');
         logger.info('   💡 Note: Antigravity quota ≠ Gemini API quota (different services)');
       } else if (errorMessage.includes('not found') || errorMessage.includes('command not found')) {
-        logger.error('❌ Antigravity CLI Not Found', error as Error);
+        logger.error('❌ Antigravity CLI Not Found', { error: errorForLog(error) });
         logger.info('🔧 Install Antigravity CLI:');
         logger.info('   • Run setup: cgmb setup');
         logger.info(`   • Manual install: ${AGY_INSTALL_HINT}`);
       } else if (errorMessage.includes('timeout')) {
-        logger.error('❌ Request Timeout', error as Error);
+        logger.error('❌ Request Timeout', { error: errorForLog(error) });
         logger.info('💡 Try:');
         logger.info('   • Shorter prompt');
         logger.info('   • Check network connection');
         logger.info('   • Use --fast flag for direct calls');
       } else {
-        logger.error('❌ Antigravity CLI processing failed', error as Error);
+        logger.error('❌ Antigravity CLI processing failed', { error: errorForLog(error) });
         logger.info('💡 General troubleshooting:');
         logger.info('   • Check authentication: cgmb auth-status');
         logger.info('   • Verify setup: cgmb verify');
@@ -1404,7 +1405,7 @@ async function executeGeminiCommand(options: any) {
     process.exit(0);
     
   } catch (error) {
-    logger.error('❌ Antigravity CLI processing failed', error as Error);
+    logger.error('❌ Antigravity CLI processing failed', { error: errorForLog(error) });
     logger.info('💡 Check authentication: cgmb auth-status');
     process.exit(1);
   }
@@ -1545,7 +1546,7 @@ program
       process.exit(0);
       
     } catch (error) {
-      logger.error('❌ AI Studio processing failed', error as Error);
+      logger.error('❌ AI Studio processing failed', { error: errorForLog(error) });
       logger.info('💡 Check authentication: cgmb auth-status');
       process.exit(1);
     }
@@ -1622,7 +1623,7 @@ program
       process.exit(0);
       
     } catch (error) {
-      logger.error('❌ Multimodal processing failed', error as Error);
+      logger.error('❌ Multimodal processing failed', { error: errorForLog(error) });
       logger.info('💡 Try: cgmb verify');
       process.exit(1);
     }
@@ -1708,7 +1709,7 @@ program
         process.exit(1);
       }
     } catch (error) {
-      logger.error('Image generation failed', error as Error);
+      logger.error('Image generation failed', { error: errorForLog(error) });
       console.error('❌ Failed to generate image:', (error as Error).message);
       console.log('\n💡 Troubleshooting tips:');
       console.log('   1. Check your AI Studio API key: cgmb auth-status');
@@ -1789,7 +1790,7 @@ program
         process.exit(1);
       }
     } catch (error) {
-      logger.error('Audio generation failed', error as Error);
+      logger.error('Audio generation failed', { error: errorForLog(error) });
       console.error('❌ Failed to generate audio:', (error as Error).message);
       if ((error as Error).message.includes('timed out')) {
         console.log('💡 If timeout occurred in fresh installation, this is normal for first run');
@@ -1871,7 +1872,7 @@ program
             // No fallback: no other layer can read the PDF, and an answer from
             // one would be about a document it never saw. This used to fall
             // back to Claude Code, which answered from the URL text alone.
-            logger.error('PDF URL processing failed', error as Error);
+            logger.error('PDF URL processing failed', { error: errorForLog(error) });
             console.error(`❌ The aistudio layer could not read ${fileUrls.join(', ')}: ${(error as Error).message}`);
             urlFailed = true;
           }
@@ -2080,7 +2081,7 @@ program
         process.exit(1);
       }
     } catch (error) {
-      logger.error('Document analysis failed', error as Error);
+      logger.error('Document analysis failed', { error: errorForLog(error) });
       console.error('❌ Failed to analyze documents:', (error as Error).message);
       if ((error as Error).message.includes('timed out')) {
         console.log('💡 Large files may require more time in fresh installations');
@@ -2176,7 +2177,7 @@ program
         process.exit(1);
       }
     } catch (error) {
-      logger.error('Multimodal processing failed', error as Error);
+      logger.error('Multimodal processing failed', { error: errorForLog(error) });
       console.error('❌ Failed to process files:', (error as Error).message);
       console.log('\n💡 Tips:');
       console.log('   1. Ensure all files exist and are accessible');
@@ -2236,7 +2237,9 @@ program
         const icon = isSet ? '✅' : '❌';
         if (key.includes('KEY') && isSet) {
           const value = process.env[key];
-          const masked = value ? `${value.substring(0, 8)}...${value.slice(-4)}` : 'Not set';
+          // Four characters tell which kind of key it is; the length tells a
+          // truncated paste. Anything more is part of the secret.
+          const masked = value ? maskApiKey(value) : 'Not set';
           console.log(`${icon} ${key}: ${masked}`);
         } else {
           const value = process.env[key];
@@ -2253,7 +2256,7 @@ program
       }
       
     } catch (error) {
-      logger.error('Failed to get system information', error as Error);
+      logger.error('Failed to get system information', { error: errorForLog(error) });
       process.exit(1);
     }
   });

@@ -1,3 +1,5 @@
+import { lstatSync, realpathSync } from 'fs';
+import { delimiter, isAbsolute, relative, resolve as resolvePath } from 'path';
 import { z } from 'zod';
 import { PDF_MODES } from '../utils/pdfText.js';
 
@@ -1069,19 +1071,64 @@ const TOKEN_REST = String.raw`[^\s"'<>\x60]`;
  *   2. A bare `host.tld/path…` -- a dotted name ending in a letters-only label,
  *      then a slash. Not after a slash, so `/srv/www/example.com/a.html` is a
  *      path and is left alone.
- *   3. Any path-like token (one with a `/`) followed by a `?…` or `#…` tail.
+ *   3. A bare `host.tld?query` with no slash -- cut to `host.tld?…`.
+ *   4. Any path-like token (one with a `/`) followed by a `?…` or `#…` tail.
  *
  * Every alternative starts at TOKEN_START, so nothing matches from the middle of
  * a file path or a word.
  */
+const HOST_IN_TEXT = String.raw`(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?`;
 const REDACTABLE_IN_TEXT = new RegExp(
   `${TOKEN_START}(?:` +
     String.raw`(?!node:)(?<scheme>[a-z][a-z0-9+.-]+):(?<opaque>(?![\d\s])${TOKEN_REST}+)` +
-    String.raw`|(?<host>(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?)\/${TOKEN_REST}*` +
+    String.raw`|(?<host>${HOST_IN_TEXT})\/${TOKEN_REST}*` +
+    String.raw`|(?<qhost>${HOST_IN_TEXT})\?${TOKEN_REST}+` +
     String.raw`|(?<path>[^\s"'<>\x60?#]*\/[^\s"'<>\x60?#]*)(?<tail>[?#])${TOKEN_REST}+` +
   ')',
   'gi'
 );
+
+/**
+ * A credential after its label, as a header or a `key=value` pair carries it:
+ * `Authorization: Bearer <token>`, `Bearer <token>`, `api_key=<value>`,
+ * `token: <value>`. The label (and any quote or separator) is kept; the value
+ * becomes `…`.
+ *
+ * Bearer and token values are cut only when they look like a credential --
+ * see looksLikeSecret() -- so `token: 3 retries` and "the Bearer scheme" stay
+ * as they are. An api key label is unambiguous, so any value after it is cut.
+ */
+const SECRET_CHARS = String.raw`[A-Za-z0-9._~+/=-]`;
+const LABELLED_SECRET = new RegExp(
+  String.raw`(?<bearer>\bbearer\s+)(?<bearerValue>${SECRET_CHARS}+)` +
+  String.raw`|(?<apiKey>(?<![A-Za-z0-9])api[_-]?key["']?\s*[=:]\s*["']?)(?<apiKeyValue>[^\s"'<>,;&\x60]+)` +
+  String.raw`|(?<token>(?<![A-Za-z0-9])token["']?\s*[=:]\s*["']?)(?<tokenValue>${SECRET_CHARS}+)`,
+  'gi'
+);
+
+/**
+ * Whether a Bearer or token value looks like a credential rather than a word:
+ * eight characters or more, with a digit or one of `._~+/=` in it, or twenty
+ * characters or more whatever they are.
+ */
+function looksLikeSecret(value: string): boolean {
+  if (value.length >= 20) {
+    return true;
+  }
+  return value.length >= 8 && /[\d._~+/=]/.test(value);
+}
+
+/** A path-like token: one with a `/`, up to a space, a quote or an angle bracket. */
+const PATH_TOKEN_IN_TEXT = /[^\s"'<>`]*\/[^\s"'<>`]*/g;
+
+/**
+ * A path segment that looks like a token: twenty or more of `[A-Za-z0-9_-]`
+ * with a digit and a letter among them, between slashes (or the token's ends).
+ * A segment followed by `.` is a file name (`report_quarterly_final_v2.pdf`)
+ * and a segment with no digit is a name (`claude-gemini-multimodal-bridge`);
+ * neither is cut.
+ */
+const TOKEN_SEGMENT = /(?<=^|\/)(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{20,}(?=$|\/|[^A-Za-z0-9_.-])/g;
 
 /** The host of an opaque `scheme:` URL such as `mailto:a@host.tld?…`, if it has one. */
 const OPAQUE_HOST = /@((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63})(?=$|[/?#;,&])/i;
@@ -1128,23 +1175,49 @@ function redactSchemeUrl(scheme: string, rest: string): string {
 
 /**
  * `text` with every URL cut down to its scheme and host, every bare
- * `host.tld/path` cut down to its host, and the `?…` / `#…` tail of any other
- * path-like token dropped. See REDACTABLE_IN_TEXT for the exact rules.
+ * `host.tld/path` cut down to its host, a bare `host.tld?query` to
+ * `host.tld?…`, and the `?…` / `#…` tail of any other path-like token dropped
+ * (see REDACTABLE_IN_TEXT). Also: the value after a credential label --
+ * `Bearer`, `api_key=`, `token:` -- becomes `…` (LABELLED_SECRET), and in a
+ * path-like token with no query, a segment that looks like a token becomes `…`
+ * (TOKEN_SEGMENT).
  */
 export function redactUrls(text: string): string {
-  return text.replace(REDACTABLE_IN_TEXT, (match: string, ...args: unknown[]) => {
-    const groups = args[args.length - 1] as Partial<Record<'scheme' | 'opaque' | 'host' | 'path' | 'tail', string>>;
+  const unlabelled = text.replace(LABELLED_SECRET, (match: string, ...args: unknown[]) => {
+    const groups = args[args.length - 1] as Partial<Record<
+      'bearer' | 'bearerValue' | 'apiKey' | 'apiKeyValue' | 'token' | 'tokenValue', string
+    >>;
+    if (groups.bearer !== undefined && groups.bearerValue !== undefined) {
+      return looksLikeSecret(groups.bearerValue) ? `${groups.bearer}…` : match;
+    }
+    if (groups.apiKey !== undefined) {
+      return `${groups.apiKey}…`;
+    }
+    if (groups.token !== undefined && groups.tokenValue !== undefined) {
+      return looksLikeSecret(groups.tokenValue) ? `${groups.token}…` : match;
+    }
+    return match;
+  });
+
+  const cut = unlabelled.replace(REDACTABLE_IN_TEXT, (match: string, ...args: unknown[]) => {
+    const groups = args[args.length - 1] as Partial<Record<'scheme' | 'opaque' | 'host' | 'qhost' | 'path' | 'tail', string>>;
     if (groups.scheme !== undefined && groups.opaque !== undefined) {
       return redactSchemeUrl(groups.scheme, groups.opaque);
     }
     if (groups.host !== undefined) {
       return `${groups.host}/…`;
     }
+    if (groups.qhost !== undefined) {
+      return `${groups.qhost}?…`;
+    }
     if (groups.path !== undefined && groups.tail !== undefined) {
       return `${groups.path}${groups.tail}…`;
     }
     return match;
   });
+
+  // Only where there is no query: with one, the query is what was cut above.
+  return cut.replace(PATH_TOKEN_IN_TEXT, token => /[?#]/.test(token) ? token : token.replace(TOKEN_SEGMENT, '…'));
 }
 
 /**
@@ -1156,6 +1229,16 @@ export function firstLineForLog(text: string, max = 200): string {
   const line = text.split(/\r?\n/).map(l => l.trim()).find(l => l.length > 0) ?? '';
   const safe = redactUrls(line);
   return safe.length > max ? `${safe.slice(0, max)}…` : safe;
+}
+
+/**
+ * A caught error as one line fit for a warn or error log: its message's first
+ * line, redacted and capped as firstLineForLog() does. A failure message can
+ * quote a signed URL, a path or a child process's output; the thrown error
+ * keeps all of it for the caller.
+ */
+export function errorForLog(error: unknown): string {
+  return firstLineForLog(error instanceof Error ? error.message : String(error));
 }
 
 /**
@@ -1193,4 +1276,140 @@ export function describeToolArgs(args: unknown): Record<string, unknown> {
     summary.urlHosts = hostsOf(urls);
   }
   return summary;
+}
+
+// ===================================
+// Which files may leave the machine
+// ===================================
+//
+// The AI Studio MCP server (assertReadableRoot) and LayerManager (which files
+// Claude may be given inline) share one notion of the allowed directories:
+// the directory the process started in, plus CGMB_ALLOWED_ROOTS.
+
+/** The allowed directories, in the two forms a path is compared against. */
+export interface AllowedRoots {
+  /** Each root through realpath: what a resolved file must sit inside. */
+  readonly real: readonly string[];
+  /**
+   * Each root as configured (resolved, not through symlinks), plus its real
+   * form: what a path *as given* must sit inside before anything on disk is
+   * looked at.
+   */
+  readonly given: readonly string[];
+}
+
+/**
+ * Resolve the allowed directories from the working directory and
+ * CGMB_ALLOWED_ROOTS (delimiter-separated). An entry that does not exist is
+ * skipped and reported to `onMissing`.
+ */
+export function resolveAllowedRoots(
+  onMissing?: (entry: string) => void,
+  env: NodeJS.ProcessEnv = process.env
+): AllowedRoots {
+  const cwd = process.cwd();
+  const raw = [
+    cwd,
+    ...(env.CGMB_ALLOWED_ROOTS ?? '')
+      .split(delimiter)
+      .map(entry => entry.trim())
+      .filter(entry => entry !== ''),
+  ];
+
+  const real: string[] = [];
+  const given: string[] = [];
+  const add = (list: string[], value: string): void => {
+    if (!list.includes(value)) {
+      list.push(value);
+    }
+  };
+  for (const entry of raw) {
+    try {
+      const resolved = realpathSync(resolvePath(entry));
+      add(real, resolved);
+      add(given, resolvePath(entry));
+      add(given, resolved);
+    } catch {
+      onMissing?.(entry);
+    }
+  }
+
+  // The shell's name for the working directory, when it reaches the same
+  // place: process.cwd() is the physical path, and a caller quoting a path
+  // under $PWD (a symlinked home, macOS /tmp) means the same directory.
+  const pwd = env.PWD;
+  if (pwd && isAbsolute(pwd)) {
+    try {
+      if (realpathSync(pwd) === realpathSync(cwd)) {
+        add(given, resolvePath(pwd));
+      }
+    } catch {
+      // Not a directory any more; nothing to add.
+    }
+  }
+
+  return { real, given };
+}
+
+/** True when `target` (absolute) is one of `roots` or inside one. */
+export function isWithinRoots(target: string, roots: readonly string[]): boolean {
+  return roots.some(root => {
+    const rel = relative(root, target);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  });
+}
+
+/**
+ * Where a caller-supplied path stands against the allowed directories.
+ *
+ *   - 'outside': the path as given is outside every root, or it resolves
+ *     (through `..` or a symlink) to somewhere outside. Nothing on disk outside
+ *     the roots was consulted to decide the first case, and the second is
+ *     reported the same way, so a caller cannot tell an existing file outside
+ *     the roots from a missing one.
+ *   - 'missing': inside the roots, and nothing is there.
+ *   - 'error': inside the roots, and it could not be resolved for another
+ *     reason (`code`).
+ *   - 'inside': the realpath, to read through -- resolving again later would
+ *     reopen the gap this check closes.
+ */
+export type RootsVerdict =
+  | { kind: 'inside'; resolved: string }
+  | { kind: 'outside' }
+  | { kind: 'missing' }
+  | { kind: 'error'; code: string };
+
+export function checkAgainstRoots(filePath: string, roots: AllowedRoots): RootsVerdict {
+  const asGiven = resolvePath(filePath);
+  if (!isWithinRoots(asGiven, roots.given)) {
+    return { kind: 'outside' };
+  }
+
+  let resolved: string;
+  try {
+    resolved = realpathSync(asGiven);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown';
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      // A dangling link is something that is there; whether its target is
+      // outside the roots is not this caller's to learn.
+      try {
+        lstatSync(asGiven);
+        return { kind: 'outside' };
+      } catch {
+        return { kind: 'missing' };
+      }
+    }
+    return { kind: 'error', code };
+  }
+
+  return isWithinRoots(resolved, roots.real) ? { kind: 'inside', resolved } : { kind: 'outside' };
+}
+
+let processRoots: AllowedRoots | undefined;
+
+/** This process's allowed directories, resolved on first use. */
+export function allowedRoots(): AllowedRoots {
+  processRoots ??= resolveAllowedRoots();
+  return processRoots;
 }

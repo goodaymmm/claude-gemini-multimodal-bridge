@@ -6,8 +6,11 @@ import { AIStudioLayer } from '../layers/AIStudioLayer.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import {
+  allowedRoots,
   CGMBError,
+  checkAgainstRoots,
   Config,
+  errorForLog,
   ExecutionPlan,
   FileReference,
   LayerResult,
@@ -218,7 +221,7 @@ export class LayerManager {
           this.layerInitialized.claude = true;
           logger.info('Claude Code layer initialized via lazy loading');
         }).catch(error => {
-          logger.error('Failed to initialize Claude Code layer', error as Error);
+          logger.error('Failed to initialize Claude Code layer', { error: errorForLog(error) });
         });
       }
     }
@@ -270,7 +273,7 @@ export class LayerManager {
           this.layerInitialized.aistudio = true;
           logger.info('AI Studio layer initialized via lazy loading');
         }).catch(error => {
-          logger.error('Failed to initialize AI Studio layer', error as Error);
+          logger.error('Failed to initialize AI Studio layer', { error: errorForLog(error) });
         });
       }
     }
@@ -375,7 +378,7 @@ export class LayerManager {
 
       return result;
     } catch (error) {
-      logger.error('Fast processing failed', error as Error);
+      logger.error('Fast processing failed', { error: errorForLog(error) });
       throw error;
     }
   }
@@ -513,8 +516,16 @@ export class LayerManager {
     }
     let total = 0;
     for (const file of files) {
+      // The roots check first, on the path as given: a stat outside the roots
+      // would route an existing file differently from a missing one, and the
+      // two routes answer differently. Anything not plainly inside goes to AI
+      // Studio, which refuses it with the one message for both.
+      const verdict = checkAgainstRoots(file.path, allowedRoots());
+      if (verdict.kind !== 'inside') {
+        return false;
+      }
       try {
-        total += statSync(file.path).size;
+        total += statSync(verdict.resolved).size;
       } catch {
         // A file that cannot be stat'ed goes to AI Studio, which reports why.
         return false;
@@ -646,7 +657,7 @@ export class LayerManager {
         } catch (error) {
           logger.warn('Primary layer execution failed, attempting fallback', {
             primaryLayer: decision.layer,
-            error: (error as Error).message,
+            error: errorForLog(error),
           });
           return this.executeWithFallback(task, decision.layer, error as Error);
         }
@@ -678,7 +689,7 @@ export class LayerManager {
       }
       return result;
     } catch (error) {
-      logger.warn(`The ${primary} layer failed; trying the next layer`, { error: (error as Error).message });
+      logger.warn(`The ${primary} layer failed; trying the next layer`, { error: errorForLog(error) });
       return this.executeWithFallback(task, primary, error as Error);
     }
   }
@@ -724,7 +735,7 @@ export class LayerManager {
       }
       return result;
     } catch (error) {
-      logger.warn('The claude layer failed on code files; trying AI Studio', { error: (error as Error).message });
+      logger.warn('The claude layer failed on code files; trying AI Studio', { error: errorForLog(error) });
       return this.executeWithFallback(task, 'claude', error as Error);
     }
   }
@@ -756,7 +767,7 @@ export class LayerManager {
       } catch (error) {
         logger.warn('Primary layer execution failed, attempting fallback', {
           primaryLayer: layer,
-          error: (error as Error).message,
+          error: errorForLog(error),
         });
         return await this.executeWithFallback(task, layer, error as Error);
       }
@@ -872,7 +883,7 @@ export class LayerManager {
       } catch (error) {
         logger.warn('Fallback layer also failed', {
           layer: layerType,
-          error: (error as Error).message,
+          error: errorForLog(error),
         });
         failures.push(`${layerType}: ${(error as Error).message}`);
         continue;
@@ -1153,7 +1164,7 @@ export class LayerManager {
         };
       } catch (error) {
         logger.warn('Single-file fast path failed, falling back to full workflow', {
-          error: (error as Error).message,
+          error: errorForLog(error),
           fileCount: files.length
         });
         // Continue to full workflow below
@@ -1316,7 +1327,7 @@ export class LayerManager {
       };
     } catch (error) {
       const totalDuration = Date.now() - startTime;
-      logger.error('Workflow execution failed', { error, totalDuration });
+      logger.error('Workflow execution failed', { error: errorForLog(error), totalDuration });
       
       throw new CGMBError(
         'Workflow execution failed',
@@ -1375,7 +1386,7 @@ export class LayerManager {
           duration: result.metadata.duration,
         });
       } catch (error) {
-        logger.error(`Step ${step.id} failed`, error as Error);
+        logger.error(`Step ${step.id} failed`, { error: errorForLog(error) });
         
         // Try fallback strategy if available
         const fallbackResult = await this.tryFallbackStrategy(
@@ -1434,7 +1445,7 @@ export class LayerManager {
           const result = await this.executeStep(step, stepInput, options);
           return { stepId: step.id, result };
         } catch (error) {
-          logger.error(`Step ${step.id} failed in parallel execution`, error as Error);
+          logger.error(`Step ${step.id} failed in parallel execution`, { error: errorForLog(error) });
           return {
             stepId: step.id,
             result: {
@@ -1742,7 +1753,7 @@ export class LayerManager {
 
       return await this.executeStep(strategy.with, fallbackInput, options);
     } catch (fallbackError) {
-      logger.error(`Fallback strategy failed for step ${failedStep.id}`, fallbackError as Error);
+      logger.error(`Fallback strategy failed for step ${failedStep.id}`, { error: errorForLog(fallbackError) });
       return null;
     }
   }
@@ -2267,7 +2278,7 @@ export class LayerManager {
     // Object.prototype.constructor when it has published nothing.
     const stepOutput = Object.hasOwn(stepOutputs, stepId) ? stepOutputs[stepId] : undefined;
 
-    if (!stepOutput) {
+    const missing = (): Record<string, unknown> => {
       // Step output not found - could be a failed step or not yet executed
       logger.warn('Could not resolve step reference', {
         stepId,
@@ -2281,6 +2292,10 @@ export class LayerManager {
         _originalReference: originalReference,
         _hint: 'Referenced step output not available - step may have failed or not executed'
       };
+    };
+
+    if (!stepOutput) {
+      return missing();
     }
 
     // Check if the step result is a failed LayerResult (has success: false)
@@ -2303,6 +2318,12 @@ export class LayerManager {
     let resolvedValue: unknown = stepOutput;
     for (const part of pathParts) {
       if (typeof resolvedValue === 'object' && resolvedValue !== null) {
+        // Own properties only, as for the step id above: `@s1.__proto__` or
+        // `@s1.output.constructor` must not walk into Object.prototype and
+        // hand a step a function from the runtime.
+        if (!Object.hasOwn(resolvedValue, part)) {
+          return missing();
+        }
         resolvedValue = (resolvedValue as Record<string, unknown>)[part];
       } else {
         resolvedValue = undefined;
@@ -2529,7 +2550,7 @@ export class LayerManager {
       const duration = Date.now() - startTime;
       
       logger.error(`Step ${step.id} failed on ${step.layer} layer`, {
-        error: (error as Error).message,
+        error: errorForLog(error),
         duration,
         stepId: step.id,
         layer: step.layer,

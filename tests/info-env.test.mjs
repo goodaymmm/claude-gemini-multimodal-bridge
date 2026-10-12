@@ -64,8 +64,11 @@ describe('cgmb info', () => {
     assert.equal(status, 0, stdout);
     assert.match(stdout, /Environment: Loaded successfully/);
     assert.match(stdout, /Source: environment variables/);
-    assert.match(stdout, /✅ AI_STUDIO_API_KEY: AIzaTEST\.\.\.ghij/);
+    // The first four characters and the length; not the last four, which
+    // with the first eight used to be printed.
+    assert.match(stdout, /✅ AI_STUDIO_API_KEY: AIza… \(30 characters\)/);
     assert.ok(!stdout.includes(key), 'the full key must not be printed');
+    assert.ok(!stdout.includes('AIzaT') && !stdout.includes('ghij'), 'no more of the key than its first four characters');
   });
 
   it('accepts the deprecated aliases AuthVerifier still reads', () => {
