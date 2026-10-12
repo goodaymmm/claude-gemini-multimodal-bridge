@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 631 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 653 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -971,12 +971,33 @@ dependencies to new major versions. 1.2.3 was never published.
     message as written, so it could forge a log line; it is now one line, capped,
     with URLs cut to hosts. A file's type for MIME detection and code-file
     routing comes from the name the caller used, not the symlink target's
+  - with no translation available, image generation printed "Translation
+    unavailable" with `console.log`, onto the stdout of `cgmb serve`, which is
+    the MCP JSON-RPC channel: a non-English image prompt could break the
+    client's stream. It goes to stderr, and a test now fails if any module
+    either MCP server loads writes to stdout
+  - the AI Studio sub-server took a file's MIME type from its display name after
+    capping it at 200 characters for the log, so a longer name lost its
+    extension and a PDF was read as text. The type comes from the name in full;
+    the capped form is for display only
+  - the credential-name check saw only the name as given on every tool but
+    `cgmb`, the one that resolves a file and keeps the given name, so
+    `notes.txt -> .env` passed `cgmb_multimodal_process`,
+    `cgmb_document_analysis` and workflow inputs. It now also checks the name
+    of the realpath when the file exists, and those tools (and `cgmb`) refuse
+    before any layer is asked, with the refusal as the answer rather than
+    "Failed steps: 3"; a tool error names its code, e.g.
+    `(CREDENTIAL_FILE_REFUSED)`
+  - `cgmb aistudio -f` called the AI Studio layer directly, past the
+    credential-name check; it now checks the files before the layer starts.
+    `analyze`, `multimodal` and `process` already went through the check, and
+    `generate-image` / `generate-audio` take no files
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
 `resolveWindowsCommand` alias and the three `AI_MODELS` keys above are removed.
 `gemini-3-pro-image`, listed until now as the high-quality image model, is no
-longer listed: no code path ever selected it. Tests: 179 → 625 (7 for the WAV
+longer listed: no code path ever selected it. Tests: 179 → 653 (7 for the WAV
 helper, 1 for the schema default, 2 for the model table, 8 for the Antigravity
 probe and environment, 3 for the API-key sign-in, 10 for the dependency moves,
 24 for the PDF mode, 106 for routing, 81 for the PDF URL address rules, 5 for
@@ -986,7 +1007,7 @@ for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
 retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass, 20 for the last roots items, 3 for the
 denylist on both names, 3 for display names on stderr and typing by the given
-name); on Linux 630 pass and 1 is skipped. The routing changes are
+name, 22 for the last log and name items); on Linux 652 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

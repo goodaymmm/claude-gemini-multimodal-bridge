@@ -695,7 +695,8 @@ export class AIStudioLayer implements LayerInterface {
               promptLength: prompt.length
             });
             
-            console.log('⚠️ Translation unavailable. Continuing with image generation in the input language.');
+            // stderr, not stdout: under `cgmb serve` stdout is the JSON-RPC channel.
+            console.error('⚠️ Translation unavailable. Continuing with image generation in the input language.');
             // processedPrompt remains as original prompt
           }
         } else {
@@ -705,7 +706,8 @@ export class AIStudioLayer implements LayerInterface {
             languageName
           });
           
-          console.log('⚠️ Translation unavailable. Continuing with image generation in the input language.');
+          // stderr, not stdout (see above).
+          console.error('⚠️ Translation unavailable. Continuing with image generation in the input language.');
         }
       } else {
         logger.warn('Translation unavailable. Continuing with image generation in the input language.', {
@@ -714,7 +716,8 @@ export class AIStudioLayer implements LayerInterface {
           languageName
         });
         
-        console.log('⚠️ Translation unavailable. Continuing with image generation in the input language.');
+        // stderr, not stdout (see above).
+        console.error('⚠️ Translation unavailable. Continuing with image generation in the input language.');
       }
     }
     

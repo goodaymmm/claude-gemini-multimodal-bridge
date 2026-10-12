@@ -501,11 +501,15 @@ export class CGMBServer {
           logger.debug(`Tool failure stack: ${name}`, { stack: redactUrls(error.stack) });
         }
         
+        // A CGMBError carries a code (CREDENTIAL_FILE_REFUSED, INVALID_REQUEST,
+        // ...): name it, so a client can tell a refusal from a failure without
+        // matching the wording.
+        const code = error instanceof CGMBError ? error.code : undefined;
         return {
           content: [
             {
               type: 'text',
-              text: `Error executing ${name}: ${errorMessage}`,
+              text: code ? `Error executing ${name} (${code}): ${errorMessage}` : `Error executing ${name}: ${errorMessage}`,
             },
           ],
           isError: true,

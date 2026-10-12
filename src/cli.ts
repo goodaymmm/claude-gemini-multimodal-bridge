@@ -17,7 +17,7 @@ import { AuthVerifier } from './auth/AuthVerifier.js';
 import { InteractiveSetup } from './auth/InteractiveSetup.js';
 import { AuthCache } from './auth/AuthCache.js';
 import { maskApiKey } from './auth/OAuthManager.js';
-import { LayerManager } from './core/LayerManager.js';
+import { assertNoCredentialFiles, LayerManager } from './core/LayerManager.js';
 import { Logger } from './utils/logger.js';
 import { withCLITimeout } from './utils/TimeoutManager.js';
 import { PDF_MODES, type PdfMode } from './utils/pdfText.js';
@@ -1477,6 +1477,13 @@ program
       }
 
       await loadEnvironmentSmart({ verbose: false });
+
+      const files: string[] = options.files || [];
+      const fileRefs = files.map(f => ({ path: f, type: 'document' as const }));
+      // This command calls the layer itself, past LayerManager.executeWithLayer
+      // where every other path meets the credential denylist; check here,
+      // before the layer (and its MCP server) is started.
+      assertNoCredentialFiles({ files: fileRefs });
       
       logger.info('🎨 Processing with AI Studio...');
       
@@ -1485,8 +1492,6 @@ program
       const aiStudioLayer = new AIStudioLayer();
       
       await aiStudioLayer.initialize();
-      
-      const files = options.files || [];
       
       // Enforce multimodal architecture: AI Studio requires files
       if (files.length === 0) {
@@ -1514,7 +1519,7 @@ program
       const result = await aiStudioLayer.execute({
         type: 'multimodal_processing',
         prompt: options.prompt,
-        files: files.map((f: string) => ({ path: f, type: 'document' })),
+        files: fileRefs,
         model: options.model,
         options: pdfModeOptions(options.pdfMode)
       });

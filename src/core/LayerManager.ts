@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'fs';
+import { readFileSync, realpathSync, statSync } from 'fs';
 import { basename } from 'path';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
 import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
@@ -47,9 +47,11 @@ import {
  * every routing method to work at all. A denylist costs neither: no ordinary
  * request analyses a .env, so nothing legitimate is lost.
  *
- * Matched on the basename only. A symlink pointing at a credential file is out
- * of scope by design: resolving it is what dragged in realpath, TOCTOU handling
- * and the identity checks that made the previous version untenable.
+ * Matched on basenames only: the name as given, the name the caller used
+ * (`givenPath`) when there is one, and the basename of the file's realpath when
+ * it exists. The realpath is looked up for its name and nothing else -- no
+ * confinement, no identity checks -- so a link such as `notes.txt -> .env` is
+ * refused on every path, not only where the main server already resolved it.
  */
 const CREDENTIAL_FILE_PATTERNS = [
   /^\.env(\..*)?$/i,
@@ -60,6 +62,18 @@ const CREDENTIAL_FILE_PATTERNS = [
   /^secrets?\.[a-z0-9]+$/i,
   /\.(pem|key|pfx|p12|keystore|jks)$/i,
 ];
+
+/** The basename of `path`'s realpath, or undefined when it does not resolve. */
+function realBasename(path: string): string | undefined {
+  if (/^https?:\/\//i.test(path)) {
+    return undefined;
+  }
+  try {
+    return basename(realpathSync(path));
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Refuse a task that names anything credential-shaped.
@@ -76,11 +90,21 @@ export function assertNoCredentialFiles(task: unknown): void {
     // can make either one credential-shaped while the other is not
     // (`.env -> config/dev.vars`, or `notes.txt -> .env`), and a file is
     // refused when either name matches.
-    const names = [basename(file.path)];
-    if (file.givenPath && basename(file.givenPath) !== names[0]) {
-      names.push(basename(file.givenPath));
+    //
+    // The other tools (cgmb_multimodal_process, cgmb_document_analysis,
+    // workflow steps, the CLI) carry no givenPath, and their `path` is the
+    // name as given, not the realpath: the realpath's basename is added
+    // whenever the file exists and resolves. A path that does not resolve (a
+    // URL, a missing file, a loop) is judged by its given name alone.
+    const names = new Set([basename(file.path)]);
+    if (file.givenPath) {
+      names.add(basename(file.givenPath));
     }
-    const name = names.find(candidate => CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(candidate)));
+    const real = realBasename(file.path);
+    if (real !== undefined) {
+      names.add(real);
+    }
+    const name = [...names].find(candidate => CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(candidate)));
     if (name !== undefined) {
       throw new CGMBError(
         `Refusing to process ${name}: it matches a credential file pattern, and the AI Studio ` +
@@ -1136,6 +1160,13 @@ export class LayerManager {
       options: options ? Object.keys(options) : []
     });
 
+    // Refused here, before any route is chosen. Every layer call below checks
+    // again (executeWithLayer), but there a refusal became a failed step: the
+    // single-file fast path caught it and fell back to the full workflow, whose
+    // three steps each failed the same way, and the caller saw "Failed steps: 3"
+    // rather than why.
+    assertNoCredentialFiles({ files });
+
     // One answer from one layer when the routing rule picks one.
     //
     // This was a "simple prompt" fast path that sent every file-less prompt
@@ -1249,6 +1280,9 @@ export class LayerManager {
       outputRequirements,
     });
 
+    // Before the workflow, so the refusal is the answer (see processMultimodal).
+    assertNoCredentialFiles({ documents });
+
     const executionPlan: ExecutionPlan = {
       steps: [
         {
@@ -1328,6 +1362,9 @@ export class LayerManager {
     // Checked before any step runs, and outside the try below so the caller
     // sees which step is wrong rather than "Workflow execution failed".
     this.validateWorkflowDependencies(workflow.steps);
+    // The same for the files the workflow is given: each step's layer call
+    // would refuse them too, but only as a failed step.
+    assertNoCredentialFiles(inputData);
 
     try {
       let results: Record<string, LayerResult>;

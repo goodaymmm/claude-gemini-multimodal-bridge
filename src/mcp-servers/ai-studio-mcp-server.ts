@@ -789,7 +789,10 @@ To retrieve this file, use:
         // file read is always `path`.
         // The display name is caller-supplied text: one line, capped, URLs
         // cut to hosts, so it cannot forge extra log lines on stderr.
-        const shown = firstLineForLog(file.displayName ?? file.path);
+        // `shown` is for display only; the type is read from `given`, the name
+        // whole: cut to 200 characters it can lose its extension.
+        const given = file.displayName ?? file.path;
+        const shown = firstLineForLog(given);
         console.error(`Processing file: ${shown}`);
         
         // Check if the path is a URL
@@ -812,7 +815,7 @@ To retrieve this file, use:
           // extension says what the caller meant, and its target's name must
           // not show through. Fall back to the real path only when the given
           // name has no extension.
-          const mimeType = this.getMimeType(path.extname(shown) ? shown : localPath);
+          const mimeType = this.getMimeType(path.extname(given) ? given : localPath);
           console.error(`File detected as MIME type: ${mimeType}`);
 
           if (mimeType.startsWith('image/')) {
@@ -884,7 +887,9 @@ To retrieve this file, use:
       // Read and process documents
       for (const [index, docPath] of (documents as string[]).entries()) {
         const named = displayNames[index];
-        const shown = firstLineForLog(typeof named === 'string' && named !== '' ? named : docPath);
+        // Display only; the type is read from `given` (see processMultimodal).
+        const given = typeof named === 'string' && named !== '' ? named : docPath;
+        const shown = firstLineForLog(given);
         // A URL is not a path: existsSync() was false for it, so it was
         // skipped here and Gemini was asked about the prompt alone.
         if (/^https?:\/\//i.test(docPath)) {
@@ -898,7 +903,7 @@ To retrieve this file, use:
           console.warn(`Document not found: ${shown}`);
           continue;
         }
-        const mimeType = this.getMimeType(path.extname(shown) ? shown : allowedDocPath);
+        const mimeType = this.getMimeType(path.extname(given) ? given : allowedDocPath);
         console.error(`Document detected as MIME type: ${mimeType}`);
 
         if (mimeType === 'application/pdf') {
