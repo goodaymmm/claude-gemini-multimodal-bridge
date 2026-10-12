@@ -538,7 +538,8 @@ export class LayerManager {
     if (files.length === 0 || files.length > CLAUDE_INLINE_MAX_FILES) {
       return null;
     }
-    if (!files.every(file => this.isSourceCodeFile(file.path))) {
+    // Classified by the name the caller used, not the symlink target's.
+    if (!files.every(file => this.isSourceCodeFile(shownPath(file)))) {
       return null;
     }
     const resolved: string[] = [];

@@ -539,3 +539,68 @@ describe('credential denylist sees both the realpath and the name as given', () 
     assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: '/ws/a.txt', type: 'document' }] }));
   });
 });
+
+describe('display names cannot forge stderr lines, and the given name decides the type', { skip: (process.platform === 'win32' && 'the layer stand-ins are POSIX shims') || SKIP_LINKS }, () => {
+  const real = join(workspace, 'real', 'target.txt');
+  let stubs;
+  let gemini;
+  let server;
+
+  before(async () => {
+    mkdirSync(join(stubDir, 'aistudio-display'), { recursive: true });
+    stubs = createCliStubs(join(stubDir, 'aistudio-display'));
+    gemini = await startRoutingGemini(stubs.logPath);
+    server = await new McpChild([AI_STUDIO_SERVER], { cwd: workspace, env: childEnv({ GOOGLE_GEMINI_BASE_URL: gemini.baseUrl }) }).start();
+  });
+  after(async () => {
+    await server?.close();
+    await gemini?.close();
+  });
+
+  it('a displayName with a newline and a URL reaches stderr as one line with the host only', async () => {
+    const before = server.stderr.length;
+    const injected = `${real}\nERROR forged line https://example.com/x?token=abc`;
+    const outcome = await server.call('multimodal_process', {
+      files: [{ path: real, type: 'text', displayName: injected }],
+      instructions: 'Summarise',
+    });
+    assert.equal(errorOf(outcome), null);
+    const stderr = server.stderr.slice(before);
+    assert.ok(!stderr.includes('forged line'), stderr);
+    assert.ok(!stderr.includes('token=abc'), stderr);
+    assert.ok(/Processing file: .*target\.txt/.test(stderr), stderr);
+  });
+
+  it('the MIME type follows the given name, not the symlink target', async () => {
+    const mark = readCalls(stubs.logPath).length;
+    const outcome = await server.call('multimodal_process', {
+      files: [{ path: real, type: 'text', displayName: join(workspace, 'notes.md') }],
+      instructions: 'Summarise',
+    });
+    assert.equal(errorOf(outcome), null);
+    const sent = readCalls(stubs.logPath).slice(mark).filter(entry => entry.kind === 'call');
+    assert.equal(sent.length, 1);
+    assert.ok(server.stderr.includes('File detected as MIME type: text/markdown'), server.stderr.slice(-800));
+  });
+});
+
+describe('code-file routing classifies by the name the caller used', () => {
+  it('a .ts given name over a non-code realpath routes as code, and the reverse does not', async () => {
+    const { LayerManager } = await import('../dist/core/LayerManager.js');
+    const lm = new LayerManager({});
+    // Under the working directory, which is always an allowed root.
+    const ws = mkdtempSync(join(process.cwd(), '.cgmb-route-test-'));
+    try {
+      const txt = join(ws, 'impl.txt');
+      writeFileSync(txt, 'export const x = 1;\n');
+      assert.equal(lm.isSourceCodeFile(join(ws, 'alias.ts')), true);
+      assert.equal(lm.isSourceCodeFile(txt), false);
+      const asCode = lm.canInlineForClaude([{ path: txt, givenPath: join(ws, 'alias.ts'), type: 'document' }]);
+      const asText = lm.canInlineForClaude([{ path: txt, type: 'document' }]);
+      assert.deepEqual(asCode, [realpathSync(txt)]);
+      assert.equal(asText, null);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});

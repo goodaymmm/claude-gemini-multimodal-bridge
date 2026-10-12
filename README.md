@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 628 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 631 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -967,6 +967,10 @@ dependencies to new major versions. 1.2.3 was never published.
     was no longer refused. It now checks both the path as given and the
     realpath, and refuses when either is credential-shaped. A URL reference
     carries only its path and type; extra keys a caller sends are dropped
+  - a caller-supplied display name reached stderr and the "Cannot resolve"
+    message as written, so it could forge a log line; it is now one line, capped,
+    with URLs cut to hosts. A file's type for MIME detection and code-file
+    routing comes from the name the caller used, not the symlink target's
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
@@ -981,7 +985,8 @@ for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 `.env` message, 3 for the CI check, 1 for the Node.js check, 2 for the console
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
 retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass, 20 for the last roots items, 3 for the
-denylist on both names); on Linux 627 pass and 1 is skipped. The routing changes are
+denylist on both names, 3 for display names on stderr and typing by the given
+name); on Linux 630 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

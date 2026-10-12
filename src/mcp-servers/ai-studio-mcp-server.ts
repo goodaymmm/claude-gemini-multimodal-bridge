@@ -24,7 +24,7 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
-import { AI_MODELS, type AllowedRoots, checkAgainstRoots, notReadableMessage, resolveAllowedRoots } from '../core/types.js';
+import { AI_MODELS, type AllowedRoots, checkAgainstRoots, firstLineForLog, notReadableMessage, resolveAllowedRoots } from '../core/types.js';
 import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import { describeTtsAudio } from '../utils/wavAudio.js';
 import pkg from 'wavefile';
@@ -90,7 +90,7 @@ export function readableRootOrMissing(filePath: string, shown: string = filePath
     case 'missing':
       return null;
     case 'error':
-      throw new McpError(ErrorCode.InvalidRequest, `Cannot resolve ${shown}: ${verdict.code}`);
+      throw new McpError(ErrorCode.InvalidRequest, `Cannot resolve ${firstLineForLog(shown)}: ${verdict.code}`);
     default:
       throw notReadable(shown);
   }
@@ -787,7 +787,9 @@ To retrieve this file, use:
       for (const file of params.files) {
         // What the prompt, the metadata and any message call the file; the
         // file read is always `path`.
-        const shown = file.displayName ?? file.path;
+        // The display name is caller-supplied text: one line, capped, URLs
+        // cut to hosts, so it cannot forge extra log lines on stderr.
+        const shown = firstLineForLog(file.displayName ?? file.path);
         console.error(`Processing file: ${shown}`);
         
         // Check if the path is a URL
@@ -806,7 +808,11 @@ To retrieve this file, use:
             continue;
           }
           const fileData = fs.readFileSync(localPath);
-          const mimeType = this.getMimeType(localPath);
+          // The type comes from the name the caller used: a symlink's own
+          // extension says what the caller meant, and its target's name must
+          // not show through. Fall back to the real path only when the given
+          // name has no extension.
+          const mimeType = this.getMimeType(path.extname(shown) ? shown : localPath);
           console.error(`File detected as MIME type: ${mimeType}`);
 
           if (mimeType.startsWith('image/')) {
@@ -878,7 +884,7 @@ To retrieve this file, use:
       // Read and process documents
       for (const [index, docPath] of (documents as string[]).entries()) {
         const named = displayNames[index];
-        const shown = typeof named === 'string' && named !== '' ? named : docPath;
+        const shown = firstLineForLog(typeof named === 'string' && named !== '' ? named : docPath);
         // A URL is not a path: existsSync() was false for it, so it was
         // skipped here and Gemini was asked about the prompt alone.
         if (/^https?:\/\//i.test(docPath)) {
@@ -892,7 +898,7 @@ To retrieve this file, use:
           console.warn(`Document not found: ${shown}`);
           continue;
         }
-        const mimeType = this.getMimeType(allowedDocPath);
+        const mimeType = this.getMimeType(path.extname(shown) ? shown : allowedDocPath);
         console.error(`Document detected as MIME type: ${mimeType}`);
 
         if (mimeType === 'application/pdf') {
