@@ -944,7 +944,9 @@ export class CGMBServer {
       if (/^https?:\/\//.test(filePath)) {
         urlsInFiles.push(filePath);
         // Keep URL files as-is for URL routing
-        resolvedFiles.push(typeof file === 'string' ? { path: filePath, type: 'url' } : { ...file, type: 'url' });
+        // Only the keys the schema defines are carried: a caller must not be able
+        // to plant givenPath, displayName or content on a URL reference.
+        resolvedFiles.push({ path: filePath, type: 'url' });
       } else if (filePath) {
         // File path resolution for local files
         try {

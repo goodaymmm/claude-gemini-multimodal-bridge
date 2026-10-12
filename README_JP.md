@@ -50,7 +50,7 @@ Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生�
 
 ### 🎯 MCP標準対応
 
-Anthropic Model Context Protocol準拠。625件のテストを Linux / Windows / macOS の CI で push ごとに実行
+Anthropic Model Context Protocol準拠。628件のテストを Linux / Windows / macOS の CI で push ごとに実行
 
 </td>
 </tr>
@@ -958,8 +958,8 @@ src/
 アドレス規則 81 件、公開ファイル一覧 5 件、ワークフローの検査と統合の入力 25 件、
 キャッシュとリトライの変数 17 件、`cgmb info` 8 件、postinstall の `.env` の案内
 3 件、CI の判定 3 件、Node.js の確認 1 件、console の差し替え 2 件、サブサーバの
-import 6 件、`cgmb` ツールのスキーマ 14 件、各レイヤーのリトライ変数 13 件、ログの伏せ字とステップ参照 19 件、最終ハードニング 46 件、ルート検査 22 件、ルート検査の残り 20 件）。
-Linux では 624 件が成功し、1 件はスキップです。
+import 6 件、`cgmb` ツールのスキーマ 14 件、各レイヤーのリトライ変数 13 件、ログの伏せ字とステップ参照 19 件、最終ハードニング 46 件、ルート検査 22 件、ルート検査の残り 20 件、両方の名前での認証情報チェック 3 件）。
+Linux では 627 件が成功し、1 件はスキップです。
 ルーティングの変更は、実際のサーバと CLI を動かす `tests/routing-matrix.test.mjs`
 で固定しており、両方の README の使用例をすべて確認しています。
 

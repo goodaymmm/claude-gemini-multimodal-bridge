@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 625 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 628 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -975,7 +975,8 @@ the published file list, 25 for workflow validation and synthesis inputs, 17
 for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 `.env` message, 3 for the CI check, 1 for the Node.js check, 2 for the console
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
-retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass, 20 for the last roots items); on Linux 624 pass and 1 is skipped. The routing changes are
+retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass, 20 for the last roots items, 3 for the
+denylist on both names); on Linux 627 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

@@ -515,3 +515,27 @@ describe('3. redactUrls: escaped quotes inside a quoted value', () => {
     }
   });
 });
+
+describe('credential denylist sees both the realpath and the name as given', () => {
+  it('refuses a credential-shaped given name whose realpath looks harmless', async () => {
+    const { assertNoCredentialFiles } = await import('../dist/core/LayerManager.js');
+    assert.throws(
+      () => assertNoCredentialFiles({ files: [{ path: '/ws/config/dev.vars', givenPath: '/ws/.env', type: 'document' }] }),
+      /CREDENTIAL_FILE_REFUSED|credential file pattern/
+    );
+  });
+
+  it('refuses a credential-shaped realpath reached through a harmless name', async () => {
+    const { assertNoCredentialFiles } = await import('../dist/core/LayerManager.js');
+    assert.throws(
+      () => assertNoCredentialFiles({ documents: [{ path: '/ws/.env', givenPath: '/ws/notes.txt', type: 'document' }] }),
+      /credential file pattern/
+    );
+  });
+
+  it('passes when neither name matches', async () => {
+    const { assertNoCredentialFiles } = await import('../dist/core/LayerManager.js');
+    assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: '/ws/a.txt', givenPath: '/ws/b.txt', type: 'document' }] }));
+    assert.doesNotThrow(() => assertNoCredentialFiles({ files: [{ path: '/ws/a.txt', type: 'document' }] }));
+  });
+});

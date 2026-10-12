@@ -70,8 +70,18 @@ const CREDENTIAL_FILE_PATTERNS = [
 export function assertNoCredentialFiles(task: unknown): void {
   for (const file of taskFileRefs(task)) {
     // basename() handles both separators, so no path parsing is needed here.
-    const name = basename(file.path);
-    if (CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(name))) {
+    //
+    // Both names are checked. Since 6262c4b `path` is the realpath the roots
+    // check verified and `givenPath` is the name the caller used; a symlink
+    // can make either one credential-shaped while the other is not
+    // (`.env -> config/dev.vars`, or `notes.txt -> .env`), and a file is
+    // refused when either name matches.
+    const names = [basename(file.path)];
+    if (file.givenPath && basename(file.givenPath) !== names[0]) {
+      names.push(basename(file.givenPath));
+    }
+    const name = names.find(candidate => CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(candidate)));
+    if (name !== undefined) {
       throw new CGMBError(
         `Refusing to process ${name}: it matches a credential file pattern, and the AI Studio ` +
         `layer transmits file contents to Google.`,
