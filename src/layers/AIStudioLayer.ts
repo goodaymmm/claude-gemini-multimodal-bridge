@@ -25,7 +25,7 @@ import {
   MultimodalResult,
 } from '../core/types.js';
 import { AntigravityCLILayer } from './AntigravityCLILayer.js';
-import { taskFileRefs } from '../core/types.js';
+import { firstLineForLog, hostsOf, redactUrls, taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
@@ -33,6 +33,9 @@ import { isPlatformWindows, normalizeCrossPlatformPath } from '../utils/platform
 import pkg from 'wavefile';
 import { describeTtsAudio, hasWavHeader } from '../utils/wavAudio.js';
 const { WaveFile } = pkg;
+
+/** Largest file the AI Studio layer accepts: 50 MB per file (Google's limit). */
+export const AISTUDIO_MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 /**
  * The pdf_mode a task asks for, top-level or in its options, as MCP arguments.
@@ -183,7 +186,7 @@ export class AIStudioLayer implements LayerInterface {
   private readonly DEFAULT_TIMEOUT = 300000; // 5 minutes for file processing (increased to fix timeout issues)
   private readonly MAX_RETRIES = 2;
   private readonly MAX_FILES = 10;
-  private readonly MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB per file (Google official limit)
+  private readonly MAX_FILE_SIZE = AISTUDIO_MAX_FILE_BYTES;
   private readonly SUPPORTED_FILE_TYPES = {
     images: ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.heic', '.heif'],
     documents: ['.pdf', '.txt', '.md', '.doc', '.docx', '.html', '.xml', '.json', '.csv'],
@@ -203,9 +206,6 @@ export class AIStudioLayer implements LayerInterface {
       version: 'v2025-07-03-instance-tracking'
     });
     
-    // GHOST LOG DETECTIVE: Monkey-patch console to catch external library logs
-    this.setupGhostLogDetection();
-    
     this.authVerifier = new AuthVerifier();
     this.antigravityLayer = antigravityLayer;
     
@@ -219,7 +219,6 @@ export class AIStudioLayer implements LayerInterface {
                      process.env.GEMINI_API_KEY ? 'GEMINI_API_KEY' : 
                      process.env.GOOGLE_AI_STUDIO_API_KEY ? 'GOOGLE_AI_STUDIO_API_KEY' : 'unknown'
       });
-      console.trace(`[${this.instanceId}] TRACE: GoogleGenAI instance creation`);
       this.genAI = new GoogleGenAI({ apiKey });
       logger.info(`[${this.instanceId}] GoogleGenAI instance created successfully`, {
         instanceId: this.instanceId,
@@ -423,7 +422,7 @@ export class AIStudioLayer implements LayerInterface {
           case 'generate_image':
             logger.info('🔧 Calling generateImage from execute method', {
               taskType: task.type,
-              prompt: task.prompt || task.text,
+              promptLength: String(task.prompt || task.text || '').length,
               hasOptions: !!task.options
             });
             result = await this.generateImage(task.prompt || task.text, task.options || {});
@@ -624,8 +623,6 @@ export class AIStudioLayer implements LayerInterface {
     }
     
     logger.info('Language detection analysis', {
-      originalPrompt: prompt,
-      corePrompt,
       promptLength: prompt.length,
       corePromptLength: corePrompt.length
     });
@@ -635,7 +632,7 @@ export class AIStudioLayer implements LayerInterface {
     if (detectedLang && detectedLang !== 'en') {
       const languageName = SUPPORTED_LANGUAGES[detectedLang as keyof typeof SUPPORTED_LANGUAGES] || detectedLang;
       logger.info(`Non-English prompt detected (${languageName}), using the Antigravity CLI for translation...`, {
-        originalPrompt: prompt,
+        promptLength: prompt.length,
         detectedLanguage: detectedLang
       });
 
@@ -658,7 +655,7 @@ export class AIStudioLayer implements LayerInterface {
             logger.info('🔧 About to call translateToEnglish method', {
               hasMethod: typeof this.antigravityLayer.translateToEnglish === 'function',
               antigravityLayerType: this.antigravityLayer.constructor.name,
-              corePrompt: corePrompt.substring(0, 50)
+              corePromptLength: corePrompt.length
             });
             
             const translatedCore = await this.antigravityLayer.translateToEnglish(corePrompt, detectedLang);
@@ -675,8 +672,8 @@ export class AIStudioLayer implements LayerInterface {
             };
             
             logger.info('Antigravity CLI translation completed', {
-              originalPrompt: prompt,
-              translatedPrompt: processedPrompt,
+              promptLength: prompt.length,
+              translatedPromptLength: processedPrompt.length,
               language: `${languageName} → English`
             });
           } catch (translationError) {
@@ -684,7 +681,7 @@ export class AIStudioLayer implements LayerInterface {
               error: translationError instanceof Error ? translationError.message : String(translationError),
               originalLanguage: detectedLang,
               languageName,
-              originalPrompt: prompt.substring(0, 100)
+              promptLength: prompt.length
             });
             
             console.log('⚠️ Translation unavailable. Continuing with image generation in the input language.');
@@ -856,7 +853,7 @@ export class AIStudioLayer implements LayerInterface {
 
       // Download the file
       logger.debug('Downloading generated media', {
-        url: downloadUrl.substring(0, 100),
+        host: hostsOf([downloadUrl])[0],
         outputPath,
         mediaType
       });
@@ -892,8 +889,8 @@ export class AIStudioLayer implements LayerInterface {
       
     } catch (error) {
       logger.error('Failed to download generated media', {
-        error: (error as Error).message,
-        downloadUrl: downloadUrl.substring(0, 100),
+        error: redactUrls((error as Error).message),
+        host: hostsOf([downloadUrl])[0],
         mediaType
       });
       throw error;
@@ -1054,31 +1051,6 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
-   * Check if we can use direct API call instead of MCP
-   * REMOVED: Enforcing MCP-only architecture for consistency
-   */
-  private canUseDirectAPI(_params: any): boolean {
-    // Always use MCP server to enforce architectural consistency
-    return false;
-  }
-
-  /**
-   * Execute direct API call for simple operations
-   * DEPRECATED: Direct API bypass removed to enforce MCP-only architecture
-   */
-  private async executeDirectAPI(command: string, params: any): Promise<any> {
-    // Direct API bypass removed to enforce architectural consistency
-    logger.error(`[${this.instanceId}] GHOST LOG DETECTED: Direct API call attempted but should be disabled!`, {
-      instanceId: this.instanceId,
-      command,
-      params,
-      stack: new Error().stack
-    });
-    console.trace(`[${this.instanceId}] GHOST LOG TRACE: Direct API call attempted:`, command);
-    throw new Error(`Direct API integration disabled. All operations must use MCP server for architectural consistency. Command: ${command}`);
-  }
-
-  /**
    * Calculate optimized timeout based on operation complexity
    */
   private calculateOptimizedTimeout(command: string, params: any): number {
@@ -1108,21 +1080,21 @@ export class AIStudioLayer implements LayerInterface {
     // Detect if this is a generation request that should be handled by specific methods
     if (this.isImageGenerationRequest(prompt)) {
       logger.info('Detected image generation request in general processing', {
-        prompt: prompt.substring(0, 100)
+        promptLength: prompt.length
       });
       return await this.generateImage(prompt, task.options || {});
     }
     
     if (this.isVideoGenerationRequest(prompt)) {
       logger.info('Detected video generation request in general processing', {
-        prompt: prompt.substring(0, 100)
+        promptLength: prompt.length
       });
       throw new Error('Video generation is not yet implemented');
     }
     
     if (this.isAudioGenerationRequest(prompt)) {
       logger.info('Detected audio generation request in general processing', {
-        prompt: prompt.substring(0, 100)
+        promptLength: prompt.length
       });
       return await this.generateAudio(prompt, task.options || {});
     }
@@ -1531,11 +1503,6 @@ export class AIStudioLayer implements LayerInterface {
    * Execute MCP command with optimized persistent process
    */
   private async executeMCPCommandOptimized(command: string, params: any): Promise<any> {
-    // For simple commands, try direct API call first
-    if (command === 'multimodal_process' && this.canUseDirectAPI(params)) {
-      return await this.executeDirectAPI(command, params);
-    }
-
     const mcpProcess = await this.getPersistentMCPProcess();
     const timeout = this.calculateOptimizedTimeout(command, params);
     const id = this.nextOptimizedRequestId();
@@ -1776,7 +1743,7 @@ export class AIStudioLayer implements LayerInterface {
           instanceId: this.instanceId,
           command,
           chunkLength: chunk.length,
-          errorContent: chunk.substring(0, 200)
+          errorContent: firstLineForLog(chunk)
         });
       });
 
@@ -1845,7 +1812,7 @@ export class AIStudioLayer implements LayerInterface {
                   logger.warn(`[${this.instanceId}] MCP command returned error output`, {
                     instanceId: this.instanceId,
                     command,
-                    outputPreview: trimmedOutput.substring(0, 200)
+                    outputPreview: firstLineForLog(trimmedOutput)
                   });
                   reject(new Error(`MCP command ${command} failed: ${trimmedOutput.substring(0, 500)}`));
                   return;
@@ -1885,18 +1852,21 @@ export class AIStudioLayer implements LayerInterface {
               // Parse failed - reject instead of silent fallback
               logger.error(`[${this.instanceId}] MCP parsing failed`, {
                 instanceId: this.instanceId,
-                parseError: parseError instanceof Error ? parseError.message : String(parseError),
-                outputPreview: output.substring(0, 200)
+                parseError: parseError instanceof Error ? firstLineForLog(parseError.message) : 'non-Error thrown',
+                outputPreview: firstLineForLog(output)
               });
               reject(new Error(`MCP command ${command} response parsing failed: ${parseError instanceof Error ? parseError.message : String(parseError)}`));
             }
           } else {
             const error = `AI Studio MCP command failed with code ${code}: ${errorOutput}`;
-            logger.error(`[${this.instanceId}] MCP command failed`, { 
+            // First line only, URLs cut to hosts: the server's stderr can
+            // quote the request's URLs and paths. The caller gets it whole.
+            logger.error(`[${this.instanceId}] MCP command failed`, {
               instanceId: this.instanceId,
-              command, 
-              code, 
-              error: errorOutput 
+              command,
+              code,
+              error: firstLineForLog(errorOutput),
+              stderrLength: errorOutput.length
             });
             reject(new Error(error));
           }
@@ -1975,54 +1945,6 @@ export class AIStudioLayer implements LayerInterface {
     
     // Google AI Studio API keys typically start with "AI" and are 39+ characters
     return apiKey.length >= 20 && apiKey.startsWith('AI');
-  }
-
-  /**
-   * Setup ghost log detection to catch external library logs
-   * This helps identify where "direct API integration" logs are coming from
-   */
-  private setupGhostLogDetection(): void {
-    const originalConsoleDebug = console.debug;
-    const originalConsoleLog = console.log;
-
-    // Monkey-patch console methods to detect library logs
-    console.debug = (...args: any[]) => {
-      const message = args.join(' ');
-      if (message.includes('direct') || message.includes('API') || message.includes('integration') || 
-          message.includes('precedence') || message.includes('Vertex')) {
-        logger.error(`[${this.instanceId}] GHOST LOG DETECTED - console.debug:`, {
-          instanceId: this.instanceId,
-          message,
-          stack: new Error().stack,
-          source: '@google/genai or external library'
-        });
-        console.trace(`[${this.instanceId}] GHOST LOG TRACE - console.debug:`, message);
-      }
-      originalConsoleDebug.apply(console, args);
-    };
-
-    console.log = (...args: any[]) => {
-      const message = args.join(' ');
-      if (message.includes('direct') || message.includes('API') || message.includes('integration') ||
-          message.includes('AI Studio') || message.includes('using')) {
-        logger.error(`[${this.instanceId}] GHOST LOG DETECTED - console.log:`, {
-          instanceId: this.instanceId,
-          message,
-          stack: new Error().stack,
-          source: 'External library or unknown'
-        });
-        console.trace(`[${this.instanceId}] GHOST LOG TRACE - console.log:`, message);
-      }
-      originalConsoleLog.apply(console, args);
-    };
-
-    logger.info(`[${this.instanceId}] Ghost log detection active - monitoring console methods`, {
-      instanceId: this.instanceId,
-      // Only these two are patched. warn and info were saved but never wrapped,
-      // so listing them here claimed coverage that did not exist.
-      monitoredMethods: ['console.debug', 'console.log'],
-      purpose: 'Detect external library logs about direct API integration'
-    });
   }
 
   /**

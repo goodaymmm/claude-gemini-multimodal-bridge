@@ -1458,22 +1458,33 @@ To retrieve this file, use:
   }
 }
 
-// CLI execution - Windows compatible path comparison
-// On Windows: import.meta.url = 'file:///M:/path/...' but process.argv[1] = 'M:\path\...'
-function isMainModule(): boolean {
+/**
+ * Whether this file is the script node was started with.
+ *
+ * True only when process.argv[1] and this module resolve (through symlinks)
+ * to the same file; anything that cannot be decided is false. It used to
+ * answer true when argv[1] was missing or a path could not be read, so
+ * importing this module from `node -e`, a REPL or stdin started a stdio MCP
+ * server inside the importing process, on its stdin and stdout.
+ *
+ * Windows compares case-insensitively: import.meta.url gives
+ * file:///M:/path/... while argv[1] may be m:\path\....
+ */
+export function isMainModule(
+  moduleUrl: string = import.meta.url,
+  executed: string | undefined = process.argv[1],
+): boolean {
+  if (!executed) {
+    return false;
+  }
   try {
-    const currentFile = fileURLToPath(import.meta.url);
-    const executedFile = process.argv[1];
-    if (!executedFile) {
-      return true; // Fallback: assume main module
-    }
-    // Normalize both paths for cross-platform comparison
-    const normalizedCurrent = currentFile.replace(/\\/g, '/').toLowerCase();
-    const normalizedExecuted = executedFile.replace(/\\/g, '/').toLowerCase();
-    return normalizedCurrent === normalizedExecuted;
+    const self = fs.realpathSync(fileURLToPath(moduleUrl));
+    const started = fs.realpathSync(path.resolve(executed));
+    return process.platform === 'win32'
+      ? self.toLowerCase() === started.toLowerCase()
+      : self === started;
   } catch {
-    // Fallback: assume main module if we can't determine
-    return true;
+    return false;
   }
 }
 

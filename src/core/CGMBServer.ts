@@ -34,29 +34,17 @@ import { Config, ConfigSchema } from './types.js';
 import { isOneOf } from './types.js';
 import { LegacyCGMBRequestSchema, ProcessingOptionsSchema } from './types.js';
 import { extractResultText, pickFinalResultText } from '../utils/workflowUtils.js';
-import { LayerResult, LayerType } from './types.js';
-import { AI_MODELS } from './types.js';
+import { LayerType } from './types.js';
+import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL } from './types.js';
+import { describeToolArgs, firstLineForLog, hostsOf, preformattedPrompt, redactUrls } from './types.js';
+import type { GeminiFormat } from './types.js';
 import { PDF_MODES } from '../utils/pdfText.js';
+import { AISTUDIO_MAX_FILE_BYTES } from '../layers/AIStudioLayer.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
 const packageJson = require('../../package.json') as { version: string };
 const VERSION = packageJson.version;
-
-/**
- * The distinct hosts of some URLs, for log lines. A URL's path and query can
- * carry tokens or personal data, and logger metadata goes to the console and
- * LOG_FILE unredacted, so URLs are never logged whole.
- */
-function hostsOf(urls: readonly string[]): string[] {
-  return [...new Set(urls.map(u => {
-    try {
-      return new URL(u).host;
-    } catch {
-      return '(not a URL)';
-    }
-  }))];
-}
 
 /** options.pdf_mode, as the three tools that take files describe it. */
 const PDF_MODE_OPTION = {
@@ -258,20 +246,15 @@ export class CGMBServer {
                 },
                 formattedData: {
                   type: 'object',
-                  description: 'Pre-formatted data for layers (when preformatted=true)',
+                  description: 'Pre-formatted data (used when preformatted=true and targetLayer is "antigravity"; ' +
+                    'with any other targetLayer the request is routed to that layer as usual)',
                   properties: {
                     geminiFormat: {
                       type: 'object',
+                      description: 'Sent to the Antigravity CLI as is',
                       properties: {
-                        prompt: { type: 'string' },
-                        args: { type: 'array', items: { type: 'string' } }
-                      }
-                    },
-                    aistudioFormat: {
-                      type: 'object',
-                      properties: {
-                        apiData: { type: 'object' },
-                        files: { type: 'array', items: { type: 'string' } }
+                        prompt: { type: 'string', description: 'Prompt text (defaults to the top-level prompt)' },
+                        args: { type: 'array', items: { type: 'string' }, description: 'Extra CLI arguments' }
                       }
                     }
                   }
@@ -458,7 +441,13 @@ export class CGMBServer {
       const { name, arguments: args } = request.params;
 
       try {
-        logger.info(`Tool called: ${name}`, { args });
+        // Shape only: prompts and arguments can carry signed-URL tokens or
+        // pasted secrets, and this line goes to stderr and LOG_FILE.
+        logger.info(`Tool called: ${name}`, describeToolArgs(args));
+        // The full text only at debug level (CGMB_DEBUG / LOG_LEVEL=debug),
+        // and even there URLs keep only their host: query strings are where
+        // signed-URL tokens live.
+        logger.debug(`Tool call arguments: ${name}`, { args: redactUrls(JSON.stringify(args ?? {})) });
 
         let result: CallToolResult;
 
@@ -495,9 +484,15 @@ export class CGMBServer {
 
         return result;
       } catch (error) {
-        logger.error(`Tool failed: ${name}`, error as Error);
-        
         const errorMessage = error instanceof Error ? error.message : String(error);
+        // Error messages can quote child-process output or a full URL; the
+        // caller gets the message, the log gets its first line with URLs cut
+        // to hosts.
+        logger.error(`Tool failed: ${name}`, { error: firstLineForLog(errorMessage) });
+        if (error instanceof Error && error.stack) {
+          logger.debug(`Tool failure stack: ${name}`, { stack: redactUrls(error.stack) });
+        }
+        
         return {
           content: [
             {
@@ -515,23 +510,28 @@ export class CGMBServer {
    * Handle get layer requirements request
    */
   private async handleGetLayerRequirements(): Promise<CallToolResult> {
+    // Model IDs are interpolated from the constants the layers actually send,
+    // so this description cannot drift from them again. It used to advertise
+    // Imagen 3 and Veo 2 -- neither is called, and video generation throws.
     const requirements = {
+      // Keyed `gemini` for older clients; the target is `antigravity`
+      // (`gemini` is its deprecated alias).
       gemini: {
-        format: 'Text prompts via stdin with optional command-line arguments',
+        format: 'Text prompt, sent to the Antigravity CLI (targetLayer "antigravity"; "gemini" is a deprecated alias)',
         requirements: [
           'Text-based prompts for search and analysis',
           'Web search queries for current information',
           'No file upload capability - text only'
         ],
         capabilities: [
-          'Real-time web search',
+          'Real-time web search with grounding',
           'Current information retrieval',
-          'Fast text processing',
-          'Natural language understanding'
+          'Reading web pages given by URL',
+          `Model: ${DEFAULT_ANTIGRAVITY_MODEL} by default (ANTIGRAVITY_MODEL overrides; see \`agy models\`)`
         ],
         example: {
-          stdin: 'What are the latest AI trends in 2024?',
-          args: []
+          prompt: 'What changed in the latest Node.js release?',
+          targetLayer: 'antigravity'
         },
         limitations: [
           'No direct file processing',
@@ -540,34 +540,28 @@ export class CGMBServer {
         ]
       },
       aistudio: {
-        format: 'JSON API format with base64-encoded files',
+        format: 'Prompt plus local file paths (files[]) or PDF URLs; CGMB reads and uploads the files itself',
         requirements: [
-          'Multimodal files (images, PDFs, documents)',
-          'Generation tasks (images, audio, video)',
-          'Complex document analysis'
+          'Multimodal files (images, PDFs, audio, documents)',
+          'Generation tasks (images, speech)',
+          'Document analysis'
         ],
         capabilities: [
-          'Image generation with Imagen 3',
-          'Video generation with Veo 2',
-          'Document processing (PDF, DOCX, etc.)',
-          'Multimodal analysis',
-          'File format conversion'
+          `Image generation (${AI_MODELS.IMAGE_GENERATION})`,
+          `Speech generation, text to WAV (${AI_MODELS.AUDIO_GENERATION})`,
+          `Image and multimodal analysis (${AI_MODELS.MULTIMODAL_ANALYSIS})`,
+          `PDF and document analysis, including PDF URLs and scanned PDFs (${AI_MODELS.DOCUMENT_PROCESSING})`
         ],
         example: {
-          apiData: {
-            prompt: 'Analyze this document and extract key points',
-            model: AI_MODELS.MULTIMODAL_ANALYSIS,
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 16384
-            }
-          },
-          files: ['base64_encoded_file_content...']
+          prompt: 'Analyze this document and extract key points',
+          files: [{ path: 'report.pdf', type: 'pdf' }],
+          targetLayer: 'aistudio'
         },
         limitations: [
-          'File size limits (100MB total)',
-          'API quota restrictions',
-          'Processing time for large files'
+          'Video generation is not implemented',
+          `Files up to ${AISTUDIO_MAX_FILE_BYTES / 1024 / 1024} MB each`,
+          'Requires AI_STUDIO_API_KEY; subject to the API quota of that key',
+          'Processing time grows with file size'
         ]
       },
       claude: {
@@ -627,23 +621,31 @@ export class CGMBServer {
   private async handleCGMBUnified(args: unknown): Promise<CallToolResult> {
     return safeExecute(
       async () => {
-        logger.info('CGMB unified handler starting', { 
-          args: typeof args === 'object' ? JSON.stringify(args).substring(0, 200) : args 
-        });
+        // The arguments themselves were logged by the tool dispatcher, as a
+        // shape (keys, lengths, hosts); never their text.
+        logger.debug('CGMB unified handler starting');
 
         // Parse enhanced request
         const request = this.parseEnhancedRequest(args);
         
-        // Check if data is preformatted by Claude Code
-        if (request.preformatted && request.formattedData) {
-          logger.info('Using preformatted data from Claude Code', {
-            targetLayer: request.targetLayer,
-            hasGeminiFormat: !!request.formattedData.geminiFormat,
-            hasAistudioFormat: !!request.formattedData.aistudioFormat
+        // Preformatted data is a shortcut for one case only: a geminiFormat
+        // payload for the Antigravity CLI. Every other combination -- another
+        // targetLayer, adaptive, or the never-implemented aistudioFormat --
+        // goes down the normal path below, which validates the input and then
+        // honours targetLayer. (Before, those combinations skipped validation
+        // and path resolution entirely.)
+        if (request.formattedData?.aistudioFormat) {
+          logger.warn('formattedData.aistudioFormat is deprecated and ignored; routing this request normally', {
+            hint: 'Send the request without formattedData to use the AI Studio layer.',
           });
-          
-          // Direct routing with preformatted data
-          const result = await this.processPreformattedRequest(request);
+        }
+        const geminiFormat = request.formattedData?.geminiFormat;
+        if (request.preformatted && geminiFormat
+            && normalizeLayerName(request.targetLayer ?? 'adaptive') === 'antigravity') {
+          logger.info('Using preformatted data for the Antigravity layer', {
+            argCount: geminiFormat.args?.length ?? 0,
+          });
+          const result = await this.processPreformattedRequest(request.prompt, geminiFormat);
           return this.formatResponse(result, true);
         }
 
@@ -796,6 +798,19 @@ export class CGMBServer {
       return enhanced.data;
     }
 
+    // A request that names a layer or carries preformatted data is not a
+    // legacy request. Falling back for it dropped targetLayer without a word
+    // and answered from whichever layer the router picked, so say what is
+    // wrong instead.
+    const source = (args && typeof args === 'object') ? args as Record<string, unknown> : {};
+    const routingKeys = ['targetLayer', 'preformatted', 'formattedData'].filter(key => source[key] !== undefined);
+    if (routingKeys.length > 0) {
+      throw new CGMBError(
+        `Invalid CGMB request (${routingKeys.join(', ')} given): ${enhanced.error.message}`,
+        'INVALID_REQUEST'
+      );
+    }
+
     // Fall back to the older request shape -- but still validate it.
     //
     // This used to cast to `any` and read the fields off directly, so anything
@@ -823,92 +838,36 @@ export class CGMBServer {
     };
   }
 
-  /** Present a single layer result in the shape callers of this path expect. */
-  private toWorkflowResult(result: LayerResult, layer: LayerType): WorkflowResult {
+  /**
+   * Run a preformatted geminiFormat payload on the Antigravity layer.
+   *
+   * Only reached with targetLayer antigravity (or its deprecated spelling
+   * gemini); handleCGMBUnified sends every other preformatted request down the
+   * normal, validated path.
+   */
+  private async processPreformattedRequest(prompt: string, format: GeminiFormat): Promise<WorkflowResult> {
+    const antigravity = await this.layerManager.getAntigravityLayerAsync();
+    const result = await antigravity.execute({
+      type: 'text_processing',
+      prompt: preformattedPrompt(format, prompt),
+      files: [],
+      useSearch: true,
+      args: format.args ?? [],
+    });
+
     return {
       success: result.success,
       results: [result],
       metadata: {
         workflow: 'analysis',
         execution_mode: 'direct',
-        total_duration: result.metadata?.duration ?? 0,
+        total_duration: result.metadata?.duration || 0,
         steps_completed: result.success ? 1 : 0,
         steps_failed: result.success ? 0 : 1,
-        layers_used: [layer],
-        optimization: 'direct-target',
-      },
+        layers_used: ['antigravity'],
+        optimization: 'preformatted-direct'
+      }
     };
-  }
-
-  /**
-   * Process preformatted request from Claude Code
-   */
-  private async processPreformattedRequest(request: EnhancedCGMBRequest): Promise<WorkflowResult> {
-    // Accept the deprecated 'gemini' spelling from older clients.
-    const targetLayer = normalizeLayerName(request.targetLayer ?? 'adaptive');
-
-    if (targetLayer === 'antigravity' && request.formattedData?.geminiFormat) {
-      // Direct execution on the Antigravity layer (with async initialization)
-      logger.info('Executing preformatted request on Antigravity layer');
-      const geminiLayerPreformatted = await this.layerManager.getAntigravityLayerAsync();
-      const result = await geminiLayerPreformatted.execute({
-        type: 'text_processing',
-        prompt: request.formattedData.geminiFormat.stdin,
-        files: [],
-        useSearch: true,
-        args: request.formattedData.geminiFormat.args
-      });
-      
-      return {
-        success: result.success,
-        results: [result],
-        metadata: {
-          workflow: 'analysis',
-          execution_mode: 'direct',
-          total_duration: result.metadata?.duration || 0,
-          steps_completed: 1,
-          steps_failed: 0,
-          layers_used: ['antigravity'],
-          optimization: 'preformatted-direct'
-        }
-      };
-    }
-    
-    if (targetLayer === 'aistudio' && request.formattedData?.aistudioFormat) {
-      // Preformatted AI Studio payloads are not implemented. Saying so beats
-      // dropping through to adaptive routing, which answers from a different
-      // layer and gives the caller no reason to suspect their formatting was
-      // ignored.
-      logger.warn('Preformatted AI Studio payloads are not supported; routing this request normally', {
-        hint: 'Send the request without preformatted/formattedData to use the AI Studio layer.',
-      });
-    }
-
-    // Any other explicit target still goes to that layer -- just without the
-    // preformatted shortcut.
-    if (targetLayer !== 'adaptive') {
-      logger.info('No preformatted payload for the requested layer; executing it directly', {
-        layer: targetLayer,
-      });
-
-      return this.toWorkflowResult(
-        await this.layerManager.executeWithLayer(targetLayer as LayerType, {
-          type: 'text_processing',
-          prompt: request.prompt,
-          files: request.files ?? [],
-          options: request.options ?? {},
-        }),
-        targetLayer as LayerType
-      );
-    }
-
-    // Fallback to adaptive routing
-    return this.layerManager.processMultimodal(
-      request.prompt,
-      request.files ?? [],
-      'analysis',
-      request.options
-    );
   }
 
   /**

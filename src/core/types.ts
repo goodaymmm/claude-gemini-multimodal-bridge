@@ -484,18 +484,39 @@ export const LayerRequirementsSchema = z.object({
 });
 export type LayerRequirements = z.infer<typeof LayerRequirementsSchema>;
 
-// Formatted data for each layer
+/**
+ * Preformatted data for a layer (`formattedData` on the cgmb tool).
+ *
+ * This must accept exactly what the cgmb tool's JSON schema advertises,
+ * `geminiFormat: { prompt, args }`. It used to require `stdin` instead, so a
+ * call shaped per the schema failed here, fell back to the legacy request
+ * shape and lost its targetLayer without a word. `stdin` is still read as a
+ * deprecated spelling of `prompt`; with neither, the request's own prompt is
+ * used. See preformattedPrompt().
+ */
+export const GeminiFormatSchema = z.object({
+  prompt: z.string().optional(),
+  /** @deprecated Older spelling of `prompt`. */
+  stdin: z.string().optional(),
+  args: z.array(z.string()).optional(),
+});
+export type GeminiFormat = z.infer<typeof GeminiFormatSchema>;
+
 export const FormattedLayerDataSchema = z.object({
-  geminiFormat: z.object({
-    stdin: z.string(),
-    args: z.array(z.string())
-  }).optional(),
-  aistudioFormat: z.object({
-    apiData: z.record(z.string(), z.any()),
-    files: z.array(z.string()) // base64 encoded
-  }).optional()
+  geminiFormat: GeminiFormatSchema.optional(),
+  /**
+   * @deprecated Never implemented, and no longer in the tool's JSON schema.
+   * Still accepted (in any shape) so older callers are not refused; a request
+   * carrying it is routed normally, with a warning.
+   */
+  aistudioFormat: z.record(z.string(), z.unknown()).optional(),
 });
 export type FormattedLayerData = z.infer<typeof FormattedLayerDataSchema>;
+
+/** The prompt a preformatted geminiFormat carries, falling back to the request's. */
+export function preformattedPrompt(format: GeminiFormat, fallback: string): string {
+  return format.prompt ?? format.stdin ?? fallback;
+}
 
 // Enhanced CGMB request with preformatting support
 export const EnhancedCGMBRequestSchema = z.object({
@@ -921,8 +942,6 @@ export const AI_MODELS = {
   // (retiring 2027-03-15). About $0.034 per image; output is limited to 1K
   // resolution, aspectRatio options unchanged.
   IMAGE_GENERATION: 'gemini-3.1-flash-lite-image',
-  // GA, higher-quality image generation.
-  IMAGE_GENERATION_PRO: 'gemini-3-pro-image',
 
   // Audio generation. gemini-3.1-flash-tts-preview is now a legacy preview;
   // Google points migrations here. Unlike earlier TTS models, a unary
@@ -932,10 +951,6 @@ export const AI_MODELS = {
 
   // General purpose models
   GEMINI_FLASH: 'gemini-3.5-flash-lite',
-  GEMINI_FLASH_3: 'gemini-3-flash-preview',
-  // gemini-3-pro-preview was shut down on 2026-03-09 and is now only an alias
-  // for this ID; name the real model.
-  GEMINI_FLASH_3_PRO: 'gemini-3.1-pro-preview',
 
   // Document processing; 1M-token context.
   DOCUMENT_PROCESSING: 'gemini-3.5-flash-lite',
@@ -1020,3 +1035,94 @@ export const DEFAULT_ANTIGRAVITY_MODEL: AntigravityModelName = 'gemini-3.6-flash
  * which would reject them.
  */
 export const RETIRED_GEMINI_CLI_MODEL_PATTERN = /^gemini-(1\.|2\.|pro|3-flash|3-pro)/i;
+
+// ===================================
+// Log hygiene
+// ===================================
+//
+// Logger metadata goes to stderr (Claude Code's MCP log) and to LOG_FILE
+// unredacted. Prompts, tool arguments and child-process output can carry
+// signed-URL tokens, pasted secrets or personal data, so log lines describe
+// them -- keys, lengths, counts, hosts -- instead of copying them.
+
+/** A URL anywhere in free text: a scheme, `://`, then everything up to a space or quote. */
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`]+/gi;
+
+/**
+ * The distinct hosts of some URLs, for log lines. A URL's path and query can
+ * carry tokens or personal data, so URLs are never logged whole.
+ */
+export function hostsOf(urls: readonly string[]): string[] {
+  return [...new Set(urls.map(u => {
+    try {
+      return new URL(u).host;
+    } catch {
+      return '(not a URL)';
+    }
+  }))];
+}
+
+/** Every URL in `text`, in order. */
+export function urlsIn(text: string): string[] {
+  return text.match(URL_IN_TEXT) ?? [];
+}
+
+/** `text` with every URL cut down to its scheme and host. */
+export function redactUrls(text: string): string {
+  return text.replace(URL_IN_TEXT, url => {
+    try {
+      const parsed = new URL(url);
+      return parsed.host ? `${parsed.protocol}//${parsed.host}/…` : `${parsed.protocol}//…`;
+    } catch {
+      return '(url)';
+    }
+  });
+}
+
+/**
+ * One line of child-process output fit for a log: the first non-empty line,
+ * URLs reduced to hosts, at most `max` characters. Redaction runs before the
+ * cut, so a truncated URL cannot leave half a token behind.
+ */
+export function firstLineForLog(text: string, max = 200): string {
+  const line = text.split(/\r?\n/).map(l => l.trim()).find(l => l.length > 0) ?? '';
+  const safe = redactUrls(line);
+  return safe.length > max ? `${safe.slice(0, max)}…` : safe;
+}
+
+/**
+ * What an MCP tool call's arguments look like, without their contents: the
+ * argument keys, the prompt's length, how many files, and the hosts of any
+ * URLs anywhere in them.
+ */
+export function describeToolArgs(args: unknown): Record<string, unknown> {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) {
+    return { argsType: Array.isArray(args) ? 'array' : typeof args };
+  }
+  const source = args as Record<string, unknown>;
+  const summary: Record<string, unknown> = { argKeys: Object.keys(source) };
+
+  if (typeof source.prompt === 'string') {
+    summary.promptLength = source.prompt.length;
+  }
+  const counted = ['files', 'documents'].filter(key => Array.isArray(source[key]));
+  if (counted.length > 0) {
+    summary.fileCount = counted.reduce((n, key) => n + (source[key] as unknown[]).length, 0);
+  }
+  if (typeof source.targetLayer === 'string' && TargetLayerSchema.safeParse(source.targetLayer).success) {
+    summary.targetLayer = source.targetLayer;
+  }
+
+  let serialised = '';
+  try {
+    serialised = JSON.stringify(source) ?? '';
+  } catch {
+    // A cycle or a BigInt; there is nothing to scan.
+  }
+  const urls = urlsIn(serialised);
+  if (urls.length > 0) {
+    summary.urlCount = urls.length;
+    summary.urlHosts = hostsOf(urls);
+  }
+  return summary;
+}
