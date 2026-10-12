@@ -962,6 +962,11 @@ dependencies to new major versions. 1.2.3 was never published.
   - code-file routing to Claude headed each inlined file, and named a binary
     file in its "not a text file" error, by its realpath; both now use the path
     as given, so a symlink does not reveal its target
+  - with the realpath handed on, the credential-name check saw only the
+    target's name, so `.env -> config/dev.vars` inside the allowed directories
+    was no longer refused. It now checks both the path as given and the
+    realpath, and refuses when either is credential-shaped. A URL reference
+    carries only its path and type; extra keys a caller sends are dropped
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
