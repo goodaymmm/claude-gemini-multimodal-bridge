@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 583 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 605 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -917,12 +917,35 @@ dependencies to new major versions. 1.2.3 was never published.
     `@s1.__proto__.constructor` handed a step a function from the runtime.
     Only a step output's own properties are followed; anything else resolves
     to the "step missing" marker
+  - the main `cgmb` tool still looked a file up before the allowed-directories
+    check, and its messages named the resolved path and the working directory.
+    It now runs the same check first and gives the sub-server's "File is not
+    readable: <path as given>" to every path outside, existing or not. "Not
+    found", "not a file" and "permission denied" are reported only inside (the
+    last two reached the caller as "Invalid file path" before), and no message
+    names the resolved path or the working directory. A path mentioned in the
+    prompt that is outside the allowed directories is not attached
+  - through a symlink inside an allowed directory that points outside, an
+    existing file was refused while a missing one was reported missing. A path
+    that does not resolve is now judged by the part of it that exists: when its
+    nearest existing ancestor, or a link on the way, leads outside, it gets the
+    same refusal, as does a dangling link or a symlink loop that starts
+    outside. A path that really is inside still reports "not found" or its
+    error code (`ELOOP`)
+  - code-file routing to Claude resolved each file twice; the file read is now
+    the one that was checked and sized
+  - log redaction now also cuts the value after `Authorization: Basic` /
+    `Proxy-Authorization: Basic`, a quoted `"key"`, `"secret"`, `"password"`,
+    `"passwd"`, `"client_secret"`, `"access_token"` or `"refresh_token"`, and
+    `password=`, `passwd=`, `client_secret=` or `secret=`; `"keyboard": "us"`,
+    `secretary`, `password policy: 12 chars` and "basic auth is disabled" are
+    left alone
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
 `resolveWindowsCommand` alias and the three `AI_MODELS` keys above are removed.
 `gemini-3-pro-image`, listed until now as the high-quality image model, is no
-longer listed: no code path ever selected it. Tests: 179 → 583 (7 for the WAV
+longer listed: no code path ever selected it. Tests: 179 → 605 (7 for the WAV
 helper, 1 for the schema default, 2 for the model table, 8 for the Antigravity
 probe and environment, 3 for the API-key sign-in, 10 for the dependency moves,
 24 for the PDF mode, 106 for routing, 81 for the PDF URL address rules, 5 for
@@ -930,7 +953,7 @@ the published file list, 25 for workflow validation and synthesis inputs, 17
 for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 `.env` message, 3 for the CI check, 1 for the Node.js check, 2 for the console
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
-retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening); on Linux 582 pass and 1 is skipped. The routing changes are
+retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass); on Linux 604 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

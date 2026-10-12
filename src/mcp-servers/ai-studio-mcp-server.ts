@@ -24,7 +24,7 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
-import { AI_MODELS, type AllowedRoots, checkAgainstRoots, resolveAllowedRoots } from '../core/types.js';
+import { AI_MODELS, type AllowedRoots, checkAgainstRoots, notReadableMessage, resolveAllowedRoots } from '../core/types.js';
 import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import { describeTtsAudio } from '../utils/wavAudio.js';
 import pkg from 'wavefile';
@@ -64,19 +64,12 @@ const ALLOWED_ROOTS: AllowedRoots = resolveAllowedRoots(entry => {
 });
 
 /**
- * The one refusal for a path outside the allowed directories.
- *
- * It names the path as the caller gave it -- never its realpath -- and is the
- * same whether or not anything exists there, so it cannot be used to probe the
- * filesystem outside the roots.
+ * The one refusal for a path outside the allowed directories (wording shared
+ * with the main server: notReadableMessage). It names the path as the caller
+ * gave it and is the same whether or not anything exists there.
  */
 function notReadable(filePath: string): McpError {
-  return new McpError(
-    ErrorCode.InvalidRequest,
-    `File is not readable: ${filePath}. It is outside every allowed directory: file contents are ` +
-    `uploaded, so this server only reads from the directory it was started in. Set CGMB_ALLOWED_ROOTS ` +
-    `to add others, delimiter-separated with "${path.delimiter}".`
-  );
+  return new McpError(ErrorCode.InvalidRequest, notReadableMessage(filePath));
 }
 
 /**

@@ -37,6 +37,7 @@ import { extractResultText, pickFinalResultText } from '../utils/workflowUtils.j
 import { LayerType } from './types.js';
 import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL } from './types.js';
 import { describeToolArgs, errorForLog, firstLineForLog, hostsOf, preformattedPrompt, redactUrls } from './types.js';
+import { allowedRoots, checkAgainstRoots, notReadableMessage } from './types.js';
 import type { GeminiFormat } from './types.js';
 import { PDF_MODES } from '../utils/pdfText.js';
 import { AISTUDIO_MAX_FILE_BYTES } from '../layers/AIStudioLayer.js';
@@ -54,6 +55,13 @@ const PDF_MODE_OPTION = {
     'extracted locally when the PDF has a text layer, upload the file for Gemini to OCR when it does not. ' +
     '"local": always send the extracted text. "upload": always upload the file.',
 };
+
+/**
+ * A file the caller named that cannot be used, with the message that says why
+ * in the caller's own terms. Passed through as it is; any other error while
+ * checking a path becomes "Invalid file path".
+ */
+class FileCheckError extends Error {}
 
 // ===================================
 // claude-gemini-multimodal-bridge Server
@@ -973,50 +981,55 @@ export class CGMBServer {
             });
           }
           
-          // Check file existence and permissions
-          if (fsSync.existsSync(resolvedPath)) {
-            const stats = fsSync.statSync(resolvedPath);
-            if (stats.isFile()) {
-              try {
-                fsSync.accessSync(resolvedPath, fsSync.constants.R_OK);
-                // File is accessible, add resolved path
-                resolvedFiles.push(typeof file === 'string' 
-                  ? { path: resolvedPath, type: 'document' }
-                  : { ...file, path: resolvedPath, type: file.type || 'document' });
-              } catch (permError) {
-                // The path as given only: its resolved form says more about
-                // the filesystem than the caller told us.
-                logger.warn('File permission denied', { path: firstLineForLog(filePath) });
-                throw new Error(`Permission denied: ${filePath}
-Resolved to: ${resolvedPath}
-File exists but cannot be read.
+          // The roots check first, on the path as given (resolved lexically,
+          // not through links): nothing outside the allowed directories is
+          // looked at, and every path outside them -- existing or not --
+          // gets the one refusal the AI Studio sub-server gives, naming the
+          // path as the caller wrote it. Only inside the roots does a caller
+          // learn whether a file is missing, not a file, or unreadable; no
+          // message names the resolved path or the working directory.
+          const verdict = checkAgainstRoots(resolvedPath, allowedRoots());
+          switch (verdict.kind) {
+            case 'outside':
+              logger.warn('File is outside the allowed directories', { path: firstLineForLog(filePath) });
+              throw new FileCheckError(notReadableMessage(filePath));
+            case 'missing':
+              logger.warn('File not found', { path: firstLineForLog(filePath) });
+              throw new FileCheckError(`File not found: ${filePath}
 
-Fix: chmod +r "${resolvedPath}"`);
-              }
-            } else {
-              logger.warn('Path is not a file', { path: firstLineForLog(filePath) });
-              throw new Error(`Not a file: ${filePath}
-Resolved to: ${resolvedPath}
+Solutions:
+1. Check the file exists, and the spelling of its name
+2. Use a relative path ("./filename.pdf") from the working directory, or set workingDirectory
+3. Use an absolute path ("/full/path/to/file.pdf")`);
+            case 'error':
+              logger.warn('File path could not be resolved', { path: firstLineForLog(filePath), code: verdict.code });
+              throw new FileCheckError(`Cannot resolve ${filePath}: ${verdict.code}`);
+            default:
+              break;
+          }
+
+          const stats = fsSync.statSync(verdict.resolved);
+          if (!stats.isFile()) {
+            logger.warn('Path is not a file', { path: firstLineForLog(filePath) });
+            throw new FileCheckError(`Not a file: ${filePath}
 This path points to a directory or special file.
 
 Use a specific file path instead.`);
-            }
-          } else {
-            logger.warn('File not found', { path: firstLineForLog(filePath) });
-            throw new Error(`File not found: ${filePath}
-Resolved path: ${resolvedPath}
-Working directory: ${workingDirectory || 'not provided'}
-Current directory: ${process.cwd()}
-
-Solutions:
-1. Check file exists: ls -la "${resolvedPath}"
-2. Use relative path: "./filename.pdf" (from current dir)
-3. Use absolute path: "/full/path/to/file.pdf"
-4. Verify working directory matches file location`);
           }
+          try {
+            fsSync.accessSync(verdict.resolved, fsSync.constants.R_OK);
+          } catch {
+            logger.warn('File permission denied', { path: firstLineForLog(filePath) });
+            throw new FileCheckError(`Permission denied: ${filePath}
+File exists but cannot be read.`);
+          }
+          // File is accessible, add resolved path
+          resolvedFiles.push(typeof file === 'string'
+            ? { path: resolvedPath, type: 'document' }
+            : { ...file, path: resolvedPath, type: file.type || 'document' });
         } catch (error) {
-          if (error instanceof Error && error.message.includes('not found')) {
-            throw error; // Re-throw file not found errors with context
+          if (error instanceof FileCheckError) {
+            throw error; // Already says what is wrong, in the caller's terms
           }
           // logger.warn takes a metadata bag, not an Error. Passing the Error
           // straight in logged an object with no enumerable keys -- the message
@@ -1068,10 +1081,13 @@ Solutions:
               ? normalizedPath
               : path.resolve(baseDir, normalizedPath);
 
-            // Check file existence
-            if (fsSync.existsSync(resolvedPath)) {
-              const stats = fsSync.statSync(resolvedPath);
-              if (stats.isFile()) {
+            // The roots check first, as for `files`: a path in the prompt
+            // that is outside the allowed directories is not attached, and is
+            // not looked at either, so what the log and the route say does
+            // not depend on whether it exists.
+            const verdict = checkAgainstRoots(resolvedPath, allowedRoots());
+            if (verdict.kind === 'inside') {
+              if (fsSync.statSync(verdict.resolved).isFile()) {
                 const detectedType = this.layerManager.detectFileType(resolvedPath);
                 resolvedFiles.push({ path: resolvedPath, type: detectedType });
                 logger.info('File path extracted from prompt', {
@@ -1080,9 +1096,14 @@ Solutions:
                   type: detectedType
                 });
               }
+            } else if (verdict.kind === 'outside') {
+              logger.warn('File path in prompt is outside the allowed directories; not attached', {
+                path: firstLineForLog(detectedPath),
+              });
             } else {
               logger.warn('File path in prompt does not exist', {
                 path: firstLineForLog(detectedPath),
+                ...(verdict.kind === 'error' ? { code: verdict.code } : {}),
               });
             }
           } catch (error) {

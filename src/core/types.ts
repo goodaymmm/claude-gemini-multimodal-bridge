@@ -1,5 +1,5 @@
-import { lstatSync, realpathSync } from 'fs';
-import { delimiter, isAbsolute, relative, resolve as resolvePath } from 'path';
+import { lstatSync, readlinkSync, realpathSync } from 'fs';
+import { delimiter, dirname, isAbsolute, relative, resolve as resolvePath } from 'path';
 import { z } from 'zod';
 import { PDF_MODES } from '../utils/pdfText.js';
 
@@ -1091,16 +1091,28 @@ const REDACTABLE_IN_TEXT = new RegExp(
 /**
  * A credential after its label, as a header or a `key=value` pair carries it:
  * `Authorization: Bearer <token>`, `Bearer <token>`, `api_key=<value>`,
- * `token: <value>`. The label (and any quote or separator) is kept; the value
- * becomes `…`.
+ * `token: <value>`, `Authorization: Basic <value>` (and
+ * `Proxy-Authorization`), a quoted JSON or dict key -- `"key"`, `"secret"`,
+ * `"password"`, `"passwd"`, `"client_secret"`, `"access_token"`,
+ * `"refresh_token"` -- followed by a quoted value (also inside a JSON string,
+ * its quotes escaped), and `password=`,
+ * `passwd=`, `client_secret=`, `secret=` in a query or form body. The label
+ * (and any quote or separator) is kept; the value becomes `…`.
  *
  * Bearer and token values are cut only when they look like a credential --
  * see looksLikeSecret() -- so `token: 3 retries` and "the Bearer scheme" stay
- * as they are. An api key label is unambiguous, so any value after it is cut.
+ * as they are. The other labels are unambiguous, so any value after them is
+ * cut; each needs its separator (`"key": "`, `secret=`, `Authorization: Basic
+ * `), so `"keyboard": "us"`, `secretary`, `password policy: 12 chars` and
+ * "basic auth is disabled" are not labels.
  */
 const SECRET_CHARS = String.raw`[A-Za-z0-9._~+/=-]`;
 const LABELLED_SECRET = new RegExp(
-  String.raw`(?<bearer>\bbearer\s+)(?<bearerValue>${SECRET_CHARS}+)` +
+  String.raw`(?<basic>(?<![A-Za-z0-9-])(?:proxy-)?authorization["']?\s*[=:]\s*["']?basic\s+)(?<basicValue>${SECRET_CHARS}+)` +
+  String.raw`|(?<bearer>\bbearer\s+)(?<bearerValue>${SECRET_CHARS}+)` +
+  String.raw`|(?<quoted>(?<q>\\?["'])(?:key|secret|password|passwd|client_secret|access_token|refresh_token)\k<q>\s*:\s*(?<qv>\\?["']))` +
+    String.raw`(?<quotedValue>(?:(?!\k<qv>)(?:[^\\\r\n]|\\.))+)` +
+  String.raw`|(?<form>(?<![A-Za-z0-9])(?:password|passwd|client_secret|secret)=)(?<formValue>[^\s"'<>,;&\x60]+)` +
   String.raw`|(?<apiKey>(?<![A-Za-z0-9])api[_-]?key["']?\s*[=:]\s*["']?)(?<apiKeyValue>[^\s"'<>,;&\x60]+)` +
   String.raw`|(?<token>(?<![A-Za-z0-9])token["']?\s*[=:]\s*["']?)(?<tokenValue>${SECRET_CHARS}+)`,
   'gi'
@@ -1185,8 +1197,17 @@ function redactSchemeUrl(scheme: string, rest: string): string {
 export function redactUrls(text: string): string {
   const unlabelled = text.replace(LABELLED_SECRET, (match: string, ...args: unknown[]) => {
     const groups = args[args.length - 1] as Partial<Record<
-      'bearer' | 'bearerValue' | 'apiKey' | 'apiKeyValue' | 'token' | 'tokenValue', string
+      'basic' | 'bearer' | 'bearerValue' | 'quoted' | 'form' | 'apiKey' | 'apiKeyValue' | 'token' | 'tokenValue', string
     >>;
+    if (groups.basic !== undefined) {
+      return `${groups.basic}…`;
+    }
+    if (groups.quoted !== undefined) {
+      return `${groups.quoted}…`;
+    }
+    if (groups.form !== undefined) {
+      return `${groups.form}…`;
+    }
     if (groups.bearer !== undefined && groups.bearerValue !== undefined) {
       return looksLikeSecret(groups.bearerValue) ? `${groups.bearer}…` : match;
     }
@@ -1366,7 +1387,10 @@ export function isWithinRoots(target: string, roots: readonly string[]): boolean
  *     (through `..` or a symlink) to somewhere outside. Nothing on disk outside
  *     the roots was consulted to decide the first case, and the second is
  *     reported the same way, so a caller cannot tell an existing file outside
- *     the roots from a missing one.
+ *     the roots from a missing one. A path that cannot be resolved counts as
+ *     outside when the part of it that does exist leads outside -- its nearest
+ *     existing ancestor resolves outside, or a link on the way points outside
+ *     (see leadsOutside) -- and so does a dangling link.
  *   - 'missing': inside the roots, and nothing is there.
  *   - 'error': inside the roots, and it could not be resolved for another
  *     reason (`code`).
@@ -1379,6 +1403,68 @@ export type RootsVerdict =
   | { kind: 'missing' }
   | { kind: 'error'; code: string };
 
+/**
+ * The refusal for a path outside the allowed directories, shared by the main
+ * server and the AI Studio sub-server.
+ *
+ * It names the path as the caller gave it -- never its realpath -- and is the
+ * same whether or not anything exists there, so it cannot be used to probe the
+ * filesystem outside the roots.
+ */
+export function notReadableMessage(filePath: string): string {
+  return `File is not readable: ${filePath}. It is outside every allowed directory: file contents are ` +
+    'uploaded, so this server only reads from the directory it was started in. Set CGMB_ALLOWED_ROOTS ' +
+    `to add others, delimiter-separated with "${delimiter}".`;
+}
+
+/** The most links followed before a chain is given up on (Linux's own limit). */
+const MAX_LINK_HOPS = 40;
+
+/**
+ * Whether a path that could not be resolved leads outside the roots by the
+ * part of it that does exist.
+ *
+ * Walks up from the path to its nearest existing ancestor and asks where that
+ * resolves; on the way, any component that is a link is followed (lexically,
+ * one hop at a time, at most MAX_LINK_HOPS in all) and its target asked the
+ * same question. A target that is outside the roots as written counts as
+ * outside without being looked at.
+ *
+ * Without this, a link inside a root to a directory outside answered
+ * `<root>/link/existing` with the refusal and `<root>/link/missing` with "not
+ * found", and a loop or a permission error behind such a link was reported by
+ * its code: either way, a probe of the directory outside.
+ */
+function leadsOutside(target: string, roots: AllowedRoots, budget: { hops: number }): boolean {
+  if (!isWithinRoots(target, roots.given) && !isWithinRoots(target, roots.real)) {
+    return true;
+  }
+  for (let current = target; ;) {
+    try {
+      return !isWithinRoots(realpathSync(current), roots.real);
+    } catch {
+      // Does not resolve: if it is a link, where does it point?
+    }
+    try {
+      if (lstatSync(current).isSymbolicLink()) {
+        if (budget.hops-- <= 0) {
+          return false;
+        }
+        if (leadsOutside(resolvePath(dirname(current), readlinkSync(current)), roots, budget)) {
+          return true;
+        }
+      }
+    } catch {
+      // Missing, or unreadable on the way: the next one up decides.
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return false;
+    }
+    current = parent;
+  }
+}
+
 export function checkAgainstRoots(filePath: string, roots: AllowedRoots): RootsVerdict {
   const asGiven = resolvePath(filePath);
   if (!isWithinRoots(asGiven, roots.given)) {
@@ -1389,6 +1475,9 @@ export function checkAgainstRoots(filePath: string, roots: AllowedRoots): RootsV
   try {
     resolved = realpathSync(asGiven);
   } catch (error) {
+    if (leadsOutside(asGiven, roots, { hops: MAX_LINK_HOPS })) {
+      return { kind: 'outside' };
+    }
     const code = (error as NodeJS.ErrnoException).code ?? 'unknown';
     if (code === 'ENOENT' || code === 'ENOTDIR') {
       // A dangling link is something that is there; whether its target is

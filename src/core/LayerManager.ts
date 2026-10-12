@@ -13,6 +13,7 @@ import {
   errorForLog,
   ExecutionPlan,
   FileReference,
+  isWithinRoots,
   LayerResult,
   LayerType,
   ProcessingOptions,
@@ -181,6 +182,16 @@ function markFallback(result: LayerResult, from: LayerType, reason: string): Lay
       fallback_reason: reason,
     },
   };
+}
+
+/** Why the Claude layer cannot take these files: it reads source code inline only. */
+function claudeCannotRead(count: number): CGMBError {
+  return new CGMBError(
+    `The Claude layer cannot read files (${count} attached). It reads source code files only ` +
+    `(up to ${CLAUDE_INLINE_MAX_FILES} files, ${CLAUDE_INLINE_MAX_BYTES / 1024} KB in total). ` +
+    'Send other file work to the aistudio layer, or omit the layer to let CGMB route it.',
+    'LAYER_CANNOT_READ_FILES'
+  );
 }
 
 export class LayerManager {
@@ -466,7 +477,7 @@ export class LayerManager {
     }
 
     if (files.length > 0) {
-      if (this.canInlineForClaude(files)) {
+      if (this.canInlineForClaude(files) !== null) {
         return decision('code_files', 'claude', 'Source code files - Claude Code for code analysis');
       }
       return decision('files', 'aistudio', 'Files - AI Studio reads images, audio and documents');
@@ -501,19 +512,25 @@ export class LayerManager {
   }
 
   /**
-   * True when every file is source code and together they fit inline.
+   * The realpaths of the files when every file is source code and together
+   * they fit inline; null otherwise.
    *
    * Only source code: config, data and markup files are documents as far as
    * the README is concerned, and a credential-shaped name (.env, *.pem) is not
    * code in the first place.
+   *
+   * The paths returned are the ones checked against the roots and sized here:
+   * inlineCodeFiles reads exactly these, rather than resolving the names
+   * again (which could reach another file by then).
    */
-  private canInlineForClaude(files: readonly FileReference[]): boolean {
+  private canInlineForClaude(files: readonly FileReference[]): string[] | null {
     if (files.length === 0 || files.length > CLAUDE_INLINE_MAX_FILES) {
-      return false;
+      return null;
     }
     if (!files.every(file => this.isSourceCodeFile(file.path))) {
-      return false;
+      return null;
     }
+    const resolved: string[] = [];
     let total = 0;
     for (const file of files) {
       // The roots check first, on the path as given: a stat outside the roots
@@ -522,16 +539,17 @@ export class LayerManager {
       // Studio, which refuses it with the one message for both.
       const verdict = checkAgainstRoots(file.path, allowedRoots());
       if (verdict.kind !== 'inside') {
-        return false;
+        return null;
       }
       try {
         total += statSync(verdict.resolved).size;
       } catch {
         // A file that cannot be stat'ed goes to AI Studio, which reports why.
-        return false;
+        return null;
       }
+      resolved.push(verdict.resolved);
     }
-    return total <= CLAUDE_INLINE_MAX_BYTES;
+    return total <= CLAUDE_INLINE_MAX_BYTES ? resolved : null;
   }
 
   /**
@@ -551,15 +569,10 @@ export class LayerManager {
       return;
     }
     if (target === 'claude') {
-      if (this.canInlineForClaude(files)) {
+      if (this.canInlineForClaude(files) !== null) {
         return;
       }
-      throw new CGMBError(
-        `The Claude layer cannot read files (${files.length} attached). It reads source code files only ` +
-        `(up to ${CLAUDE_INLINE_MAX_FILES} files, ${CLAUDE_INLINE_MAX_BYTES / 1024} KB in total). ` +
-        'Send other file work to the aistudio layer, or omit the layer to let CGMB route it.',
-        'LAYER_CANNOT_READ_FILES'
-      );
+      throw claudeCannotRead(files.length);
     }
     throw new CGMBError(
       `The ${target} layer cannot read files (${files.length} attached). ` +
@@ -575,17 +588,23 @@ export class LayerManager {
    * files under the directories the AI Studio server may read
    * (CGMB_ALLOWED_ROOTS) are inlined, credential-shaped names are refused, and
    * binary files are refused rather than sent as noise.
+   *
+   * `resolved` is what canInlineForClaude returned: the realpaths it checked
+   * against the roots. They are read as they are -- checked against the roots
+   * once more, but not resolved again.
    */
-  private async inlineCodeFiles(prompt: string, files: readonly FileReference[]): Promise<string> {
-    const { assertReadableRoot } = await import('../mcp-servers/ai-studio-mcp-server.js');
+  private async inlineCodeFiles(prompt: string, resolved: readonly string[]): Promise<string> {
+    const roots = allowedRoots();
     const sections: string[] = [];
     let total = 0;
 
-    for (const file of files) {
-      const resolved = assertReadableRoot(file.path);
-      const content = readFileSync(resolved, 'utf8');
+    for (const realPath of resolved) {
+      if (!isWithinRoots(realPath, roots.real)) {
+        throw claudeCannotRead(resolved.length);
+      }
+      const content = readFileSync(realPath, 'utf8');
       if (content.includes('\u0000')) {
-        throw new CGMBError(`${basename(resolved)} is not a text file; the Claude layer reads source code only.`, 'LAYER_CANNOT_READ_FILES');
+        throw new CGMBError(`${basename(realPath)} is not a text file; the Claude layer reads source code only.`, 'LAYER_CANNOT_READ_FILES');
       }
       total += Buffer.byteLength(content, 'utf8');
       if (total > CLAUDE_INLINE_MAX_BYTES) {
@@ -597,11 +616,11 @@ export class LayerManager {
       }
       const longestFence = Math.max(0, ...(content.match(/`+/g) ?? []).map(run => run.length));
       const fence = '`'.repeat(Math.max(3, longestFence + 1));
-      sections.push(`File: ${resolved}\n${fence}\n${content}${content.endsWith('\n') ? '' : '\n'}${fence}`);
+      sections.push(`File: ${realPath}\n${fence}\n${content}${content.endsWith('\n') ? '' : '\n'}${fence}`);
     }
 
     return `${prompt}\n\n` +
-      `The ${files.length === 1 ? 'file below is' : `${files.length} files below are`} attached to this request. ` +
+      `The ${resolved.length === 1 ? 'file below is' : `${resolved.length} files below are`} attached to this request. ` +
       'Their full contents are included here; answer from them.\n\n' +
       sections.join('\n\n');
   }
@@ -722,7 +741,12 @@ export class LayerManager {
       }
     }
 
-    const inlined = await this.inlineCodeFiles(prompt, files);
+    // Resolved once, here: the files read are the files checked and sized.
+    const resolved = this.canInlineForClaude(files);
+    if (resolved === null) {
+      throw claudeCannotRead(files.length);
+    }
+    const inlined = await this.inlineCodeFiles(prompt, resolved);
     const claudeTask = { type: 'text_processing', prompt: inlined, files: [], options: task.options ?? {} };
 
     if (!fallback) {
