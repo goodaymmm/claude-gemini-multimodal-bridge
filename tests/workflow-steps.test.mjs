@@ -167,7 +167,9 @@ describe('a later step is handed the earlier step result as it is', () => {
     assert.deepEqual(task.analysis, { output: 'did:search' }, 'a bare @step is its published object, not a string');
     assert.equal(task.inputs.search, 'did:search');
     assert.deepEqual(task.inputs.both, ['did:search', 'literal']);
-    assert.equal(task.inputs.missing._stepMissing, true, 'an unknown reference is marked, as at the top level');
+    // `ghost` is no step of this workflow, so '@ghost.output' is not a reference
+    // at all: it is input text, passed on as written (tests/log-redaction.test.mjs).
+    assert.equal(task.inputs.missing, '@ghost.output', 'a name that is not a declared step is left as text');
   });
 });
 
@@ -381,5 +383,47 @@ process.stdin.on('end', () => {
     // A large one is capped, and says so.
     assert.match(prompt, /\[truncated: \d+ more characters of JSON omitted\]/);
     assert.ok(prompt.length < 30_000, `the prompt is bounded (${prompt.length} characters)`);
+  });
+
+  it('never hands Claude the document paths a synthesis step carries', async () => {
+    // A document workflow carries its paths as `documents` (in its input data,
+    // which is merged into every step); buildSynthesisPrompt rendered every key
+    // but `files`, so the paths reached `claude --print`. Carried in the step
+    // input here: in input_data they would reach the search step too, which
+    // refuses files.
+    const before = mark();
+    const docPath = '/tmp/cgmb-synthesis-secret-x.pdf';
+
+    const r = await server.call({
+      execution_mode: 'sequential',
+      input_data: {},
+      workflow_definition: {
+        steps: [
+          { id: 's1', layer: 'antigravity', action: 'search', input: { prompt: 'latest TypeScript release' } },
+          {
+            id: 's2',
+            layer: 'claude',
+            action: 'synthesize_response',
+            input: {
+              prompt: 'Combine the findings',
+              analysis: '@s1.output',
+              documents: [docPath],
+              filePaths: [docPath],
+              paths: [docPath],
+            },
+            dependsOn: ['s1'],
+          },
+        ],
+      },
+    });
+
+    assert.equal(r.isError, false, r.text);
+    const prompts = claudePrompts().slice(before.claude);
+    assert.equal(prompts.length, 1, 'one synthesis call');
+    const [prompt] = prompts;
+    assert.ok(!prompt.includes(docPath), 'no document path in the Claude prompt');
+    assert.doesNotMatch(prompt, /^### \d+\. (documents|filePaths|paths)$/m);
+    // What synthesis is for still arrives.
+    assert.match(prompt, new RegExp(`### \\d+\\. analysis\\n${AGY_ANSWER}\\n`));
   });
 });

@@ -25,7 +25,7 @@ import {
   MultimodalResult,
 } from '../core/types.js';
 import { AntigravityCLILayer } from './AntigravityCLILayer.js';
-import { firstLineForLog, hostsOf, redactUrls, taskFileRefs } from '../core/types.js';
+import { describeToolArgs, firstLineForLog, hostsOf, redactUrls, taskFileRefs } from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { type RetryPolicy, retryPolicyFromEnv } from '../utils/envLoader.js';
@@ -387,9 +387,10 @@ export class AIStudioLayer implements LayerInterface {
           instanceId: this.instanceId,
           taskType: task.type || 'general',
           action: task.action || 'execute', 
-          fileCount: task.files ? task.files.length : 0,
-          taskKeys: Object.keys(task),
-          taskStructure: JSON.stringify(task, null, 2).substring(0, 500)
+          // The task's shape -- keys, prompt length, file count, URL hosts --
+          // not its contents. This copied up to 500 characters of the task, so
+          // prompts and document paths reached LOG_FILE at info level.
+          ...describeToolArgs(task),
         });
 
         let result: any;

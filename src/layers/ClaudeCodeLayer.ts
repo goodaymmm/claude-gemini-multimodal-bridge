@@ -35,10 +35,21 @@ const CLAUDE_NOT_FOUND_MESSAGE =
   'to an existing installation.';
 
 /**
- * Task fields that steer the synthesis rather than feed it. `files` is left out
- * as it is everywhere in this layer: Claude is never handed file paths to read.
+ * Task fields that name local files. None of them is rendered into a prompt --
+ * a synthesis prompt or a generic step description: Claude is never handed file
+ * paths to read.
+ *
+ * `files` was the only one left out, but workflow input data is merged into
+ * every step, and a document workflow carries its paths as `documents` -- so
+ * synthesize_response, analyze_requirements and synthesize_analysis steps all
+ * handed them to `claude --print`. What those steps work from is the earlier
+ * steps' output (`analysisResults: '@document_processing.output'`,
+ * `inputs: { ... }`), and that still arrives.
  */
-const SYNTHESIS_CONTROL_KEYS = ['type', 'action', 'workflow', 'depth', 'timeout', 'options', 'files'] as const;
+const FILE_PATH_KEYS = ['files', 'documents', 'filePaths', 'paths', 'imagePath'] as const;
+
+/** Task fields that steer the synthesis rather than feed it, and the file-path fields. */
+const SYNTHESIS_CONTROL_KEYS = ['type', 'action', 'workflow', 'depth', 'timeout', 'options', ...FILE_PATH_KEYS] as const;
 
 /** Most JSON one synthesis input may contribute to the prompt, in characters. */
 const SYNTHESIS_JSON_LIMIT = 20_000;
@@ -471,7 +482,10 @@ export class ClaudeCodeLayer implements LayerInterface {
    */
   private describeTask(task: ClaudeCodeTask): string {
     const action = typeof task.action === 'string' ? task.action : task.type;
-    const skip = new Set(['action', 'type', 'files', 'options', 'workflow', 'depth', 'timeout']);
+    // The same keys a synthesis prompt leaves out, file paths included: the
+    // analysis workflow's steps carry `documents`, and Claude is never handed
+    // paths to read. What it works from is the AI Studio step's output.
+    const skip = new Set<string>(SYNTHESIS_CONTROL_KEYS);
 
     const fields = Object.entries(task)
       .filter(([key, value]) => !skip.has(key) && value !== undefined && value !== null && value !== '')

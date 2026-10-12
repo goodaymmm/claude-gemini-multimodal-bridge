@@ -125,7 +125,11 @@ describe('a workflow step reaches Claude with its content', () => {
     assert.equal(result.success, true);
     assert.ok(!sent.includes('Please help with this task.'), 'the placeholder must be gone');
     assert.ok(sent.includes('analyze_requirements'), 'the step must say what it is');
-    assert.ok(sent.includes('/tmp/report.pdf'), 'and carry its input');
+    assert.ok(sent.includes('analysisType: summary'), 'and carry its input');
+    // But not the document paths: Claude is never handed paths to read. The
+    // documents reach the analysis through the AI Studio step's output.
+    assert.ok(!sent.includes('/tmp/report.pdf'), 'a document path must not reach Claude');
+    assert.ok(!/^documents:/m.test(sent), 'nor the documents key');
   });
 });
 

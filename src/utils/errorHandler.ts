@@ -1,4 +1,4 @@
-import { CGMBError, LayerError, LayerType } from '../core/types.js';
+import { CGMBError, firstLineForLog, LayerError, LayerType, redactUrls } from '../core/types.js';
 import { logger } from './logger.js';
 
 // ===================================
@@ -69,8 +69,12 @@ export class ErrorHandler {
           opts.maxDelay
         );
 
+        // The first line only, URLs cut to their hosts. The message can be up to
+        // 500 characters of a child process's output (AI Studio's "MCP command
+        // ... failed: ..."), signed-URL tokens included; the caller still gets
+        // all of it in the error thrown once the retries run out.
         logger.warn(`Attempt ${attempt + 1} failed, retrying in ${delay}ms`, {
-          error: lastError.message,
+          error: firstLineForLog(lastError instanceof Error ? lastError.message : String(lastError)),
           attempt: attempt + 1,
           maxRetries: opts.maxRetries,
         });
@@ -124,11 +128,16 @@ export class ErrorHandler {
       const duration = Date.now() - startTime;
       const enhancedError = this.enhanceError(error as Error, context);
       
+      // The first line, URLs cut to their hosts: the message can carry up to
+      // 500 characters of child output. The stack repeats the message, so it
+      // is debug-only. The caller still gets the whole error.
       logger.error(`Operation failed: ${context.operationName}`, {
         ...context,
         duration,
-        error: enhancedError.message,
-        stack: enhancedError.stack,
+        error: firstLineForLog(enhancedError.message),
+      });
+      logger.debug(`Operation failure stack: ${context.operationName}`, {
+        stack: redactUrls(enhancedError.stack ?? ''),
       });
 
       throw enhancedError;

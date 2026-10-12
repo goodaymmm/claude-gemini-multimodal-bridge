@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 517 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 537 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -859,20 +859,40 @@ dependencies to new major versions. 1.2.3 was never published.
   - importing the AI Studio sub-server module (from `node -e` or a REPL) started
     an MCP server on that process's stdio; it now starts only when run as its
     own file
+- 🔒 **Less of the input reaches logs and Claude**:
+  - any workflow input starting with `@` was read as a step reference, so
+    `@scope/pkg` or `@here is the text` was replaced by a "step missing" marker
+    and logged whole. A reference is now `@` + a step id the workflow declares
+    + an optional `.path`; anything else is passed on as written, and an
+    unresolvable reference is logged by step id and path only
+  - Claude steps rendered every input but `files` into the prompt, so the
+    `documents` paths a document workflow carries reached `claude --print` from
+    `synthesize_response`, `analyze_requirements` and `synthesize_analysis`.
+    `documents`, `filePaths`, `paths` and `imagePath` are left out like `files`;
+    the analysis still arrives through the AI Studio step's output
+  - log redaction now also covers `data:` and `mailto:`-style URLs, bare
+    `host.tld/path?…` and the `?…` / `#…` tail of any path; file paths, Windows
+    paths, times and ratios are left as they are
+  - a retry warning and a failed operation's error line logged the failure
+    message whole, up to 500 characters of child output, the latter with its
+    stack; both now log the first line, URLs cut to their hosts, at most 200
+    characters, and the stack only at debug level. The error the caller gets is
+    unchanged. AI Studio no longer logs the first 500 characters of each task
+    at info level, only its keys, prompt length, file count and URL hosts
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
 `resolveWindowsCommand` alias and the three `AI_MODELS` keys above are removed.
 `gemini-3-pro-image`, listed until now as the high-quality image model, is no
-longer listed: no code path ever selected it. Tests: 179 → 517 (7 for the WAV
+longer listed: no code path ever selected it. Tests: 179 → 537 (7 for the WAV
 helper, 1 for the schema default, 2 for the model table, 8 for the Antigravity
 probe and environment, 3 for the API-key sign-in, 10 for the dependency moves,
 24 for the PDF mode, 106 for routing, 81 for the PDF URL address rules, 5 for
-the published file list, 24 for workflow validation and synthesis inputs, 17
+the published file list, 25 for workflow validation and synthesis inputs, 17
 for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 `.env` message, 3 for the CI check, 1 for the Node.js check, 2 for the console
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
-retry variables in every layer); on Linux 516 pass and 1 is skipped. The routing changes are
+retry variables in every layer, 19 for log redaction and step references); on Linux 536 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

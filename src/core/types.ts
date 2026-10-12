@@ -1045,8 +1045,46 @@ export const RETIRED_GEMINI_CLI_MODEL_PATTERN = /^gemini-(1\.|2\.|pro|3-flash|3-
 // signed-URL tokens, pasted secrets or personal data, so log lines describe
 // them -- keys, lengths, counts, hosts -- instead of copying them.
 
-/** A URL anywhere in free text: a scheme, `://`, then everything up to a space or quote. */
+/**
+ * A URL with an authority anywhere in free text: a scheme, `://`, then
+ * everything up to a space or quote. What urlsIn() finds, so what hostsOf()
+ * reports hosts for.
+ */
 const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>`]+/gi;
+
+/** Where a token for redaction may start: not in the middle of a word, path, host or address. */
+const TOKEN_START = String.raw`(?<![\w.\/\\@:+-])`;
+/** The rest of a token: everything up to a space, a quote or an angle bracket. */
+const TOKEN_REST = String.raw`[^\s"'<>\x60]`;
+
+/**
+ * What redactUrls() cuts, as three alternatives tried in this order:
+ *
+ *   1. `scheme:` and anything not a space -- `https://…`, `data:…`, `mailto:…`.
+ *      The scheme is two characters or more, so a drive letter (`C:\x`) is not
+ *      one, and what follows the colon may not start with a digit, so neither
+ *      is a time (`at12:30`), a port (`localhost:3000`) or a `file.ts:10:5`
+ *      position. `node:` is a Node.js module specifier in a stack frame
+ *      (`node:internal/...`), not a URL, and is kept.
+ *   2. A bare `host.tld/path…` -- a dotted name ending in a letters-only label,
+ *      then a slash. Not after a slash, so `/srv/www/example.com/a.html` is a
+ *      path and is left alone.
+ *   3. Any path-like token (one with a `/`) followed by a `?…` or `#…` tail.
+ *
+ * Every alternative starts at TOKEN_START, so nothing matches from the middle of
+ * a file path or a word.
+ */
+const REDACTABLE_IN_TEXT = new RegExp(
+  `${TOKEN_START}(?:` +
+    String.raw`(?!node:)(?<scheme>[a-z][a-z0-9+.-]+):(?<opaque>(?![\d\s])${TOKEN_REST}+)` +
+    String.raw`|(?<host>(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?)\/${TOKEN_REST}*` +
+    String.raw`|(?<path>[^\s"'<>\x60?#]*\/[^\s"'<>\x60?#]*)(?<tail>[?#])${TOKEN_REST}+` +
+  ')',
+  'gi'
+);
+
+/** The host of an opaque `scheme:` URL such as `mailto:a@host.tld?…`, if it has one. */
+const OPAQUE_HOST = /@((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63})(?=$|[/?#;,&])/i;
 
 /**
  * The distinct hosts of some URLs, for log lines. A URL's path and query can
@@ -1062,20 +1100,50 @@ export function hostsOf(urls: readonly string[]): string[] {
   }))];
 }
 
-/** Every URL in `text`, in order. */
+/** Every URL with a `scheme://` authority in `text`, in order. */
 export function urlsIn(text: string): string[] {
   return text.match(URL_IN_TEXT) ?? [];
 }
 
-/** `text` with every URL cut down to its scheme and host. */
-export function redactUrls(text: string): string {
-  return text.replace(URL_IN_TEXT, url => {
+/** One `scheme:rest` URL as its scheme and host. */
+function redactSchemeUrl(scheme: string, rest: string): string {
+  const lower = scheme.toLowerCase();
+  if (lower === 'data') {
+    // The payload is the content itself; there is no host to keep.
+    return 'data:…';
+  }
+  if (rest.startsWith('//')) {
     try {
-      const parsed = new URL(url);
+      const parsed = new URL(`${scheme}:${rest}`);
       return parsed.host ? `${parsed.protocol}//${parsed.host}/…` : `${parsed.protocol}//…`;
     } catch {
-      return '(url)';
+      return `${scheme}://…`;
     }
+  }
+  // An opaque URL (mailto:, tel:, urn:, ...). The part before an `@` is a
+  // person, not a host; only the domain after it is kept.
+  const host = OPAQUE_HOST.exec(rest)?.[1];
+  return host ? `${scheme}:…@${host}` : `${scheme}:…`;
+}
+
+/**
+ * `text` with every URL cut down to its scheme and host, every bare
+ * `host.tld/path` cut down to its host, and the `?…` / `#…` tail of any other
+ * path-like token dropped. See REDACTABLE_IN_TEXT for the exact rules.
+ */
+export function redactUrls(text: string): string {
+  return text.replace(REDACTABLE_IN_TEXT, (match: string, ...args: unknown[]) => {
+    const groups = args[args.length - 1] as Partial<Record<'scheme' | 'opaque' | 'host' | 'path' | 'tail', string>>;
+    if (groups.scheme !== undefined && groups.opaque !== undefined) {
+      return redactSchemeUrl(groups.scheme, groups.opaque);
+    }
+    if (groups.host !== undefined) {
+      return `${groups.host}/…`;
+    }
+    if (groups.path !== undefined && groups.tail !== undefined) {
+      return `${groups.path}${groups.tail}…`;
+    }
+    return match;
   });
 }
 

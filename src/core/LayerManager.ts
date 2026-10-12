@@ -154,6 +154,17 @@ const CLAUDE_INLINE_MAX_FILES = 10;
 /** Local paths written into a prompt (Windows and POSIX, absolute or ./relative). */
 const EMBEDDED_PATH = /(?:[A-Za-z]:\\[^\s"'<>|]+\.[a-zA-Z0-9]+|\/(?!https?:)[^\s"'<>|]+\.[a-zA-Z0-9]+|\.\.?\/[^\s"'<>|]+\.[a-zA-Z0-9]+)/i;
 
+/**
+ * What a step reference looks like: `@`, a step id, then optionally a dotted
+ * path into its published output -- `@s1`, `@s1.output`, `@s1.output.items`.
+ *
+ * Anything else that happens to start with `@` -- `@scope/pkg`, `@here is the
+ * text`, an e-mail handle -- is ordinary input. It used to be read as a
+ * reference too: it became a `_stepMissing` marker in place of the text, and
+ * the whole string went to a warn log.
+ */
+const STEP_REFERENCE = /^@([A-Za-z0-9_-]+)((?:\.[A-Za-z0-9_-]+)*)$/;
+
 /** Mark a result as answered by a fallback layer, so the caller can say so. */
 function markFallback(result: LayerResult, from: LayerType, reason: string): LayerResult {
   if (result.metadata?.fallback_from) {
@@ -1326,6 +1337,7 @@ export class LayerManager {
   ): Promise<Record<string, LayerResult>> {
     const results: Record<string, LayerResult> = {};
     const stepOutputs: Record<string, Record<string, unknown>> = {};
+    const declaredSteps = this.declaredStepIds(workflow);
 
     // Sort steps by dependencies
     const sortedSteps = this.topologicalSort(workflow.steps);
@@ -1333,7 +1345,7 @@ export class LayerManager {
     for (const step of sortedSteps) {
       try {
         // Prepare step input by resolving references
-        const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
+        const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData, declaredSteps);
         
         // Execute step
         const result = await this.executeStep(step, stepInput, options);
@@ -1410,6 +1422,7 @@ export class LayerManager {
     // with no upstream data -- then reported success, because it returned
     // something of its own. Only sequential ever published the right shape.
     const stepOutputs: Record<string, Record<string, unknown>> = {};
+    const declaredSteps = this.declaredStepIds(workflow);
 
     // Group steps by dependency level
     const dependencyLevels = this.groupStepsByDependencies(workflow.steps);
@@ -1417,7 +1430,7 @@ export class LayerManager {
     for (const level of dependencyLevels) {
       const promises = level.map(async (step) => {
         try {
-          const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData);
+          const stepInput = this.resolveStepInput(step.input, stepOutputs, inputData, declaredSteps);
           const result = await this.executeStep(step, stepInput, options);
           return { stepId: step.id, result };
         } catch (error) {
@@ -1636,6 +1649,7 @@ export class LayerManager {
     // Dependency references use `@step.output`, so every execution mode has to
     // publish the same shape. Only sequential did.
     const stepOutputs: Record<string, Record<string, unknown>> = {};
+    const declaredSteps = this.declaredStepIds(workflow);
 
     for (const level of this.groupStepsByDependencies(workflow.steps)) {
       const stepGroups = this.groupStepsByRecommendedLayer(level, analysis);
@@ -1646,7 +1660,7 @@ export class LayerManager {
         const [first] = steps;
 
         if (steps.length === 1 && first) {
-          const stepInput = this.resolveStepInput(first.input, stepOutputs, inputData);
+          const stepInput = this.resolveStepInput(first.input, stepOutputs, inputData, declaredSteps);
           const result = await this.executeStep(first, stepInput, options);
           results[first.id] = result;
           stepOutputs[first.id] = this.publishedOutput(result);
@@ -1657,7 +1671,7 @@ export class LayerManager {
           stepId: step.id,
           result: await this.executeStep(
             step,
-            this.resolveStepInput(step.input, stepOutputs, inputData),
+            this.resolveStepInput(step.input, stepOutputs, inputData, declaredSteps),
             options
           ),
         })));
@@ -1722,7 +1736,8 @@ export class LayerManager {
       const fallbackInput = this.resolveStepInput(
         strategy.with.input,
         {},
-        failedStep.input
+        failedStep.input,
+        this.declaredStepIds(workflow)
       );
 
       return await this.executeStep(strategy.with, fallbackInput, options);
@@ -2151,41 +2166,45 @@ export class LayerManager {
     return groups;
   }
 
+  /** The step ids a workflow declares: the only names a reference may use. */
+  private declaredStepIds(workflow: ExecutionPlan): ReadonlySet<string> {
+    return new Set(workflow.steps.map(step => step.id));
+  }
+
   private resolveStepInput(
     input: Record<string, unknown>,
     stepOutputs: Record<string, Record<string, unknown>>,
-    baseInput: Record<string, unknown>
+    baseInput: Record<string, unknown>,
+    declaredSteps: ReadonlySet<string>
   ): Record<string, unknown> {
     const resolved: Record<string, unknown> = { ...baseInput };
 
     for (const [key, value] of Object.entries(input)) {
-      if (typeof value === 'string' && value.startsWith('@')) {
-        const reference = this.resolveStepReference(value, stepOutputs);
-        // A reference with no step name ("@", "@.x") leaves the key unset, as
-        // it always has.
-        if (reference) {
-          resolved[key] = reference.value;
-        }
-        continue;
-      }
-      resolved[key] = this.resolveNestedReferences(value, stepOutputs, 0);
+      resolved[key] = this.resolveNestedReferences(value, stepOutputs, declaredSteps, 0);
     }
 
     return resolved;
   }
 
   /**
-   * Resolve `@step` references inside arrays and plain objects.
+   * Resolve `@step` references, at the top level and inside arrays and plain
+   * objects.
    *
    * Only top-level values used to be resolved, so the shape synthesize_response
    * is built around -- `inputs: { search: '@search.output', ... }` -- reached
    * Claude as the literal reference strings. The value a reference resolves to
    * is passed through as it is (an object stays an object); it is the layer
    * that decides how to render it.
+   *
+   * A string is a reference only when the whole of it has the STEP_REFERENCE
+   * shape and names a step this workflow declares. Everything else -- `@scope/pkg`,
+   * `@here is the text`, `@s9` in a workflow with no step s9 -- is input and is
+   * passed on untouched.
    */
   private resolveNestedReferences(
     value: unknown,
     stepOutputs: Record<string, Record<string, unknown>>,
+    declaredSteps: ReadonlySet<string>,
     depth: number
   ): unknown {
     // Step inputs are small hand-written structures; the bound only guards
@@ -2194,14 +2213,11 @@ export class LayerManager {
       return value;
     }
     if (typeof value === 'string') {
-      if (!value.startsWith('@')) {
-        return value;
-      }
-      const reference = this.resolveStepReference(value, stepOutputs);
-      return reference ? reference.value : value;
+      const reference = this.parseStepReference(value, declaredSteps);
+      return reference ? this.resolveStepReference(reference, stepOutputs) : value;
     }
     if (Array.isArray(value)) {
-      return value.map(item => this.resolveNestedReferences(item, stepOutputs, depth + 1));
+      return value.map(item => this.resolveNestedReferences(item, stepOutputs, declaredSteps, depth + 1));
     }
     if (typeof value === 'object' && value !== null) {
       const proto: unknown = Object.getPrototypeOf(value);
@@ -2210,7 +2226,7 @@ export class LayerManager {
       }
       const out: Record<string, unknown> = {};
       for (const [key, item] of Object.entries(value)) {
-        out[key] = this.resolveNestedReferences(item, stepOutputs, depth + 1);
+        out[key] = this.resolveNestedReferences(item, stepOutputs, declaredSteps, depth + 1);
       }
       return out;
     }
@@ -2218,54 +2234,69 @@ export class LayerManager {
   }
 
   /**
-   * What one `@step[.path]` reference stands for, or null when it names no step
-   * at all ("@" or "@.x").
+   * The step id and path of a `@step[.path]` reference, or null when `value` is
+   * not one: not the STEP_REFERENCE shape, or naming no declared step.
    */
-  private resolveStepReference(
+  private parseStepReference(
     value: string,
-    stepOutputs: Record<string, Record<string, unknown>>
-  ): { value: unknown } | null {
-    const [stepId, ...pathParts] = value.slice(1).split('.');
-    // split() always yields at least one element, but the type does not say
-    // so; check rather than assert, and skip a reference with no step name.
-    if (stepId === undefined || stepId === '') {
+    declaredSteps: ReadonlySet<string>
+  ): { stepId: string; path: string[] } | null {
+    const match = STEP_REFERENCE.exec(value);
+    const stepId = match?.[1];
+    if (stepId === undefined || !declaredSteps.has(stepId)) {
       return null;
     }
-    const stepOutput = stepOutputs[stepId];
+    const path = match?.[2] ?? '';
+    return { stepId, path: path === '' ? [] : path.slice(1).split('.') };
+  }
+
+  /**
+   * What one step reference stands for.
+   *
+   * A reference that cannot be resolved -- its step failed, or has published
+   * nothing -- is logged by step id and path only. The log used to carry the
+   * whole value, which for anything starting with `@` could be arbitrary text.
+   */
+  private resolveStepReference(
+    reference: { stepId: string; path: string[] },
+    stepOutputs: Record<string, Record<string, unknown>>
+  ): unknown {
+    const { stepId, path: pathParts } = reference;
+    const originalReference = `@${[stepId, ...pathParts].join('.')}`;
+    // Own properties only: a step called "constructor" must not find
+    // Object.prototype.constructor when it has published nothing.
+    const stepOutput = Object.hasOwn(stepOutputs, stepId) ? stepOutputs[stepId] : undefined;
 
     if (!stepOutput) {
       // Step output not found - could be a failed step or not yet executed
-      logger.warn(`Could not resolve step reference: ${value}`, {
+      logger.warn('Could not resolve step reference', {
         stepId,
-        availableSteps: Object.keys(stepOutputs),
+        path: pathParts.join('.'),
         hint: 'The referenced step may have failed or not been executed'
       });
       // Provide context for downstream handling
       return {
-        value: {
-          _stepMissing: true,
-          _stepId: stepId,
-          _originalReference: value,
-          _hint: 'Referenced step output not available - step may have failed or not executed'
-        },
+        _stepMissing: true,
+        _stepId: stepId,
+        _originalReference: originalReference,
+        _hint: 'Referenced step output not available - step may have failed or not executed'
       };
     }
 
     // Check if the step result is a failed LayerResult (has success: false)
     const layerResult = stepOutput as { success?: boolean; error?: string; output?: unknown };
     if (layerResult.success === false) {
-      // Previous step failed - provide context for downstream handling
-      logger.warn(`Step reference ${value} points to failed step ${stepId}`, {
+      // Previous step failed - provide context for downstream handling. Its
+      // error was logged where it failed; this line names the reference only.
+      logger.warn('Step reference points to a failed step', {
         stepId,
-        error: layerResult.error || 'Unknown error'
+        path: pathParts.join('.'),
       });
       return {
-        value: {
-          _stepFailed: true,
-          _stepId: stepId,
-          _error: layerResult.error || 'Previous step failed',
-          _originalReference: value
-        },
+        _stepFailed: true,
+        _stepId: stepId,
+        _error: layerResult.error || 'Previous step failed',
+        _originalReference: originalReference
       };
     }
 
@@ -2278,7 +2309,7 @@ export class LayerManager {
         break;
       }
     }
-    return { value: resolvedValue };
+    return resolvedValue;
   }
 
   private generateWorkflowSummary(results: Record<string, LayerResult>): string {

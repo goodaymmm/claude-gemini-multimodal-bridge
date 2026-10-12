@@ -50,7 +50,7 @@ Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生�
 
 ### 🎯 MCP標準対応
 
-Anthropic Model Context Protocol準拠。517件のテストを Linux / Windows / macOS の CI で push ごとに実行
+Anthropic Model Context Protocol準拠。537件のテストを Linux / Windows / macOS の CI で push ごとに実行
 
 </td>
 </tr>
@@ -848,19 +848,39 @@ src/
   - AI Studio サブサーバのモジュールを（`node -e` や REPL から）import すると、
     そのプロセスの stdio で MCP サーバが起動していました。そのファイル自体を実行した
     ときだけ起動します
+- 🔒 **入力がログや Claude に渡る範囲を縮小**:
+  - ワークフローの入力で `@` から始まる文字列はすべてステップ参照とみなされ、
+    `@scope/pkg` や `@here is the text` が「ステップがない」という印に置き換わり、
+    文字列全体がログに残っていました。参照は `@` + ワークフローで宣言したステップ
+    ID + 任意の `.path` の形だけとし、それ以外は書かれたとおりに渡します。解決
+    できない参照はステップ ID とパスだけをログに記録します
+  - Claude のステップは `files` 以外のすべての入力をプロンプトに入れていたため、
+    文書ワークフローが持つ `documents` のパスが `synthesize_response`・
+    `analyze_requirements`・`synthesize_analysis` から `claude --print` に渡って
+    いました。`documents`・`filePaths`・`paths`・`imagePath` も `files` と同じく
+    除外します。分析結果は従来どおり AI Studio のステップの出力から届きます
+  - ログの URL の伏せ字は、`data:` や `mailto:` などの URL、スキームのない
+    `host.tld/path?…`、任意のパスの `?…` / `#…` 以降にも及びます。ファイルパス、
+    Windows のパス、時刻、比率はそのまま残します
+  - リトライの警告と、失敗した処理のエラー行は、失敗メッセージ全体（子プロセスの
+    出力最大 500 文字。後者はスタックトレース付き）を記録していました。どちらも
+    1 行目だけを、URL はホストに切り詰め、最大 200 文字で記録し、スタックトレースは
+    debug レベルだけに出します。呼び出し側が受け取るエラーは変わりません。
+    AI Studio は各タスクの先頭 500 文字を info レベルで記録せず、キー・プロンプトの
+    長さ・ファイル数・URL のホストだけを記録します
 
 **変更なし**: Antigravity の既定 `gemini-3.6-flash-low`、`MIN_AGY_VERSION`
 （1.1.7）。export している識別子の名前は変えていません。`resolveWindowsCommand`
 エイリアスと上記の `AI_MODELS` のキー 3 つは削除しました。これまで高品質な画像
 生成のモデルとして載せていた `gemini-3-pro-image` は一覧から外しました。どの
-コード経路からも選ばれていませんでした。テスト: 179 → 517（WAV ヘルパー 7 件、
+コード経路からも選ばれていませんでした。テスト: 179 → 537（WAV ヘルパー 7 件、
 スキーマ既定値 1 件、モデル表 2 件、Antigravity の確認と環境 8 件、API キーと
 サインイン 3 件、依存の更新 10 件、PDF モード 24 件、ルーティング 106 件、PDF URL の
-アドレス規則 81 件、公開ファイル一覧 5 件、ワークフローの検査と統合の入力 24 件、
+アドレス規則 81 件、公開ファイル一覧 5 件、ワークフローの検査と統合の入力 25 件、
 キャッシュとリトライの変数 17 件、`cgmb info` 8 件、postinstall の `.env` の案内
 3 件、CI の判定 3 件、Node.js の確認 1 件、console の差し替え 2 件、サブサーバの
-import 6 件、`cgmb` ツールのスキーマ 14 件、各レイヤーのリトライ変数 13 件）。
-Linux では 516 件が成功し、1 件はスキップです。
+import 6 件、`cgmb` ツールのスキーマ 14 件、各レイヤーのリトライ変数 13 件、ログの伏せ字とステップ参照 19 件）。
+Linux では 536 件が成功し、1 件はスキップです。
 ルーティングの変更は、実際のサーバと CLI を動かす `tests/routing-matrix.test.mjs`
 で固定しており、両方の README の使用例をすべて確認しています。
 
