@@ -19,7 +19,7 @@ import { OAuthManager } from '../dist/auth/OAuthManager.js';
 import { LayerTypeSchema, TargetLayerSchema, normalizeLayerName } from '../dist/core/types.js';
 import { LayerManager, assertNoCredentialFiles } from '../dist/core/LayerManager.js';
 import { AntigravityCLILayer } from '../dist/layers/AntigravityCLILayer.js';
-import { buildSpawnTarget, isUntrustedBinaryLocation, resolveTrustedCommand, resolveWindowsCommand } from '../dist/utils/processUtils.js';
+import { buildSpawnTarget, isUntrustedBinaryLocation, resolveTrustedCommand } from '../dist/utils/processUtils.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const isWindows = process.platform === 'win32';
@@ -437,9 +437,12 @@ describe('binary discovery trust', () => {
     );
   });
 
-  it('refuses an unresolvable name through the Windows helper', { skip: !isWindows && 'Windows-only helper' }, () => {
+  it('refuses an unresolvable name through resolveTrustedCommand', () => {
+    // resolveWindowsCommand was a deprecated alias of this function and has
+    // been removed; the trust check applies on every platform, so this runs
+    // everywhere instead of on Windows only.
     const missing = `cgmb-no-such-tool-${process.pid}`;
-    assert.equal(resolveWindowsCommand(missing), undefined, 'an unresolvable name must not be returned');
+    assert.equal(resolveTrustedCommand(missing), undefined, 'an unresolvable name must not be returned');
   });
 });
 

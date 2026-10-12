@@ -118,11 +118,6 @@ export function resolveTrustedCommand(command: string): string | undefined {
   }
 }
 
-/** @deprecated Renamed to resolveTrustedCommand; the check now applies on every platform. */
-export function resolveWindowsCommand(command: string): string | undefined {
-  return resolveTrustedCommand(command);
-}
-
 /**
  * Decide how to invoke `command` with `args` without using a shell.
  *
