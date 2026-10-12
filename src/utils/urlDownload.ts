@@ -15,9 +15,21 @@
  * server claims: an HTML error page saved as `.pdf` would otherwise be uploaded
  * and "analysed", and a URL that answers with something other than a document
  * is not forwarded to Google.
+ *
+ * The URL can come from a prompt injection, so CGMB must not become a way to
+ * reach what only this machine can: every host -- the first URL's and each
+ * redirect target's -- is resolved and refused if any of its addresses is
+ * private, loopback, link-local (cloud metadata at 169.254.169.254 among them),
+ * CGNAT, multicast or reserved, or if it is `localhost`. CGMB_ALLOW_PRIVATE_URLS=true
+ * lifts that check, for PDFs served on a local network. A redirect from https
+ * to http is refused whatever the setting; http to https is followed. A refused
+ * address gets one message whatever the address was, so the error cannot be
+ * used to map which internal hosts exist.
  */
 
+import { promises as dns } from 'dns';
 import { promises as fsPromises } from 'fs';
+import { isIP } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -44,6 +56,188 @@ export interface DownloadedPdf {
 }
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
+/** Set to `true` to let PDF URLs reach private, loopback and link-local addresses. */
+export const ALLOW_PRIVATE_URLS_ENV = 'CGMB_ALLOW_PRIVATE_URLS';
+
+/** The reason given for every refused address; deliberately the same for all of them. */
+export const ADDRESS_NOT_ALLOWED = 'the address is not allowed';
+
+function privateUrlsAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ALLOW_PRIVATE_URLS_ENV]?.trim().toLowerCase() === 'true';
+}
+
+/** An IPv4 address as a 32-bit unsigned number, or undefined if it is not one. */
+function ipv4ToNumber(ip: string): number | undefined {
+  const parts = ip.split('.');
+  if (parts.length !== 4 || !parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)) {
+    return undefined;
+  }
+  return parts.reduce((n, part) => n * 256 + Number(part), 0);
+}
+
+/** [network, prefix length] pairs. */
+const FORBIDDEN_V4: ReadonlyArray<readonly [string, number]> = [
+  ['0.0.0.0', 8],       // "this network"
+  ['10.0.0.0', 8],      // private
+  ['100.64.0.0', 10],   // carrier-grade NAT
+  ['127.0.0.0', 8],     // loopback
+  ['169.254.0.0', 16],  // link-local, including 169.254.169.254 (cloud metadata)
+  ['172.16.0.0', 12],   // private
+  ['192.168.0.0', 16],  // private
+  ['224.0.0.0', 4],     // multicast
+  ['240.0.0.0', 4],     // reserved, including 255.255.255.255
+];
+
+function forbiddenV4(n: number): boolean {
+  return FORBIDDEN_V4.some(([network, bits]) => {
+    const base = ipv4ToNumber(network) ?? 0;
+    const size = 2 ** (32 - bits);
+    return n >= base && n < base + size;
+  });
+}
+
+/** An IPv6 address as eight 16-bit groups, or undefined if it is not one. */
+function ipv6Groups(ip: string): number[] | undefined {
+  let text = ip;
+  // An embedded dotted IPv4 tail (::ffff:1.2.3.4) becomes two hex groups.
+  const tail = /:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text);
+  if (tail) {
+    const v4 = ipv4ToNumber(tail[1] ?? '');
+    if (v4 === undefined) {
+      return undefined;
+    }
+    text = `${text.slice(0, tail.index)}:${(v4 >>> 16).toString(16)}:${(v4 & 0xffff).toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) {
+    return undefined;
+  }
+  const parse = (half: string | undefined): number[] | undefined => {
+    if (!half) {
+      return [];
+    }
+    const groups = half.split(':');
+    return groups.every(g => /^[0-9a-f]{1,4}$/i.test(g)) ? groups.map(g => parseInt(g, 16)) : undefined;
+  };
+  const head = parse(halves[0]);
+  const rest = parse(halves[1]);
+  if (!head || !rest) {
+    return undefined;
+  }
+  if (halves.length === 1) {
+    return head.length === 8 ? head : undefined;
+  }
+  const missing = 8 - head.length - rest.length;
+  return missing >= 1 ? [...head, ...new Array<number>(missing).fill(0), ...rest] : undefined;
+}
+
+/**
+ * True when a PDF URL must not be fetched from this address: private,
+ * loopback, link-local, CGNAT, multicast or reserved IPv4; the IPv6
+ * unspecified and loopback addresses, unique-local fc00::/7, link-local
+ * fe80::/10, site-local fec0::/10 and multicast ff00::/8; and IPv6 forms that
+ * carry an IPv4 address -- mapped (::ffff:0:0/96), compatible (::/96) and the
+ * NAT64 prefix 64:ff9b::/96 -- judged by that IPv4 address. Anything that is
+ * not an IP address is refused too.
+ */
+export function isForbiddenAddress(address: string): boolean {
+  const ip = address.replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+  const family = isIP(ip);
+  if (family === 4) {
+    const n = ipv4ToNumber(ip);
+    return n === undefined || forbiddenV4(n);
+  }
+  if (family !== 6) {
+    return true;
+  }
+  const g = ipv6Groups(ip);
+  if (!g) {
+    return true;
+  }
+  const embeddedV4 = (): number => ((g[6] ?? 0) * 0x10000) + (g[7] ?? 0);
+  const zeroUpTo = (end: number): boolean => g.slice(0, end).every(x => x === 0);
+  if (zeroUpTo(5) && (g[5] === 0xffff || g[5] === 0)) {
+    // ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible; also :: and ::1,
+    // which embed 0.0.0.0 and 0.0.0.1).
+    return forbiddenV4(embeddedV4());
+  }
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every(x => x === 0)) {
+    return forbiddenV4(embeddedV4());
+  }
+  const first = g[0] ?? 0;
+  return (first & 0xfe00) === 0xfc00   // fc00::/7 unique local
+    || (first & 0xffc0) === 0xfe80     // fe80::/10 link-local
+    || (first & 0xffc0) === 0xfec0     // fec0::/10 site-local (deprecated)
+    || (first & 0xff00) === 0xff00;    // ff00::/8 multicast
+}
+
+export type HostLookup = (hostname: string) => Promise<ReadonlyArray<{ address: string }>>;
+
+const systemLookup: HostLookup = hostname => dns.lookup(hostname, { all: true, verbatim: true });
+
+/**
+ * Refuses a URL whose host is, or resolves to, an address isForbiddenAddress()
+ * rejects, unless CGMB_ALLOW_PRIVATE_URLS=true. A literal IP is judged as
+ * written; a name is resolved and refused if ANY of its addresses is
+ * forbidden.
+ *
+ * This narrows server-side request forgery but does not close it: fetch()
+ * resolves the name again when it connects, so a DNS server that answers
+ * differently the second time (DNS rebinding) can still slip past. Closing
+ * that needs a dispatcher that connects to the address checked here, which
+ * Node's built-in fetch does not offer without undici as a dependency.
+ */
+export async function checkHostAllowed(
+  url: URL,
+  lookup: HostLookup = systemLookup,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<void> {
+  if (privateUrlsAllowed(env)) {
+    return;
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '').toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost')) {
+    throw new Error(ADDRESS_NOT_ALLOWED);
+  }
+  if (isIP(host) !== 0) {
+    if (isForbiddenAddress(host)) {
+      throw new Error(ADDRESS_NOT_ALLOWED);
+    }
+    return;
+  }
+  let addresses: ReadonlyArray<{ address: string }>;
+  try {
+    addresses = await lookup(host);
+  } catch {
+    throw new Error('the host name could not be resolved');
+  }
+  if (addresses.length === 0 || addresses.some(({ address }) => isForbiddenAddress(address))) {
+    throw new Error(ADDRESS_NOT_ALLOWED);
+  }
+}
+
+/** Refuses a redirect from https to http; every other http(s) hop is fine. */
+export function checkRedirect(from: URL, to: URL): void {
+  if (from.protocol === 'https:' && to.protocol === 'http:') {
+    throw new Error('a redirect from https to http is not followed');
+  }
+}
+
+/** Settles with `promise`, or rejects as soon as `signal` aborts. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      error => { signal.removeEventListener('abort', onAbort); reject(error); }
+    );
+  });
+}
 
 function checkedUrl(raw: string, base?: URL): URL {
   let url: URL;
@@ -80,6 +274,7 @@ export async function downloadPdfUrl(
   try {
     let response: Response | undefined;
     for (let redirects = 0; ; redirects++) {
+      await untilAborted(checkHostAllowed(url), signal);
       response = await fetch(url, { redirect: 'manual', signal });
       if (!REDIRECTS.has(response.status)) {
         break;
@@ -92,12 +287,14 @@ export async function downloadPdfUrl(
       if (redirects >= limits.maxRedirects) {
         throw new Error(`more than ${limits.maxRedirects} redirects`);
       }
-      url = checkedUrl(location, url);
+      const next = checkedUrl(location, url);
+      checkRedirect(url, next);
+      url = next;
     }
 
     if (!response.ok) {
       await response.body?.cancel();
-      throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+      throw new Error(`HTTP ${response.status}`);
     }
 
     const declared = Number(response.headers.get('content-length') ?? '');
@@ -126,8 +323,7 @@ export async function downloadPdfUrl(
     const body = Buffer.concat(chunks);
 
     if (!looksLikePdf(body)) {
-      const type = response.headers.get('content-type') ?? 'no content type';
-      throw new Error(`the response is not a PDF (${type}, ${body.length} bytes)`);
+      throw new Error('the response is not a PDF');
     }
 
     const dir = await fsPromises.mkdtemp(join(tmpdir(), 'cgmb-pdf-url-'));

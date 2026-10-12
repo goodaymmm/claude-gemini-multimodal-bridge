@@ -50,7 +50,7 @@ Claude の**推論力**、Antigravity CLI の**検索力**、AI Studio の**生�
 
 ### 🎯 MCP標準対応
 
-Anthropic Model Context Protocol準拠。340件のテストを Linux / Windows / macOS の CI で push ごとに実行
+Anthropic Model Context Protocol準拠。421件のテストを Linux / Windows / macOS の CI で push ごとに実行
 
 </td>
 </tr>
@@ -352,6 +352,7 @@ CLAUDE_CODE_PATH=/usr/local/bin/claude   # 既定の場所以外にある場合
 # PDF: auto | local | upload（「PDF処理 & OCR」を参照）
 CGMB_PDF_MODE=auto
 CGMB_PDF_TEXT_MIN_CHARS=100
+CGMB_ALLOW_PRIVATE_URLS=false            # true でプライベート/ループバックのアドレスの PDF URL も取得
 
 # キャッシュ・ログ
 ENABLE_CACHING=true
@@ -707,6 +708,15 @@ src/
   の URL）は AI Studio に送り、両方の回答を返します。どちらかが失敗した場合は、
   どちらかをエラーに示します。`cgmb analyze` に URL とローカルファイルを渡した場合も、
   URL の処理で止まらずローカルファイルを読みます
+- 🛡️ **PDF の URL から内部アドレスに届かないように**: PDF の URL はプロンプト
+  インジェクションから来ることもあり、ダウンロードは指定された先を何でも取得して
+  いました。最初の URL とすべてのリダイレクト先について、ホストがプライベート・
+  ループバック・リンクローカル（メタデータの 169.254.169.254 を含む）・CGNAT・
+  マルチキャスト・予約済みのアドレスであるか、それに解決される場合と `localhost`
+  は、`CGMB_ALLOW_PRIVATE_URLS=true` でない限り拒否します。https から http への
+  リダイレクトは設定にかかわらず拒否します。拒否したアドレスが何であってもエラーは
+  同じです。チェックと接続の間に DNS の応答が変わる場合（DNS リバインディング）は
+  防げません。URL のログ行にはホストだけを記録し、パスやクエリは記録しません
 - 🧹 **`layer_priority` と `--strategy` を案内から削除**: `cgmb_multimodal_process`
   は `options.layer_priority` を、`cgmb process` は `--strategy` を案内していました
   が、どちらも何にも読まれておらず、この README にも記載がありません。ツールの
@@ -728,10 +738,10 @@ src/
 
 **変更なし**: 高品質な画像生成の `gemini-3-pro-image`、Antigravity の既定
 `gemini-3.6-flash-low`、`MIN_AGY_VERSION`（1.1.7）。export している識別子の名前は
-変えていません。テスト: 179 → 340（WAV ヘルパー 7 件、スキーマ既定値 1 件、
+変えていません。テスト: 179 → 421（WAV ヘルパー 7 件、スキーマ既定値 1 件、
 モデル表 2 件、Antigravity の確認と環境 8 件、API キーとサインイン 3 件、依存の
-更新 10 件、PDF モード 24 件、ルーティング 106 件）。Linux では 338 件が成功し、
-2 件はスキップです。
+更新 10 件、PDF モード 24 件、ルーティング 106 件、PDF URL のアドレス規則 81 件）。
+Linux では 419 件が成功し、2 件はスキップです。
 ルーティングの変更は、実際のサーバと CLI を動かす `tests/routing-matrix.test.mjs`
 で固定しており、両方の README の使用例をすべて確認しています。
 

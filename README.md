@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 340 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 421 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -352,6 +352,7 @@ CLAUDE_CODE_PATH=/usr/local/bin/claude   # for installs outside the defaults
 # PDFs: auto | local | upload (see PDF Processing & OCR)
 CGMB_PDF_MODE=auto
 CGMB_PDF_TEXT_MIN_CHARS=100
+CGMB_ALLOW_PRIVATE_URLS=false            # true lets PDF URLs reach private/loopback addresses
 
 # Caching and logging
 ENABLE_CACHING=true
@@ -715,6 +716,15 @@ dependencies to new major versions. 1.2.3 was never published.
   PDF URLs) to AI Studio, and both answers are returned; if either fails, the
   error says which. `cgmb analyze` with a URL and local files reads the local
   files too, instead of stopping after the URL
+- 🛡️ **PDF URLs cannot reach internal addresses**: a PDF URL can come from a
+  prompt injection, and the download fetched whatever it named. A host that is,
+  or resolves to, a private, loopback, link-local (including the
+  169.254.169.254 metadata endpoint), CGNAT, multicast or reserved address, or
+  `localhost`, is now refused for the first URL and every redirect unless
+  `CGMB_ALLOW_PRIVATE_URLS=true`, and an https → http redirect is refused
+  whatever the setting. The error is the same for every refused address. A DNS
+  answer that changes between the check and the connection (DNS rebinding) is
+  not caught. URL log lines carry only the host, never the path or query
 - 🧹 **`layer_priority` and `--strategy` removed from the surface**:
   `cgmb_multimodal_process` advertised `options.layer_priority` and
   `cgmb process` offered `--strategy`; nothing read either, and this README
@@ -736,10 +746,11 @@ dependencies to new major versions. 1.2.3 was never published.
 
 **Unchanged**: `gemini-3-pro-image` for high-quality images, the Antigravity
 default `gemini-3.6-flash-low`, and `MIN_AGY_VERSION` (1.1.7). No exported
-identifier is renamed. Tests: 179 → 340 (7 for the WAV helper, 1 for the schema
+identifier is renamed. Tests: 179 → 421 (7 for the WAV helper, 1 for the schema
 default, 2 for the model table, 8 for the Antigravity probe and environment, 3
 for the API-key sign-in, 10 for the dependency moves, 24 for the PDF mode, 106
-for routing); on Linux 338 pass and 2 are skipped. The routing changes are
+for routing, 81 for the PDF URL address rules); on Linux 419 pass and 2 are
+skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

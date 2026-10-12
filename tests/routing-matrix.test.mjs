@@ -270,6 +270,9 @@ describe('routing matrix', { skip: SKIP }, () => {
       TMPDIR: childTmp,
       TMP: childTmp,
       TEMP: childTmp,
+      // The PDF URLs below are served from 127.0.0.1, which the download
+      // refuses unless private addresses are allowed.
+      CGMB_ALLOW_PRIVATE_URLS: 'true',
     };
     for (const key of [
       'NODE_TEST_CONTEXT', 'LOG_LEVEL', 'LOG_FILE', 'CGMB_CLI_MODE', 'CGMB_DEBUG', 'CGMB_PDF_MODE',

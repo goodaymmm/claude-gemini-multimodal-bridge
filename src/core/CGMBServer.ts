@@ -43,6 +43,21 @@ const require = createRequire(import.meta.url);
 const packageJson = require('../../package.json') as { version: string };
 const VERSION = packageJson.version;
 
+/**
+ * The distinct hosts of some URLs, for log lines. A URL's path and query can
+ * carry tokens or personal data, and logger metadata goes to the console and
+ * LOG_FILE unredacted, so URLs are never logged whole.
+ */
+function hostsOf(urls: readonly string[]): string[] {
+  return [...new Set(urls.map(u => {
+    try {
+      return new URL(u).host;
+    } catch {
+      return '(not a URL)';
+    }
+  }))];
+}
+
 /** options.pdf_mode, as the three tools that take files describe it. */
 const PDF_MODE_OPTION = {
   type: 'string',
@@ -1123,9 +1138,9 @@ Solutions:
     const hasUrls = urlsDetected.length > 0;
     
     if (hasUrls) {
-      logger.info(`URLs detected in request`, { 
+      logger.info(`URLs detected in request`, {
         urlCount: urlsDetected.length,
-        urls: urlsDetected.slice(0, 3), // Log first 3 URLs for debugging
+        hosts: hostsOf(urlsDetected),
         inPrompt: urlsInPrompt.length,
         inFiles: urlsInFiles.length
       });
@@ -1569,6 +1584,7 @@ Failed steps: ${result.metadata.steps_failed}`
     const { fileUrls, webUrls } = decision;
     const sections: string[] = [];
     const failures: string[] = [];
+    const failedLayers: string[] = [];
     const layersUsed: string[] = [];
     let duration = 0;
 
@@ -1598,6 +1614,7 @@ Failed steps: ${result.metadata.steps_failed}`
         sections.push(extractResultText(result) ?? '');
       } catch (error) {
         failures.push(`The antigravity layer could not read ${webUrls.join(', ')}: ${(error as Error).message}`);
+        failedLayers.push('antigravity');
       }
     }
 
@@ -1608,6 +1625,7 @@ Failed steps: ${result.metadata.steps_failed}`
     if (unfetchable.length > 0) {
       failures.push(`The aistudio layer could not read ${unfetchable.join(', ')}: Only PDF URLs are fetched. ` +
         'Download the file and pass its local path instead.');
+      failedLayers.push('aistudio');
     }
 
     const studioFiles = [
@@ -1642,11 +1660,19 @@ Failed steps: ${result.metadata.steps_failed}`
       } catch (error) {
         const what = fileUrls.length > 0 && localFiles.length === 0 ? fileUrls.join(', ') : 'the attached files';
         failures.push(`The aistudio layer could not read ${what}: ${(error as Error).message}`);
+        failedLayers.push('aistudio');
       }
     }
 
     if (failures.length > 0) {
-      logger.error('URL request failed', { failures });
+      // The failure messages name the URLs in full, so they go to the caller
+      // only; the log gets the hosts, the layers and any HTTP status.
+      logger.error('URL request failed', {
+        failureCount: failures.length,
+        layers: failedLayers,
+        hosts: hostsOf([...webUrls, ...fileUrls]),
+        httpStatus: failures.flatMap(f => [...f.matchAll(/\bHTTP (\d{3})\b/g)].map(m => Number(m[1]))),
+      });
       return this.formatResponse({
         success: false,
         error: failures.join('; '),
