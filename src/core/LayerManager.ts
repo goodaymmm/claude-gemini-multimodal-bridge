@@ -13,7 +13,9 @@ import {
   errorForLog,
   ExecutionPlan,
   FileReference,
+  isCredentialFileName,
   isWithinRoots,
+  lastPathSegment,
   LayerResult,
   LayerType,
   ProcessingOptions,
@@ -35,33 +37,6 @@ import {
   type RouteKind,
   urlKind,
 } from './routing.js';
-
-/**
- * Names that must not be transmitted to Google, checked at the AI Studio
- * boundary.
- *
- * Deliberately a name check and nothing more. The workspace-confinement and
- * canonicalisation machinery this replaces refused legitimate paths outside the
- * working directory -- `cgmb analyze ~/docs/report.pdf` is the product's main
- * use, not an attack -- and needed a trusted-context argument threaded through
- * every routing method to work at all. A denylist costs neither: no ordinary
- * request analyses a .env, so nothing legitimate is lost.
- *
- * Matched on basenames only: the name as given, the name the caller used
- * (`givenPath`) when there is one, and the basename of the file's realpath when
- * it exists. The realpath is looked up for its name and nothing else -- no
- * confinement, no identity checks -- so a link such as `notes.txt -> .env` is
- * refused on every path, not only where the main server already resolved it.
- */
-const CREDENTIAL_FILE_PATTERNS = [
-  /^\.env(\..*)?$/i,
-  /^\.npmrc$/i,
-  /^\.netrc$/i,
-  /^id_(rsa|dsa|ecdsa|ed25519)$/i,
-  /^credentials(\..*)?$/i,
-  /^secrets?\.[a-z0-9]+$/i,
-  /\.(pem|key|pfx|p12|keystore|jks)$/i,
-];
 
 /**
  * The basename of `path`'s realpath, or undefined.
@@ -95,7 +70,10 @@ function realBasename(path: string): string | undefined {
  */
 export function assertNoCredentialFiles(task: unknown): void {
   for (const file of taskFileRefs(task)) {
-    // basename() handles both separators, so no path parsing is needed here.
+    // isCredentialFileName takes the last segment after either `/` or `\` on
+    // every platform, not path.basename(): on POSIX basename('.\\.env') is the
+    // whole string, so it matched nothing, yet the AI Studio layer turned the
+    // backslash into a separator and the sub-server opened `./.env`.
     //
     // Both names are checked. Since 6262c4b `path` is the realpath the roots
     // check verified and `givenPath` is the name the caller used; a symlink
@@ -108,19 +86,19 @@ export function assertNoCredentialFiles(task: unknown): void {
     // name as given, not the realpath: the realpath's basename is added
     // whenever the file exists and resolves. A path that does not resolve (a
     // URL, a missing file, a loop) is judged by its given name alone.
-    const names = new Set([basename(file.path)]);
+    const names = [file.path];
     if (file.givenPath) {
-      names.add(basename(file.givenPath));
+      names.push(file.givenPath);
     }
     const real = realBasename(file.path);
     if (real !== undefined) {
-      names.add(real);
+      names.push(real);
     }
-    const matched = [...names].some(candidate => CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(candidate)));
-    if (matched) {
+    if (names.some(isCredentialFileName)) {
       // Named by the name the caller used: a symlink's target name is the
-      // file system's business, not the caller's.
-      const name = basename(file.givenPath ?? file.path);
+      // file system's business, not the caller's. Split the same way as the
+      // check, so `.\\.env` is reported as `.env`.
+      const name = lastPathSegment(file.givenPath ?? file.path);
       throw new CGMBError(
         `Refusing to process ${name}: it matches a credential file pattern, and the AI Studio ` +
         `layer transmits file contents to Google.`,

@@ -1330,6 +1330,77 @@ export function describeToolArgs(args: unknown): Record<string, unknown> {
 }
 
 // ===================================
+// Names that never leave the machine
+// ===================================
+
+/**
+ * Names that must not be transmitted to Google, checked at the AI Studio
+ * boundary (LayerManager's assertNoCredentialFiles, and the AI Studio
+ * sub-server on the name it actually opens).
+ *
+ * Deliberately a name check and nothing more. The workspace-confinement and
+ * canonicalisation machinery this replaces refused legitimate paths outside the
+ * working directory -- `cgmb analyze ~/docs/report.pdf` is the product's main
+ * use, not an attack -- and needed a trusted-context argument threaded through
+ * every routing method to work at all. A denylist costs neither: no ordinary
+ * request analyses a .env, so nothing legitimate is lost.
+ *
+ * Matched on names only (see credentialNameCandidates for which part of a
+ * path counts as its name). LayerManager checks the name as given, the name the
+ * caller used (`givenPath`) when there is one, and the name of the file's
+ * realpath when it exists. The realpath is looked up for its name and nothing
+ * else -- no confinement, no identity checks -- so a link such as
+ * `notes.txt -> .env` is refused on every path, not only where the main server
+ * already resolved it.
+ */
+const CREDENTIAL_FILE_PATTERNS = [
+  /^\.env(\..*)?$/i,
+  /^\.npmrc$/i,
+  /^\.netrc$/i,
+  /^id_(rsa|dsa|ecdsa|ed25519)$/i,
+  /^credentials(\..*)?$/i,
+  /^secrets?\.[a-z0-9]+$/i,
+  /\.(pem|key|pfx|p12|keystore|jks)$/i,
+];
+
+/**
+ * The last segment of a path, split on `/` and `\` on every platform.
+ *
+ * path.basename() splits on the host's separators only, so on Linux and macOS
+ * `.\.env` was one name that matched nothing -- and the AI Studio layer
+ * rewrote the backslash to `/` on its way to the sub-server, which then opened
+ * `./.env`. Windows accepts both separators, so a backslash is a separator for
+ * this check wherever it runs; on POSIX that can only refuse more, never less.
+ * Trailing separators are dropped first, as basename() does.
+ */
+export function lastPathSegment(name: string): string {
+  const trimmed = name.replace(/[\\/]+$/, '');
+  return trimmed.slice(Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) + 1);
+}
+
+/**
+ * Every form of a path's name the denylist is matched against: the last
+ * segment, and each `:`-separated part of it, each with trailing dots and
+ * spaces removed.
+ *
+ * Windows opens `.env ` and `id_rsa.` as `.env` and `id_rsa` -- it strips
+ * trailing dots and spaces from a name -- and reads a name around a colon as a
+ * drive (`C:.env` is `.env` in drive C's current directory) or a stream
+ * (`.env::$DATA` is `.env`'s contents). On POSIX these are unusual names that
+ * cost nothing to refuse.
+ */
+function credentialNameCandidates(name: string): string[] {
+  const segment = lastPathSegment(name);
+  return [segment, ...segment.split(':')].map(part => part.replace(/[. ]+$/, ''));
+}
+
+/** True when the name part of `name` (see credentialNameCandidates) is credential-shaped. */
+export function isCredentialFileName(name: string): boolean {
+  return credentialNameCandidates(name).some(candidate =>
+    candidate !== '' && CREDENTIAL_FILE_PATTERNS.some(pattern => pattern.test(candidate)));
+}
+
+// ===================================
 // Which files may leave the machine
 // ===================================
 //

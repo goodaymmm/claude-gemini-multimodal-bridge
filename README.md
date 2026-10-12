@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 654 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 684 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -1000,12 +1000,34 @@ dependencies to new major versions. 1.2.3 was never published.
     lookup now runs only for a path the allowed-directories check places
     inside, a UNC or `//host` path is never handed to it, and the refusal
     names the file as given (`notes.txt`), not where it points
+  - the credential-name check took the name with `path.basename()`, which on
+    Linux and macOS splits on `/` only, so `.\.env` or `x\..\.env` was one odd
+    name that matched nothing; the AI Studio layer then turned every `\` into
+    `/`, and the sub-server read `./.env` and sent it to Gemini. The check now
+    takes the last part after either `/` or `\` on every platform, without the
+    trailing dots and spaces Windows ignores (`.env `, `id_rsa.`), and reads a
+    colon as Windows does (`C:.env`, `.env::$DATA`). The layer rewrites
+    backslashes on Windows only, so on Linux and macOS `a\b.txt` is read under
+    its own name, and the sub-server refuses a credential-shaped name itself,
+    on the file it actually opens. The refusal names the name part only:
+    `Refusing to process .env`
+  - with `options.multiplePDFs` set, the AI Studio layer read each PDF's size
+    before the allowed-directories check, so a workflow step naming
+    `\\host\share\a.pdf` or `/net/host/...` made the server contact that host.
+    The check now comes first, and a PDF outside the allowed directories gets
+    the usual "File is not readable" refusal without being looked at
+  - a PDF URL's host was checked against private addresses and then resolved
+    again for the download, so a DNS server answering differently the second
+    time (DNS rebinding) could point the download at an internal address. The
+    download now connects to the addresses that were checked; with
+    `CGMB_ALLOW_PRIVATE_URLS=true` nothing is checked and the system lookup
+    runs as before. Error messages and limits are unchanged
 
 **Unchanged**: the Antigravity default `gemini-3.6-flash-low` and
 `MIN_AGY_VERSION` (1.1.7). No exported identifier is renamed; the
 `resolveWindowsCommand` alias and the three `AI_MODELS` keys above are removed.
 `gemini-3-pro-image`, listed until now as the high-quality image model, is no
-longer listed: no code path ever selected it. Tests: 179 → 654 (7 for the WAV
+longer listed: no code path ever selected it. Tests: 179 → 684 (7 for the WAV
 helper, 1 for the schema default, 2 for the model table, 8 for the Antigravity
 probe and environment, 3 for the API-key sign-in, 10 for the dependency moves,
 24 for the PDF mode, 106 for routing, 81 for the PDF URL address rules, 5 for
@@ -1015,7 +1037,7 @@ for the cache and retry variables, 8 for `cgmb info`, 3 for postinstall's
 patch, 6 for the sub-server import, 14 for the `cgmb` tool schema, 13 for the
 retry variables in every layer, 19 for log redaction and step references, 46 for the final hardening, 22 for the roots pass, 20 for the last roots items, 3 for the
 denylist on both names, 3 for display names on stderr and typing by the given
-name, 22 for the last log and name items, 1 for the denylist staying inside the allowed directories); on Linux 653 pass and 1 is skipped. The routing changes are
+name, 22 for the last log and name items, 1 for the denylist staying inside the allowed directories, 30 for separator spellings of credential names, the multiple-PDF size check and the pinned URL connection); on Linux 683 pass and 1 is skipped. The routing changes are
 pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
 and now asserts every usage example in both READMEs.
 

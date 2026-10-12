@@ -20,16 +20,20 @@
  * reach what only this machine can: every host -- the first URL's and each
  * redirect target's -- is resolved and refused if any of its addresses is
  * private, loopback, link-local (cloud metadata at 169.254.169.254 among them),
- * CGNAT, multicast or reserved, or if it is `localhost`. CGMB_ALLOW_PRIVATE_URLS=true
- * lifts that check, for PDFs served on a local network. A redirect from https
+ * CGNAT, multicast or reserved, or if it is `localhost`, and the connection goes
+ * to an address that check approved, not to a second lookup's answer.
+ * CGMB_ALLOW_PRIVATE_URLS=true lifts that check, for PDFs served on a local
+ * network. A redirect from https
  * to http is refused whatever the setting; http to https is followed. A refused
  * address gets one message whatever the address was, so the error cannot be
  * used to map which internal hosts exist.
  */
 
-import { promises as dns } from 'dns';
+import { promises as dns, type LookupAddress, type LookupOptions } from 'dns';
 import { promises as fsPromises } from 'fs';
-import { isIP } from 'net';
+import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'http';
+import { request as httpsRequest } from 'https';
+import { isIP, type LookupFunction } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -174,7 +178,19 @@ export function isForbiddenAddress(address: string): boolean {
 
 export type HostLookup = (hostname: string) => Promise<ReadonlyArray<{ address: string }>>;
 
+/** An address checkHostAllowed() approved, in the form a connection is pinned to. */
+export interface CheckedAddress {
+  address: string;
+  family: 4 | 6;
+}
+
 const systemLookup: HostLookup = hostname => dns.lookup(hostname, { all: true, verbatim: true });
+
+/** `address` with the family its own form says it has; undefined if it is not an IP address. */
+function checkedAddress(address: string): CheckedAddress | undefined {
+  const family = isIP(address);
+  return family === 4 || family === 6 ? { address, family } : undefined;
+}
 
 /**
  * Refuses a URL whose host is, or resolves to, an address isForbiddenAddress()
@@ -182,29 +198,31 @@ const systemLookup: HostLookup = hostname => dns.lookup(hostname, { all: true, v
  * written; a name is resolved and refused if ANY of its addresses is
  * forbidden.
  *
- * This narrows server-side request forgery but does not close it: fetch()
- * resolves the name again when it connects, so a DNS server that answers
- * differently the second time (DNS rebinding) can still slip past. Closing
- * that needs a dispatcher that connects to the address checked here, which
- * Node's built-in fetch does not offer without undici as a dependency.
+ * Returns the addresses it approved, and downloadPdfUrl() connects to those
+ * (pinnedLookup) rather than resolving the name a second time: with fetch(),
+ * a DNS server that answered differently the second time (DNS rebinding)
+ * could send the connection to an address this never saw. Undefined when
+ * CGMB_ALLOW_PRIVATE_URLS=true, where there is nothing to pin and the system
+ * lookup runs as usual.
  */
 export async function checkHostAllowed(
   url: URL,
   lookup: HostLookup = systemLookup,
   env: NodeJS.ProcessEnv = process.env
-): Promise<void> {
+): Promise<ReadonlyArray<CheckedAddress> | undefined> {
   if (privateUrlsAllowed(env)) {
-    return;
+    return undefined;
   }
   const host = url.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '').toLowerCase();
   if (host === 'localhost' || host.endsWith('.localhost')) {
     throw new Error(ADDRESS_NOT_ALLOWED);
   }
-  if (isIP(host) !== 0) {
+  const literal = checkedAddress(host);
+  if (literal) {
     if (isForbiddenAddress(host)) {
       throw new Error(ADDRESS_NOT_ALLOWED);
     }
-    return;
+    return [literal];
   }
   let addresses: ReadonlyArray<{ address: string }>;
   try {
@@ -215,6 +233,38 @@ export async function checkHostAllowed(
   if (addresses.length === 0 || addresses.some(({ address }) => isForbiddenAddress(address))) {
     throw new Error(ADDRESS_NOT_ALLOWED);
   }
+  // Every address passed isForbiddenAddress(), which refuses anything that is
+  // not an IP address, so each one has a family.
+  return addresses.flatMap(({ address }) => checkedAddress(address) ?? []);
+}
+
+/**
+ * A `lookup` for http(s).request() that answers with `addresses` and never
+ * asks DNS: the connection goes to what checkHostAllowed() approved. Honours
+ * both forms Node calls it in -- `all: true` (the array, which the default
+ * autoSelectFamily uses) and the single-address callback -- and a requested
+ * family. TLS is unaffected: only the lookup is replaced, so the certificate
+ * is still checked against the URL's host name.
+ */
+export function pinnedLookup(addresses: ReadonlyArray<CheckedAddress>): LookupFunction {
+  return (hostname: string, options: LookupOptions, callback: (error: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void): void => {
+    const wanted = options?.family === 4 || options?.family === 'IPv4' ? 4
+      : options?.family === 6 || options?.family === 'IPv6' ? 6
+        : undefined;
+    const matching = addresses.filter(({ family }) => wanted === undefined || family === wanted);
+    const first = matching[0];
+    if (!first) {
+      const error: NodeJS.ErrnoException = new Error(`no checked address for ${hostname}`);
+      error.code = 'ENOTFOUND';
+      process.nextTick(callback, error, '', undefined);
+      return;
+    }
+    if (options?.all) {
+      process.nextTick(callback, null, matching.map(({ address, family }) => ({ address, family })));
+      return;
+    }
+    process.nextTick(callback, null, first.address, first.family);
+  };
 }
 
 /** Refuses a redirect from https to http; every other http(s) hop is fine. */
@@ -264,25 +314,60 @@ function looksLikePdf(head: Buffer): boolean {
   return head.subarray(0, 1024).includes('%PDF-');
 }
 
+/**
+ * One GET of `url`, answered with the response head; the body is left to the
+ * caller. Redirects are not followed (http.request never does), the request
+ * is aborted with `signal`, and `addresses`, when there are any, are the only
+ * place it connects to. No agent: nothing is pooled, so a kept-alive socket
+ * cannot carry one download's connection into the next.
+ */
+function get(
+  url: URL,
+  addresses: ReadonlyArray<CheckedAddress> | undefined,
+  signal: AbortSignal
+): { request: ReturnType<typeof httpRequest>; response: Promise<IncomingMessage> } {
+  const options: RequestOptions = {
+    method: 'GET',
+    signal,
+    agent: false,
+    ...(addresses ? { lookup: pinnedLookup(addresses) } : {}),
+  };
+  const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+  const request = send(url, options);
+  const response = new Promise<IncomingMessage>((resolve, reject) => {
+    request.once('response', resolve);
+    // Stays attached for the request's life: an error after the head (a reset,
+    // the timeout, the size cap destroying it) must not be an unhandled event.
+    request.on('error', reject);
+  });
+  request.end();
+  return { request, response };
+}
+
 export async function downloadPdfUrl(
   rawUrl: string,
-  limits: PdfDownloadLimits = PDF_URL_LIMITS
+  limits: PdfDownloadLimits = PDF_URL_LIMITS,
+  lookup: HostLookup = systemLookup
 ): Promise<DownloadedPdf> {
   let url = checkedUrl(rawUrl);
   const signal = AbortSignal.timeout(limits.timeoutMs);
 
   try {
-    let response: Response | undefined;
+    let request: ReturnType<typeof httpRequest>;
+    let response: IncomingMessage;
     for (let redirects = 0; ; redirects++) {
-      await untilAborted(checkHostAllowed(url), signal);
-      response = await fetch(url, { redirect: 'manual', signal });
-      if (!REDIRECTS.has(response.status)) {
+      const addresses = await untilAborted(checkHostAllowed(url, lookup), signal);
+      const sent = get(url, addresses, signal);
+      request = sent.request;
+      response = await sent.response;
+      const status = response.statusCode ?? 0;
+      if (!REDIRECTS.has(status)) {
         break;
       }
-      const location = response.headers.get('location');
-      await response.body?.cancel();
+      const location = response.headers.location;
+      response.destroy();
       if (!location) {
-        throw new Error(`HTTP ${response.status} without a Location header`);
+        throw new Error(`HTTP ${status} without a Location header`);
       }
       if (redirects >= limits.maxRedirects) {
         throw new Error(`more than ${limits.maxRedirects} redirects`);
@@ -292,33 +377,28 @@ export async function downloadPdfUrl(
       url = next;
     }
 
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error(`HTTP ${response.status}`);
+    const status = response.statusCode ?? 0;
+    if (status < 200 || status > 299) {
+      response.destroy();
+      throw new Error(`HTTP ${status}`);
     }
 
-    const declared = Number(response.headers.get('content-length') ?? '');
+    const declared = Number(response.headers['content-length'] ?? '');
     if (Number.isFinite(declared) && declared > limits.maxBytes) {
-      await response.body?.cancel();
+      response.destroy();
       throw new Error(`the PDF is ${(declared / 1024 / 1024).toFixed(1)} MB; the limit is ${limits.maxBytes / 1024 / 1024} MB`);
     }
 
     const chunks: Buffer[] = [];
     let received = 0;
-    if (response.body) {
-      const reader = response.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        received += value.byteLength;
-        if (received > limits.maxBytes) {
-          await reader.cancel();
-          throw new Error(`the PDF is larger than the ${limits.maxBytes / 1024 / 1024} MB limit`);
-        }
-        chunks.push(Buffer.from(value));
+    for await (const chunk of response) {
+      const value = chunk as Buffer;
+      received += value.byteLength;
+      if (received > limits.maxBytes) {
+        request.destroy();
+        throw new Error(`the PDF is larger than the ${limits.maxBytes / 1024 / 1024} MB limit`);
       }
+      chunks.push(value);
     }
     const body = Buffer.concat(chunks);
 

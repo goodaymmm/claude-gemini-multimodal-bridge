@@ -24,7 +24,16 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { promises as fsPromises } from 'fs';
 // Import AI_MODELS from the build output location
-import { AI_MODELS, type AllowedRoots, checkAgainstRoots, firstLineForLog, notReadableMessage, resolveAllowedRoots } from '../core/types.js';
+import {
+  AI_MODELS,
+  type AllowedRoots,
+  checkAgainstRoots,
+  firstLineForLog,
+  isCredentialFileName,
+  lastPathSegment,
+  notReadableMessage,
+  resolveAllowedRoots,
+} from '../core/types.js';
 import { normalizeCrossPlatformPath } from '../utils/platformUtils.js';
 import { describeTtsAudio } from '../utils/wavAudio.js';
 import pkg from 'wavefile';
@@ -53,8 +62,10 @@ const VERSION = packageJson.version;
  * a name no denylist enumerates -- and the contents would leave without the
  * user ever seeing it.
  *
- * The basename denylist in LayerManager stays as a second layer for
- * credential-shaped names *inside* these roots.
+ * The credential-name denylist (isCredentialFileName) stays as a second layer
+ * for credential-shaped names *inside* these roots: LayerManager applies it
+ * before any layer runs, and readableInputOrMissing() here applies it again to
+ * the name that is actually opened.
  *
  * Resolved once, at startup, from the directory the server was launched in.
  * Additional roots come from CGMB_ALLOWED_ROOTS, delimiter-separated.
@@ -94,6 +105,34 @@ export function readableRootOrMissing(filePath: string, shown: string = filePath
     default:
       throw notReadable(shown);
   }
+}
+
+/**
+ * readableRootOrMissing(), then the credential-name denylist on every name the
+ * file goes by here: the path as sent, the name it is shown by (`given`, a
+ * display name when the request has one) and the realpath that is opened.
+ *
+ * LayerManager refuses these names before any layer runs, but it sees the path
+ * as the caller wrote it, before the AI Studio layer passes it on; this is the
+ * check on the exact name that is read, so a spelling the first one missed (a
+ * separator it did not split on, a name Windows trims) is refused here, and so
+ * is a caller that reaches this server without LayerManager. It runs after the
+ * roots check, so a path outside the roots keeps the one refusal, and before
+ * the existence check, so a missing credential file is refused, not skipped.
+ * Every tool that reads or stats a caller's file goes through this.
+ */
+function readableInputOrMissing(filePath: string, shown: string = filePath, given: string = shown): string | null {
+  const resolved = readableRootOrMissing(filePath, shown);
+  const names = resolved === null ? [filePath, given] : [filePath, given, resolved];
+  if (names.some(isCredentialFileName)) {
+    // Named by its last segment, as LayerManager names it: the denylist
+    // judged a name, and the rest of the path is not the point.
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Refusing to process ${firstLineForLog(lastPathSegment(shown))}: it matches a credential file pattern`
+    );
+  }
+  return resolved;
 }
 
 /**
@@ -726,7 +765,7 @@ To retrieve this file, use:
     try {
       // The roots check comes before anything is looked up on disk, so a path
       // outside them is refused the same way whether or not it exists.
-      const imagePath = readableRootOrMissing(params.imagePath);
+      const imagePath = readableInputOrMissing(params.imagePath);
       if (imagePath === null) {
         throw new Error(`Image file not found: ${params.imagePath}`);
       }
@@ -805,7 +844,7 @@ To retrieve this file, use:
           // inside the roots, and a path outside them is refused whether or
           // not it exists. Read through the checked path, not the
           // caller-supplied one: resolving twice would reopen the gap.
-          const localPath = readableRootOrMissing(file.path, shown);
+          const localPath = readableInputOrMissing(file.path, shown, given);
           if (localPath === null) {
             console.warn(`File not found: ${shown}`);
             continue;
@@ -898,7 +937,7 @@ To retrieve this file, use:
         }
 
         // Roots first, then existence (see processMultimodal).
-        const allowedDocPath = readableRootOrMissing(docPath, shown);
+        const allowedDocPath = readableInputOrMissing(docPath, shown, given);
         if (allowedDocPath === null) {
           console.warn(`Document not found: ${shown}`);
           continue;
@@ -1103,7 +1142,7 @@ To retrieve this file, use:
       // The same boundary as every tool that reads files. Generated files land
       // in <cwd>/output (generateImage, generateAudio), and the working
       // directory is always an allowed root, so they stay reachable.
-      const filePath = readableRootOrMissing(params.filePath);
+      const filePath = readableInputOrMissing(params.filePath);
       if (filePath === null) {
         throw new McpError(ErrorCode.InvalidRequest, `File not found: ${params.filePath}`);
       }
@@ -1238,7 +1277,7 @@ To retrieve this file, use:
     try {
       // The same boundary as get_generated_file: a stat outside the roots
       // would say what exists there.
-      const filePath = readableRootOrMissing(params.filePath);
+      const filePath = readableInputOrMissing(params.filePath);
       if (filePath === null) {
         throw new McpError(ErrorCode.InvalidRequest, `File not found: ${params.filePath}`);
       }

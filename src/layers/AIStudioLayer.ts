@@ -25,7 +25,17 @@ import {
   MultimodalResult,
 } from '../core/types.js';
 import { AntigravityCLILayer } from './AntigravityCLILayer.js';
-import { describeToolArgs, errorForLog, firstLineForLog, hostsOf, shownPath, taskFileRefs } from '../core/types.js';
+import {
+  allowedRoots,
+  checkAgainstRoots,
+  describeToolArgs,
+  errorForLog,
+  firstLineForLog,
+  hostsOf,
+  notReadableMessage,
+  shownPath,
+  taskFileRefs,
+} from '../core/types.js';
 import { logger } from '../utils/logger.js';
 import { retry, safeExecute } from '../utils/errorHandler.js';
 import { type RetryPolicy, retryPolicyFromEnv } from '../utils/envLoader.js';
@@ -1619,8 +1629,8 @@ export class AIStudioLayer implements LayerInterface {
    */
   private async executeMCPCommand(command: string, rawParams: any): Promise<any> {
     let params = this.withDisplayNames(rawParams);
-    // Normalize file paths in params for cross-platform compatibility
-    // This ensures Windows backslashes are converted to forward slashes before MCP transmission
+    // On Windows, backslashes become forward slashes before MCP transmission
+    // (and only there: see normalizeInputPath).
     if (params) {
       if (params.files && Array.isArray(params.files)) {
         params = {
@@ -2109,12 +2119,16 @@ export class AIStudioLayer implements LayerInterface {
   }
 
   /**
-   * Normalize file path for cross-platform MCP communication
-   * Windows backslashes are converted to forward slashes for consistency
+   * A path for the sub-server: on Windows, backslashes become forward slashes.
+   *
+   * Windows only. There both are separators, so the rewrite names the same
+   * file; on Linux and macOS a backslash is an ordinary character in a file
+   * name, and turning it into a separator named a different file from the one
+   * every check before this saw -- `.\\.env` passed the credential denylist as
+   * one odd name and was opened here as `./.env`.
    */
   private normalizeInputPath(filePath: string): string {
-    if (!filePath) {return filePath;}
-    // Convert Windows backslashes to forward slashes for cross-platform compatibility
+    if (!filePath || process.platform !== 'win32') {return filePath;}
     return filePath.replace(/\\/g, '/');
   }
 
@@ -2123,7 +2137,7 @@ export class AIStudioLayer implements LayerInterface {
    */
   private async prepareFilesForProcessing(files: (FileReference | MultimodalFile)[]): Promise<any[]> {
     return files.map(file => {
-      // Normalize file path for cross-platform compatibility (Windows backslashes -> forward slashes)
+      // Windows backslashes -> forward slashes (on Windows only; see normalizeInputPath).
       const normalizedPath = this.normalizeInputPath(file.path);
 
       // Both types have path, so we can safely access it. givenPath, when
@@ -2493,6 +2507,29 @@ export class AIStudioLayer implements LayerInterface {
 
 
   /**
+   * The realpath of a PDF named by a caller, once the allowed-directories
+   * check (lexical first) places it inside; otherwise the error the main
+   * server gives for the same verdict. A UNC or `//host` path is refused
+   * without being looked at.
+   */
+  private pdfInsideRoots(file: FileReference): string {
+    const shown = shownPath(file);
+    const verdict = /^(\\\\|\/\/)/.test(file.path)
+      ? { kind: 'outside' as const }
+      : checkAgainstRoots(file.path, allowedRoots());
+    switch (verdict.kind) {
+      case 'inside':
+        return verdict.resolved;
+      case 'missing':
+        throw new Error(`File not found: ${shown}`);
+      case 'error':
+        throw new Error(`Cannot resolve ${shown}: ${verdict.code}`);
+      default:
+        throw new Error(notReadableMessage(shown));
+    }
+  }
+
+  /**
    * Process multiple PDFs using Gemini File API batch processing
    * Based on Google official documentation: https://ai.google.dev/gemini-api/docs/document-processing
    */
@@ -2504,7 +2541,12 @@ export class AIStudioLayer implements LayerInterface {
 
     // Validate file sizes - Google AI Studio supports up to 50MB per PDF
     for (const file of pdfFiles) {
-      const stats = await fs.promises.stat(file.path);
+      // The roots check before the stat, as everywhere a caller's path is
+      // looked at: a workflow step hands this the raw path, and a stat of
+      // `\\\\host\\share\\a.pdf` or `/net/host/...` makes the OS contact that host.
+      // The sub-server checks again before reading; this keeps the stat itself
+      // inside the allowed directories.
+      const stats = await fs.promises.stat(this.pdfInsideRoots(file));
       const fileSizeMB = stats.size / (1024 * 1024);
       
       if (fileSizeMB > 50) {
