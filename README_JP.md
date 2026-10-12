@@ -604,6 +604,15 @@ src/
   はテキストのない PDF をエラーにし、不正な値は拒否します。判定は stderr のログ、
   `metadata.pdfs` に残り、CLI は PDF ごとに 1 行表示します。どこからも import されて
   いなかった `DocumentAnalysis`（1,029 行）は削除しました
+- 🧹 **到達不能なコードをさらに 2 つ削除**: `WorkflowOrchestrator`（1,004 行。どこからも
+  import されていなかった 2 つ目のワークフローエンジン）と
+  `AIStudioLayer.processDocuments()`（呼び出し元なし。仮に呼ばれても、サーバがパス
+  文字列を期待する箇所にオブジェクトを渡すため全文書が読み飛ばされ、成功を返して
+  いました）、および未使用の `selectOptimalModel` / `getModelConfig`。削除は先に
+  分離環境で試行して計測しました: 3 つのエントリポイントから到達できるモジュール、
+  両サーバの `tools/list`、CLI の全 `--help` 画面、ルートの export はいずれも不変です。
+  `dist/tools/workflowOrchestrator.js` は 1.2.2 の `PromptOptimizer` と同様に公開
+  されなくなり、`processDocuments` は公開型 `AIStudioLayer` から消えます
 - 📦 **ランタイム依存を現行メジャーへ更新**: `@google/genai` 1.52 → 2.28、commander
   11 → 15、dotenv 16 → 18、pdf-parse 1 → 2、zod 3 → 4。1 つずつ更新し、そのたびに
   テスト全体を実行しました。commander 15 と pdf-parse 2 が Node.js 22.12.0 を必要と

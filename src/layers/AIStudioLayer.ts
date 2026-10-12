@@ -1,9 +1,8 @@
 import { execSync, spawn } from 'child_process';
-import { createWriteStream, promises as fsPromises } from 'fs';
+import { createWriteStream } from 'fs';
 import { mkdir } from 'fs/promises';
 import * as fs from 'fs';
 import { dirname, join } from 'path';
-import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 // ESM-compatible __dirname and __filename
@@ -185,8 +184,6 @@ export class AIStudioLayer implements LayerInterface {
   private readonly MAX_RETRIES = 2;
   private readonly MAX_FILES = 10;
   private readonly MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB per file (Google official limit)
-  private readonly MAX_DOCUMENT_PAGES = 1000; // Google official limit for PDFs
-  private readonly TOKENS_PER_PAGE = 258; // Google official estimate
   private readonly SUPPORTED_FILE_TYPES = {
     images: ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.heic', '.heif'],
     documents: ['.pdf', '.txt', '.md', '.doc', '.docx', '.html', '.xml', '.json', '.csv'],
@@ -2508,200 +2505,6 @@ export class AIStudioLayer implements LayerInterface {
     return normalizedPath;
   }
 
-
-  /**
-   * Enhanced document processing with Google AI official spec compliance
-   */
-  async processDocuments(documents: string[], analysisType: string = 'summary', options: any = {}): Promise<any> {
-    return retry(
-      async () => {
-        logger.info('Processing documents with official Google AI specifications', {
-          documentCount: documents.length,
-          analysisType,
-          maxPages: this.MAX_DOCUMENT_PAGES,
-          maxFileSize: `${this.MAX_FILE_SIZE / 1024 / 1024}MB`
-        });
-
-        // Validate documents
-        const validatedDocs = await this.validateDocuments(documents);
-        
-        // Prepare document processing parameters
-        const docParams = {
-          documents: validatedDocs,
-          instructions: this.buildDocumentInstructions(analysisType, options),
-          options: {
-            extract_structure: options.extractStructure !== false,
-            summarize: options.summarize !== false,
-            language: options.language || 'en',
-            format: options.outputFormat || 'structured'
-          }
-        };
-
-        // Execute document analysis
-        const result = await this.executeMCPCommandOptimized('analyze_documents', docParams);
-        
-        // Calculate token usage estimate
-        const estimatedTokens = this.estimateDocumentTokens(validatedDocs);
-        
-        return {
-          success: true,
-          analysis: result.analysis || result.content?.[0]?.text,
-          documents: validatedDocs,
-          metadata: {
-            analysisType,
-            documentCount: documents.length,
-            estimatedTokens,
-            maxTokensPerDocument: this.MAX_DOCUMENT_PAGES * this.TOKENS_PER_PAGE,
-            processingModel: AI_MODELS.DOCUMENT_PROCESSING,
-            compliance: 'Google AI Studio Official Specifications'
-          }
-        };
-      },
-      {
-        maxAttempts: this.MAX_RETRIES,
-        delay: 5000,
-        operationName: 'process-documents'
-      }
-    );
-  }
-
-  /**
-   * Validate documents against Google AI specifications
-   */
-  private async validateDocuments(documents: string[]): Promise<any[]> {
-    const validatedDocs = [];
-    
-    for (const docPath of documents) {
-      try {
-        const stats = await fsPromises.stat(docPath);
-        
-        // Check file size (50MB limit)
-        if (stats.size > this.MAX_FILE_SIZE) {
-          throw new Error(`Document exceeds 50MB limit: ${docPath} (${Math.round(stats.size / 1024 / 1024)}MB)`);
-        }
-        
-        // Check file extension
-        const ext = path.extname(docPath).toLowerCase();
-        const supportedDocTypes = [...this.SUPPORTED_FILE_TYPES.documents, ...this.SUPPORTED_FILE_TYPES.code];
-        
-        if (!supportedDocTypes.includes(ext)) {
-          logger.warn(`Document type may not be fully supported: ${ext}`, { docPath });
-        }
-        
-        // For PDFs, estimate page count (rough estimate based on file size)
-        let estimatedPages = 1;
-        if (ext === '.pdf') {
-          // Rough estimate: 100KB per page average
-          estimatedPages = Math.ceil(stats.size / (100 * 1024));
-          if (estimatedPages > this.MAX_DOCUMENT_PAGES) {
-            throw new Error(`PDF exceeds 1000 page limit: ${docPath} (~${estimatedPages} pages estimated)`);
-          }
-        }
-        
-        validatedDocs.push({
-          path: docPath,
-          size: stats.size,
-          type: ext,
-          estimatedPages,
-          estimatedTokens: estimatedPages * this.TOKENS_PER_PAGE
-        });
-        
-      } catch (error) {
-        logger.error(`Document validation failed for ${docPath}`, error as Error);
-        throw error;
-      }
-    }
-    
-    return validatedDocs;
-  }
-
-  /**
-   * Build document processing instructions based on analysis type
-   */
-  private buildDocumentInstructions(analysisType: string, options: any): string {
-    const baseInstructions: { [key: string]: string } = {
-      summary: 'Provide a comprehensive summary of the document(s), highlighting key points and main ideas.',
-      extraction: 'Extract and structure all important information, data points, and key facts from the document(s).',
-      comparison: 'Compare and contrast the documents, identifying similarities, differences, and relationships.',
-      translation: `Translate the document(s) to ${options.targetLanguage || 'English'} while preserving formatting and meaning.`,
-      analysis: 'Perform a detailed analysis of the document(s), including content, structure, and insights.'
-    };
-    
-    let instructions = baseInstructions[analysisType] || baseInstructions.analysis || 'Perform a detailed analysis of the document(s), including content, structure, and insights.';
-    
-    // Add custom requirements if provided
-    if (options.customInstructions) {
-      instructions += `\n\nAdditional requirements: ${options.customInstructions}`;
-    }
-    
-    // Add output format specifications
-    if (options.outputFormat === 'structured') {
-      instructions += '\n\nProvide the output in a well-structured format with clear sections and bullet points.';
-    } else if (options.outputFormat === 'json') {
-      instructions += '\n\nProvide the output as valid JSON with appropriate keys and structure.';
-    }
-    
-    return instructions;
-  }
-
-  /**
-   * Estimate token usage for documents
-   */
-  private estimateDocumentTokens(documents: any[]): number {
-    return documents.reduce((total, doc) => {
-      return total + (doc.estimatedTokens || this.TOKENS_PER_PAGE);
-    }, 0);
-  }
-
-  /**
-   * Select optimal model based on task type
-   */
-  private selectOptimalModel(taskType: string): string {
-    // Image-related tasks use the image generation model
-    if (taskType.includes('image') || taskType.includes('visual') || taskType.includes('picture') || taskType.includes('photo')) {
-      return AI_MODELS.IMAGE_GENERATION;
-    }
-    
-    // Document processing uses the 1M-context document model
-    if (taskType.includes('document') || taskType.includes('pdf') || taskType.includes('text') || taskType.includes('analyze')) {
-      return AI_MODELS.DOCUMENT_PROCESSING;
-    }
-    
-    // Audio generation uses TTS model
-    if (taskType.includes('audio') || taskType.includes('speech') || taskType.includes('tts') || taskType.includes('voice')) {
-      return AI_MODELS.AUDIO_GENERATION;
-    }
-    
-    // Script generation for audio uses regular flash model
-    if (taskType.includes('script') || taskType.includes('transcript')) {
-      return AI_MODELS.GEMINI_FLASH;
-    }
-    
-    // Default for other multimodal tasks
-    return AI_MODELS.MULTIMODAL_DEFAULT;
-  }
-
-  /**
-   * Get model configuration for specific task
-   */
-  private getModelConfig(taskType: string): any {
-    const model = this.selectOptimalModel(taskType);
-    const config: any = {
-      model,
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 16384
-      }
-    };
-    
-    // Add responseModalities for image generation
-    if (model === AI_MODELS.IMAGE_GENERATION) {
-      config.generationConfig.responseMimeType = 'application/json';
-      // Note: responseModalities would be set here if supported by the SDK
-    }
-    
-    return config;
-  }
 
   /**
    * Process multiple PDFs using Gemini File API batch processing

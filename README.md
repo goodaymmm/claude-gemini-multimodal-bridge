@@ -608,6 +608,16 @@ dependencies to new major versions. 1.2.3 was never published.
   is refused. The decision is logged on stderr, returned as `metadata.pdfs`, and
   printed by the CLI one line per PDF. `DocumentAnalysis` (1,029 lines nothing
   imported) is deleted
+- 🧹 **Two more unreachable pieces removed**: `WorkflowOrchestrator` (1,004
+  lines, a second workflow engine nothing ever imported) and
+  `AIStudioLayer.processDocuments()` (never called; had it been, it passed
+  objects where the server expects paths, so every document was skipped and
+  success was still reported), together with the uncalled `selectOptimalModel`
+  and `getModelConfig`. A trial deletion was measured first: the modules
+  reachable from the three entry points, both servers' `tools/list`, every CLI
+  `--help` screen and the root exports are unchanged. `dist/tools/workflowOrchestrator.js`
+  is no longer published, as `PromptOptimizer` was not after 1.2.2, and
+  `processDocuments` leaves the published `AIStudioLayer` type
 - 📦 **Runtime dependencies on their current majors**: `@google/genai` 1.52 →
   2.28, commander 11 → 15, dotenv 16 → 18, pdf-parse 1 → 2, zod 3 → 4, taken one
   at a time with the full suite in between. commander 15 and pdf-parse 2 need

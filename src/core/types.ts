@@ -331,6 +331,8 @@ export type Config = z.infer<typeof ConfigSchema>;
  * including a hardcoded model string. Nothing reads that string, so the copies
  * could drift from reality without anyone noticing, while looking authoritative
  * enough to send someone editing them when a model needed changing.
+ * (documentAnalysis and workflowOrchestrator have since been deleted: nothing
+ * imported either of them.)
  */
 export function defaultLayerConfig(): Config {
   return ConfigSchema.parse({

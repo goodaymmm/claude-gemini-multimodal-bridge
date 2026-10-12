@@ -63,8 +63,8 @@ describe('the internal rename is complete', () => {
   });
 
   it('leaves no orphaned workflows directory', () => {
-    // src/workflows/ held 3,619 lines that nothing imported: LayerManager and
-    // workflowOrchestrator each build their workflows inline. Unreachable code
+    // src/workflows/ held 3,619 lines that nothing imported: LayerManager
+    // builds its workflows inline. Unreachable code
     // still costs lint, build and review time, and reads as though it were the
     // implementation.
     assert.equal(existsSync(join(SRC, 'workflows')), false, 'src/workflows/ was unreachable');
