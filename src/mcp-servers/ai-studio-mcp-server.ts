@@ -31,6 +31,7 @@ import pkg from 'wavefile';
 const { WaveFile } = pkg;
 import { PDF_MODES, type PdfMode, planPdf, resolveMinCharsPerPage, resolvePdfMode } from '../utils/pdfText.js';
 import { logger } from '../utils/logger.js';
+import { type DownloadedPdf, downloadPdfUrl } from '../utils/urlDownload.js';
 
 // Read version from package.json
 const require = createRequire(import.meta.url);
@@ -158,6 +159,8 @@ interface PdfHandling {
   pages?: number;
   text_pages?: number;
   chars?: number;
+  /** For a PDF read from a URL: the URL it was downloaded from. */
+  source_url?: string;
 }
 
 /** The JSON schema of the pdf_mode argument, shared by both tools that read PDFs. */
@@ -775,6 +778,7 @@ To retrieve this file, use:
     const params = MultimodalProcessSchema.parse(args);
     const pdfMode = this.requestPdfMode(params.pdf_mode);
     const pdfs: PdfHandling[] = [];
+    const downloads: DownloadedPdf[] = [];
     
     try {
       console.error(`Processing multimodal request with ${params.files.length} files`);
@@ -788,27 +792,7 @@ To retrieve this file, use:
         const isUrl = file.path.startsWith('http://') || file.path.startsWith('https://');
         
         if (isUrl) {
-          console.error(`Detected URL: ${file.path}`);
-          const mimeType = this.getMimeTypeFromUrl(file.path);
-          console.error(`URL detected as MIME type: ${mimeType}`);
-          
-          if (mimeType === 'application/pdf') {
-            // Use File API to upload PDF URL for native processing
-            console.error(`Uploading PDF URL to Gemini File API: ${file.path}`);
-            const uploadedFile = await this.uploadPDFUrlWithFileAPI(file.path);
-            parts.push({
-              fileData: {
-                fileUri: uploadedFile.uri,
-                mimeType: 'application/pdf'
-              }
-            });
-          } else {
-            console.warn(`Unsupported URL type: ${mimeType} for ${file.path}`);
-            // For now, add as text reference
-            parts.push({
-              text: `URL: ${file.path} (Type: ${mimeType})`
-            });
-          }
+          parts.push(await this.pdfUrlPart(file.path, pdfs, downloads));
         } else {
           // Handle local files (existing logic)
           if (!fs.existsSync(file.path)) {
@@ -872,6 +856,8 @@ To retrieve this file, use:
         ErrorCode.InternalError,
         `Multimodal processing failed: ${error instanceof Error ? error.message : String(error)}`
       );
+    } finally {
+      await Promise.all(downloads.map(download => download.cleanup()));
     }
   }
 
@@ -880,12 +866,20 @@ To retrieve this file, use:
     const { documents, instructions, options = {} } = args;
     const pdfMode = this.requestPdfMode(args?.pdf_mode);
     const pdfs: PdfHandling[] = [];
+    const downloads: DownloadedPdf[] = [];
     
     try {
       const parts: any[] = [{ text: instructions }];
 
       // Read and process documents
       for (const docPath of documents) {
+        // A URL is not a path: existsSync() was false for it, so it was
+        // skipped here and Gemini was asked about the prompt alone.
+        if (/^https?:\/\//i.test(docPath)) {
+          parts.push(await this.pdfUrlPart(docPath, pdfs, downloads));
+          continue;
+        }
+
         if (!fs.existsSync(docPath)) {
           console.warn(`Document not found: ${docPath}`);
           continue;
@@ -937,6 +931,8 @@ To retrieve this file, use:
         ErrorCode.InternalError,
         `Document analysis failed: ${error instanceof Error ? error.message : String(error)}`
       );
+    } finally {
+      await Promise.all(downloads.map(download => download.cleanup()));
     }
   }
 
@@ -1034,6 +1030,48 @@ To retrieve this file, use:
 
     const uploadedFile = await this.uploadPDFWithFileAPI(localPath);
     return { fileData: { fileUri: uploadedFile.uri, mimeType: 'application/pdf' } };
+  }
+
+  /**
+   * The content part for a PDF named by URL.
+   *
+   * Downloaded to a temporary file (see utils/urlDownload.ts for the limits),
+   * then sent through pdfPart() like a local PDF. URLs are always uploaded, as
+   * the README says, so Gemini sees the pages themselves; pdf_mode governs
+   * local PDFs only. The temporary file is removed by the caller once the
+   * request is answered, `downloads` collecting it for that.
+   *
+   * Image and audio URLs are refused by name rather than passed on as text:
+   * Gemini would answer about a file it was never given.
+   */
+  private async pdfUrlPart(
+    url: string,
+    report: PdfHandling[],
+    downloads: DownloadedPdf[]
+  ): Promise<{ text: string } | { fileData: { fileUri: string; mimeType: string } }> {
+    const mimeType = this.getMimeTypeFromUrl(url);
+    if (mimeType.startsWith('image/') || /\.(mp3|wav|m4a|ogg|flac|aac)$/i.test(new URL(url).pathname)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Only PDF URLs are fetched; ${url} is not one. Download the file and pass its local path instead.`
+      );
+    }
+
+    let downloaded: DownloadedPdf;
+    try {
+      downloaded = await downloadPdfUrl(url);
+    } catch (error) {
+      throw new McpError(ErrorCode.InvalidParams, (error as Error).message);
+    }
+    downloads.push(downloaded);
+    logger.info(`PDF URL downloaded for upload`, { bytes: downloaded.bytes });
+
+    const part = await this.pdfPart(downloaded.path, 'upload', report);
+    const handling = report[report.length - 1];
+    if (handling) {
+      handling.source_url = url;
+    }
+    return part;
   }
 
   private async getGeneratedFile(args: any) {
@@ -1410,61 +1448,6 @@ To retrieve this file, use:
     } catch (error) {
       console.error(`Failed to upload PDF via File API: ${pdfPath}`, error);
       throw new Error(`PDF upload failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  /**
-   * Upload PDF URL using Gemini File API for native processing
-   * Supports OCR and complex PDF layouts via URL
-   */
-  private async uploadPDFUrlWithFileAPI(pdfUrl: string): Promise<any> {
-    try {
-      console.error(`Starting PDF URL upload via File API: ${pdfUrl}`);
-      
-      // Upload the URL directly using GoogleGenAI files API
-      const uploadResult = await this.genAI.files.upload({
-        file: pdfUrl,  // Pass URL as file parameter
-        config: {
-          mimeType: 'application/pdf',
-          displayName: path.basename(new URL(pdfUrl).pathname) || 'url-document.pdf'
-        }
-      });
-      
-      console.error(`PDF URL uploaded successfully: ${uploadResult.name}, state: ${uploadResult.state}`);
-      
-      // Wait for processing to complete
-      let file = uploadResult;
-      let waitTime = 0;
-      const maxWaitTime = 120000; // 2 minutes max wait
-      
-      while (file.state === 'PROCESSING' && waitTime < maxWaitTime) {
-        console.error(`Waiting for PDF URL processing... (${waitTime / 1000}s)`);
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
-        waitTime += 2000;
-        
-        if (!file.name) {
-          throw new Error('The uploaded file has no name; cannot poll its processing state.');
-        }
-        file = await this.genAI.files.get({ name: file.name });
-        console.error(`PDF URL processing state: ${file.state}`);
-      }
-      
-      if (file.state !== 'ACTIVE') {
-        throw new Error(`PDF URL processing failed or timed out. Final state: ${file.state}`);
-      }
-      
-      console.error(`PDF URL ready for processing: ${file.name} (from ${pdfUrl})`);
-      
-      return {
-        uri: file.uri,
-        name: file.name,
-        mimeType: file.mimeType,
-        sizeBytes: file.sizeBytes
-      };
-      
-    } catch (error) {
-      console.error(`Failed to upload PDF URL via File API: ${pdfUrl}`, error);
-      throw new Error(`PDF URL upload failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

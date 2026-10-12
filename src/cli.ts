@@ -1536,13 +1536,21 @@ program
   .option('-p, --prompt <text>', 'Processing prompt')
   .option('-f, --files <paths...>', 'Files to process')
   .option('-w, --workflow <type>', 'Workflow type: analysis, generation, conversion, extraction', 'analysis')
-  .option('--strategy <strategy>', 'Processing strategy: claude-first, gemini-first, aistudio-first, adaptive', 'adaptive')
+  // --strategy was mapped to options.layer_priority, which nothing read: every
+  // value behaved like the default. Hidden rather than removed, so scripts that
+  // pass it keep running; it says so instead of being silently ignored.
+  .addOption(new Option('--strategy <strategy>').hideHelp())
   .addOption(pdfModeOption())
   .action(async (options) => {
     try {
       if (!options.prompt) {
         logger.error('Prompt is required. Use: cgmb process -p "your task" -f file1 file2');
         process.exit(1);
+      }
+
+      if (options.strategy !== undefined) {
+        console.error('⚠️  --strategy has no effect and is no longer documented: CGMB routes each request by its content. ' +
+          'Use `cgmb analyze --layer <layer>` to pick a layer.');
       }
 
       await loadEnvironmentSmart({ verbose: false });
@@ -1560,9 +1568,6 @@ program
           files,
           workflow: options.workflow,
           options: {
-            layer_priority: options.strategy === 'claude-first' ? 'claude' :
-                           options.strategy === 'gemini-first' ? 'antigravity' :
-                           options.strategy === 'aistudio-first' ? 'aistudio' : 'adaptive',
             detailed: true,
             ...pdfModeOptions(options.pdfMode)
           }
@@ -1792,92 +1797,64 @@ program
       await loadEnvironmentSmart({ verbose: false });
 
       // URL Detection and Intelligent Routing
+      //
+      // URLs and local files can be mixed: the URLs are handled here, and the
+      // local files after them. The command used to exit as soon as the URLs
+      // were done, so local files named alongside a URL were never read.
       const urlFiles = files.filter((file: string) => /^https?:\/\//.test(file));
+      let urlFailed = false;
       if (urlFiles.length > 0) {
         console.log('🌐 URL(s) detected in input:');
         urlFiles.forEach((url: string) => console.log(`   ${url}`));
         console.log('');
-        
-        // Separate PDF URLs from regular web URLs
-        const pdfUrls = urlFiles.filter((url: string) => url.toLowerCase().endsWith('.pdf'));
-        const webUrls = urlFiles.filter((url: string) => !url.toLowerCase().endsWith('.pdf'));
-        
-        // Handle PDF URLs with AI Studio layer
-        if (pdfUrls.length > 0) {
-          console.log('📄 PDF URL(s) detected - routing to AI Studio for optimal PDF processing...');
+
+        // Classified by the same rule as the MCP server (LayerManager.detectUrlType).
+        const urlRouter = new LayerManager(defaultLayerConfig());
+        const fileUrls = urlFiles.filter((url: string) => urlRouter.detectUrlType(url) !== 'web');
+        const webUrls = urlFiles.filter((url: string) => urlRouter.detectUrlType(url) === 'web');
+
+        // PDF URLs: downloaded by the AI Studio server and read like a local PDF.
+        if (fileUrls.length > 0) {
+          console.log('📄 PDF URL(s) detected - downloading and reading them with AI Studio...');
           console.log('💡 Tip: For best results, use CGMB within Claude Code:');
           console.log('   "CGMB analyze https://example.com/document.pdf"\n');
 
-          // Construct analysis prompt for PDF URLs
-          let analysisPrompt: string;
-          if (pdfUrls.length === 1) {
-            const basePrompt = options.prompt || `Please ${options.type} this PDF document`;
-            analysisPrompt = `${basePrompt}`;
-          } else {
-            analysisPrompt = `Analyze and ${options.type} these PDF documents`;
-          }
-          
+          const analysisPrompt = options.prompt
+            || (fileUrls.length === 1 ? `Please ${options.type} this PDF document` : `Analyze and ${options.type} these PDF documents`);
+
           console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
           console.log('');
-          
-          // Use LayerManager with AI Studio layer for PDF URL processing
-          const layerManager = new LayerManager(defaultLayerConfig());
-          
+
           try {
-            await layerManager.initializeLayers();
-            const result = await layerManager.executeWithLayer('aistudio', {
-              type: 'multimodal_processing',
-              files: pdfUrls.map((url: string) => ({ 
-                path: url, 
-                type: 'document'
-              })),
+            await urlRouter.initializeLayers();
+            const result = await urlRouter.executeWithLayer('aistudio', {
+              type: 'document_analysis',
+              files: fileUrls.map((url: string) => ({ path: url, type: 'pdf' })),
               instructions: analysisPrompt,
-              options: {
-                analysisType: options.type || 'summary',
-                depth: 'deep'
-              }
+              ...pdfModeOptions(options.pdfMode),
             });
-            
+            if (result.success === false) {
+              throw new Error(result.error ?? 'no result');
+            }
+
             console.log('\n📋 Result:');
             console.log('═'.repeat(50));
-            console.log(result.data || 'Processing completed');
-            
-            if (result.metadata) {
-              console.log('\n📊 Metadata:');
-              console.log(`Processing time: ${result.metadata.duration || 'N/A'}ms`);
-              console.log(`Layer: AI Studio (PDF URL processing via Gemini File API)`);
-            }
+            console.log(renderLayerData(result.data));
+
+            console.log('\n📊 Metadata:');
+            console.log(`Processing time: ${result.metadata?.duration ?? 'N/A'}ms`);
+            console.log('Layer: AI Studio (PDF downloaded and uploaded to the Gemini File API)');
+            describePdfHandling(result.data).forEach(line => console.log(line));
           } catch (error) {
+            // No fallback: no other layer can read the PDF, and an answer from
+            // one would be about a document it never saw. This used to fall
+            // back to Claude Code, which answered from the URL text alone.
             logger.error('PDF URL processing failed', error as Error);
-            console.log('❌ Failed to process PDF URL(s)');
-            console.log('💡 Falling back to Claude Code layer...');
-            
-            // Fallback to Claude Code layer
-            try {
-              const fallbackResult = await layerManager.executeWithLayer('claude', {
-                type: 'document_analysis',
-                prompt: `${analysisPrompt} from ${pdfUrls.join(', ')}`,
-                analysis_type: options.type || 'summary'
-              });
-              
-              console.log('\n📋 Fallback Result (Claude Code):');
-              console.log('═'.repeat(50));
-              console.log(fallbackResult.data || 'Processing completed');
-              
-              if (fallbackResult.metadata) {
-                console.log('\n📊 Metadata:');
-                console.log(`Processing time: ${fallbackResult.metadata.duration || 'N/A'}ms`);
-                console.log(`Layer: Claude Code (Fallback)`);
-              }
-            } catch (fallbackError) {
-              logger.error('Fallback processing also failed', fallbackError as Error);
-              console.log('❌ Both AI Studio and Claude Code processing failed');
-              console.log('💡 Try downloading the PDF manually and using: cgmb analyze local-file.pdf');
-              process.exit(1);
-            }
+            console.error(`❌ The aistudio layer could not read ${fileUrls.join(', ')}: ${(error as Error).message}`);
+            urlFailed = true;
           }
         }
-        
+
         // Handle regular web URLs with the Antigravity CLI
         if (webUrls.length > 0) {
           console.log('🔍 Web URL(s) detected - routing to Antigravity CLI for current information...');
@@ -1892,21 +1869,25 @@ program
           } else {
             analysisPrompt = `Analyze and ${options.type} the webpages at these URLs: ${webUrls.join(', ')}`;
           }
-          
+
           console.log(`📝 Analysis prompt: "${analysisPrompt}"`);
           console.log('');
-          
+
           // Execute via the Antigravity CLI for web content
           const geminiOptions = {
             prompt: analysisPrompt,
             model: DEFAULT_ANTIGRAVITY_MODEL,
             fast: false
           };
-          
+
           await executeGeminiCommand(geminiOptions);
         }
-        
-        process.exit(0);
+
+        files = files.filter((file: string) => !/^https?:\/\//.test(file));
+        if (files.length === 0) {
+          process.exit(urlFailed ? 1 : 0);
+        }
+        console.log('\n📁 Local files named with the URL(s) follow.\n');
       }
 
       // Enhanced File Path Resolution and Validation
@@ -2071,7 +2052,7 @@ program
           console.log(`   Processing time: ${result.metadata.duration || 0}ms`);
           describePdfHandling(result.data).forEach(line => console.log(line));
         }
-        process.exit(0);
+        process.exit(urlFailed ? 1 : 0);
       } else {
         console.error('❌ Analysis failed:', result.error || 'Unknown error');
         process.exit(1);

@@ -18,6 +18,10 @@
  * Probes (`--version`, `agy models`, `claude auth status`, the key check's
  * models.get) are logged with kind 'probe' so a test can tell "the layer was
  * checked" from "the layer was asked".
+ *
+ * The Gemini stand-in also serves files under /files/ (see `host`), standing in
+ * for the web servers PDF URLs point at; those requests are logged with kind
+ * 'fetch'.
  */
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -128,7 +132,10 @@ export function createCliStubs(dir) {
     logPath,
     failFlag: claudeFail,
     answer: CLAUDE_ANSWER,
-    probes: `a => a.includes('--version') ? '9.9.9 (Claude Code stub)' : a.includes('--help') ? 'Usage: claude [options]' : a[0] === 'auth' ? JSON.stringify({ loggedIn: true }) : null`,
+    // CLAUDE_STUB_SIGNED_OUT=1 in the environment of the process that probes
+    // makes `claude auth status` report signed out: Claude Code installed but
+    // not usable, which is how the layer reads "not available".
+    probes: `a => a.includes('--version') ? '9.9.9 (Claude Code stub)' : a.includes('--help') ? 'Usage: claude [options]' : a[0] === 'auth' ? JSON.stringify({ loggedIn: process.env.CLAUDE_STUB_SIGNED_OUT !== '1' }) : null`,
   }));
 
   const flagFor = layer => ({ antigravity: agyFail, claude: claudeFail })[layer];
@@ -159,6 +166,8 @@ export function readCalls(logPath) {
 export async function startRoutingGemini(logPath) {
   let failing = false;
   let uploads = 0;
+  /** path -> { status, headers, body } served for GET /files/... */
+  const hosted = new Map();
 
   const server = createServer((req, res) => {
     const chunks = [];
@@ -177,6 +186,19 @@ export async function startRoutingGemini(logPath) {
       };
       const text = (body?.contents ?? []).flatMap(c => c.parts ?? []).map(p => p.text ?? (p.fileData ? `[fileData ${p.fileData.fileUri}]` : p.inlineData ? `[inlineData ${p.inlineData.mimeType}]` : '')).join(' | ');
 
+      if (req.method === 'GET' && url.startsWith('/files/')) {
+        const file = hosted.get(url.split('?')[0]);
+        log({ kind: 'fetch', status: file?.status ?? 404 });
+        if (!file) {
+          res.writeHead(404, { 'content-type': 'text/plain' });
+          return res.end('not found');
+        }
+        res.writeHead(file.status ?? 200, file.headers ?? {});
+        // A file that announces more than it sends stays open: the client has
+        // to give up on the header, not on a short body.
+        if (file.hang) { res.write(file.body ?? ''); return undefined; }
+        return res.end(file.body ?? '');
+      }
       if (req.method === 'GET' && url.includes('/models/')) {
         log({ kind: 'probe' });
         return json(200, { name: `models/${model}`, displayName: model });
@@ -216,6 +238,8 @@ export async function startRoutingGemini(logPath) {
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     setFailing(value) { failing = value; },
-    close: () => new Promise(resolve => server.close(resolve)),
+    /** Serve `response` ({ status, headers, body, hang }) at GET `path` (must start with /files/). */
+    host(path, response) { hosted.set(path, response); },
+    close: () => new Promise(resolve => { server.closeAllConnections?.(); server.close(resolve); }),
   };
 }

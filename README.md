@@ -50,7 +50,7 @@ Optimally integrates Claude's **reasoning power**, Antigravity CLI's **search ca
 
 ### 🎯 MCP Standard Compliant
 
-Follows the Anthropic Model Context Protocol. 234 tests run on Linux, Windows and macOS in CI on every push
+Follows the Anthropic Model Context Protocol. 340 tests run on Linux, Windows and macOS in CI on every push
 
 </td>
 </tr>
@@ -64,8 +64,9 @@ Since 2026-09-18 Google serves the Gemini 2.5 models only to accounts that
 already used them, so with a new API key the AI Studio layer returned nothing.
 This release moves the AI Studio defaults off Gemini 2.5, adds a PDF mode that
 reads PDFs with a text layer locally instead of uploading them, and raises the
-Node.js floor to 22.12.0. None of it ran against the live Gemini API or a real
-`agy` — see Version History.
+Node.js floor to 22.12.0. It also makes routing do what the Automatic Routing
+section says. None of it ran against the live Gemini API or a real `agy` — see
+Version History.
 
 | Change | Description |
 |--------|-------------|
@@ -77,6 +78,13 @@ Node.js floor to 22.12.0. None of it ran against the live Gemini API or a real
 | 🧭 **Antigravity CLI named throughout** | Remaining "Gemini CLI" hints now say `agy`; `cgmb detect-paths --fix` prints the `agy` install hint it never showed |
 | 📦 **Dependencies on their current majors** | `@google/genai` 2, commander 15, dotenv 18, pdf-parse 2, zod 4; Node.js ≥ 22.12.0. Excess CLI arguments are now an error — quote prompts |
 | 📌 **Lockfile committed** | `package-lock.json` is now in the repository; switching CI to `npm ci` is still pending |
+| 🧠 **Claude Code answers reasoning and code** | Explain, compare, why, design, review and write / fix / refactor code — in English or Japanese — and source files now go to Claude Code, as the routing table says. No automatic route reached it before |
+| 🎨 **Image and audio requests recognised as written** | "generate an image of …", 「イメージを生成」, "read this aloud", 「読み上げて」 and similar now reach the image and speech models; the README_JP image example made no image |
+| 🌐 **PDF URLs are read** | Downloaded (50 MB, 30 s, 3 redirects) and uploaded; Gemini used to answer from the prompt alone |
+| 📎 **A web page URL plus files reads both** | The page through `agy`, the files through AI Studio; the files used to be dropped |
+| 🧹 **`layer_priority` and `--strategy` no longer advertised** | Nothing read them; still accepted, with no effect |
+| 🚫 **`--layer` refuses files the layer cannot read** | As the MCP tool's `targetLayer` already did |
+| 🔁 **MCP search falls back like the CLI** | `agy` → AI Studio → Claude Code; the answer says so, and when every layer fails the error names each one |
 
 ### Previously, in v1.2.2
 
@@ -213,6 +221,17 @@ CGMB integrates seamlessly with Claude Code. Just use the **"CGMB" keyword**:
    - **🔍 Antigravity CLI**: Web search, latest information
    - **🎨 AI Studio**: Images, audio, file processing
    - **🧠 Claude Code**: Complex reasoning, code analysis
+
+Reasoning means asking to explain, compare, analyse, design or review
+something, or asking why; code means writing, fixing, refactoring or reviewing
+code, or attaching source files (their text is passed to Claude Code, up to
+200 KB). Wording about the web or the present (latest, today, news, search)
+goes to the Antigravity CLI first, and requests to generate an image or audio go
+to AI Studio first; a short question with none of these signals goes to the
+Antigravity CLI. A web page URL is read by the Antigravity CLI and a PDF URL is
+downloaded and read by AI Studio; with files attached as well, each goes to its
+layer and both answers are returned. If Claude Code is not installed or signed
+in, its requests go to the Antigravity CLI.
 
 ---
 
@@ -657,13 +676,72 @@ dependencies to new major versions. 1.2.3 was never published.
   platforms could test three different trees; it is now committed, including the
   per-platform packages pdf-parse 2 pulls in on Windows and macOS. Switching the
   CI install step to `npm ci` is pending, not done
+- 🧠 **Claude Code is reached for reasoning and code**: the README routes complex
+  reasoning and code analysis to Claude Code, but no automatic route reached it —
+  every file-less prompt under 1,000 characters went to `agy`, and code files
+  went to AI Studio. One rule, `LayerManager.decideRoute()`, now decides for the
+  `cgmb` tool, `cgmb_multimodal_process` and the CLI: explain / compare / why /
+  analyse / design / review, and write / fix / refactor / debug code (説明・比較・
+  違い・なぜ・分析・設計・レビュー・コード・関数・実装・バグ・修正 in Japanese) go
+  to Claude Code. Source files go there too, their text inlined into the prompt
+  (up to 10 files and 200 KB, from the directories AI Studio may read). Search and
+  current-information wording keeps priority for `agy`, files and generation for
+  AI Studio, and a short question with none of these signals stays on `agy`. If
+  Claude Code is not installed or signed in, its requests go to `agy` (source
+  files to AI Studio), with a line on stderr
+- 🎨 **Image and audio requests recognised as written**: only "generate image"
+  matched, so the README's own "generate an image of a futuristic city" ran a
+  generation workflow that made the image twice and returned Claude's text, and
+  the README_JP example 「未来都市のイメージを生成してください」 made no image at
+  all. Generate / create / draw / make / render with image / picture /
+  illustration / photo / logo / icon, in either order, now reaches the image
+  model, as do 画像を生成・作成, イメージを生成 and 絵を描いて; generate / create /
+  make with audio / speech / voice / narration, "read this aloud", "text to
+  speech", 音声を生成・作成 and 読み上げて reach the speech model. "create" alone
+  no longer starts the generation workflow, and the path of a generated file is
+  returned
+- 🌐 **PDF URLs are read**: a PDF URL went to AI Studio, whose server skipped it
+  as a missing file, so Gemini answered from the prompt alone and success was
+  reported; the CLI then fell back to Claude Code, which never saw the document
+  either. The server now downloads the PDF (http or https, at most 3 redirects,
+  30 s, 50 MB, and the body must be a PDF), uploads it as this README says for
+  PDF URLs, and deletes the temporary file. A URL that cannot be fetched is an
+  error naming AI Studio and the URL, with no fallback to a layer that cannot
+  read it; image and audio URLs are refused by name. A URL followed directly by
+  Japanese text is now read as the URL alone, so the README_JP URL example
+  reaches AI Studio
+- 📎 **A web page URL and files are both read**: files sent with a web page URL
+  were dropped without a word. The page now goes to `agy` and the files (and any
+  PDF URLs) to AI Studio, and both answers are returned; if either fails, the
+  error says which. `cgmb analyze` with a URL and local files reads the local
+  files too, instead of stopping after the URL
+- 🧹 **`layer_priority` and `--strategy` removed from the surface**:
+  `cgmb_multimodal_process` advertised `options.layer_priority` and
+  `cgmb process` offered `--strategy`; nothing read either, and this README
+  mentions neither. Both are gone from the tool schema and `--help`, and both are
+  still accepted so existing callers are not refused: `layer_priority` is
+  ignored, `--strategy` prints a notice
+- 🚫 **`--layer` refuses files the layer cannot read**: `cgmb analyze photo.png
+  --layer claude` answered about an image Claude never received and exited 0,
+  while the MCP tool refused the same request. Both now refuse with the same
+  message: Claude reads source files only, `agy` reads none
+- 🔁 **The MCP search route falls back like the CLI**: when `agy` failed (exit
+  code, timeout, not available), the `cgmb` tool's search route returned the
+  error, while `cgmb analyze` tried the next layer. Text requests now fall back
+  the same way on both — `agy` → AI Studio → Claude Code, Claude Code → `agy` →
+  AI Studio. The answer says which layer stood in, and when every layer fails
+  the error names each one with its reason. File requests still never fall back
+  to a layer that cannot read the file, generation requests do not fall back,
+  and `cgmb_get_layer_requirements` now lists the Claude layer
 
 **Unchanged**: `gemini-3-pro-image` for high-quality images, the Antigravity
 default `gemini-3.6-flash-low`, and `MIN_AGY_VERSION` (1.1.7). No exported
-identifier is renamed. Tests: 179 → 234 (7 for the WAV helper, 1 for the schema
+identifier is renamed. Tests: 179 → 340 (7 for the WAV helper, 1 for the schema
 default, 2 for the model table, 8 for the Antigravity probe and environment, 3
-for the API-key sign-in, 10 for the dependency moves, 24 for the PDF mode); on
-Linux 232 pass and 2 are skipped.
+for the API-key sign-in, 10 for the dependency moves, 24 for the PDF mode, 106
+for routing); on Linux 338 pass and 2 are skipped. The routing changes are
+pinned by `tests/routing-matrix.test.mjs`, which drives the real server and CLI
+and now asserts every usage example in both READMEs.
 
 **Not verified live**: none of this ran against the real Gemini API or a real
 `agy` or keyring; the setup wizard was exercised through the methods it calls,
@@ -673,7 +751,9 @@ model listing come from release notes and the GitHub issues cited in the code.
 The PDF tests use PDFs built by hand and a fake Gemini endpoint: no real-world,
 scanned or Japanese PDF was tried, the 80 % / 100-character threshold is
 reasoned rather than measured, and the new PDF tests have not been run on
-Windows.
+Windows. The routing changes ran against recording stand-ins for `agy`, Claude
+Code and Gemini and a local server for PDF URLs, not the real services; the
+keyword lists are a judgement, not measured on real requests.
 
 ### v1.2.2 (2026-08-03)
 

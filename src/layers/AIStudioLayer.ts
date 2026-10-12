@@ -443,6 +443,16 @@ export class AIStudioLayer implements LayerInterface {
           case 'generate_content':
             result = await this.processGeneral(task);
             break;
+          // A text question answered as text, with no generation guessing:
+          // LayerManager uses it when this layer stands in for another on a
+          // text-only request.
+          case 'answer_text':
+            result = await this.executeMCPCommandOptimized('multimodal_process', {
+              files: [],
+              instructions: task.prompt || task.instructions || task.request || '',
+              model: AI_MODELS.MULTIMODAL_ANALYSIS,
+            });
+            break;
           default:
             result = await this.processGeneral(task);
         }

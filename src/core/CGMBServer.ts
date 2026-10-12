@@ -10,11 +10,11 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { createRequire } from 'module';
 
-import { LayerManager } from './LayerManager.js';
+import { LayerManager, type RouteDecision } from './LayerManager.js';
+import { extractUrls } from './routing.js';
 import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import path from 'path';
-import fs from 'fs/promises';
 import fsSync from 'fs';
 import {
   CGMBError,
@@ -33,7 +33,7 @@ import { normalizeLayerName } from './types.js';
 import { Config, ConfigSchema } from './types.js';
 import { isOneOf } from './types.js';
 import { LegacyCGMBRequestSchema, ProcessingOptionsSchema } from './types.js';
-import { pickFinalResultText } from '../utils/workflowUtils.js';
+import { extractResultText, pickFinalResultText } from '../utils/workflowUtils.js';
 import { LayerResult, LayerType } from './types.js';
 import { AI_MODELS } from './types.js';
 import { PDF_MODES } from '../utils/pdfText.js';
@@ -167,7 +167,7 @@ export class CGMBServer {
               '  - Input formats and requirements\n' +
               '  - Capabilities and features\n' +
               '  - Limitations and quotas\n' +
-              '• Layers: antigravity (text/search), aistudio (multimodal), adaptive',
+              '• Layers: antigravity (text/search), claude (reasoning/code), aistudio (multimodal), adaptive',
             inputSchema: {
               type: 'object',
               properties: {},
@@ -180,8 +180,9 @@ export class CGMBServer {
               '\n' +
               '📋 **Supported Commands** (auto-detected from prompt):\n' +
               '• chat/ask/tell → Interactive conversation\n' +
-              '• search/find/look up → Web search via Antigravity CLI\n' +
-              '• analyze/review/examine → Document/file analysis\n' +
+              '• search/look up/latest/news/today → Web search via Antigravity CLI\n' +
+              '• explain/compare/why/design, write/fix/refactor code → Claude Code\n' +
+              '• analyze/review/examine files → Document/file analysis via AI Studio (source code files → Claude Code)\n' +
               '• generate/create image → Image generation via AI Studio\n' +
               '• generate/create audio/speech → Audio generation via AI Studio\n' +
               '• process/handle files → Multimodal file processing\n' +
@@ -190,7 +191,7 @@ export class CGMBServer {
               '• translate/convert → Translation/conversion\n' +
               '\n' +
               '🔧 **Features**:\n' +
-              '• URL Detection: https:// links processed directly by Antigravity CLI\n' +
+              '• URL Detection: web pages are read by Antigravity CLI; PDF URLs are downloaded and read by AI Studio\n' +
               '• Path Resolution: ./relative → /absolute using workingDirectory\n' +
               '• File Validation: Checks existence and read permissions\n' +
               '• Smart Routing: Auto-selects optimal AI layer\n' +
@@ -302,7 +303,7 @@ export class CGMBServer {
               '• Workflows: analysis, conversion, extraction, generation\n' +
               '• Batch Mode: Process multiple files together\n' +
               '• Path Support: Relative (./file) and absolute (/path/file)\n' +
-              '• Options: layer_priority, execution_mode, quality_level\n' +
+              '• Options: execution_mode, quality_level, pdf_mode\n' +
               'Auto-selected when multiple files specified or @file mentions',
             inputSchema: {
               type: 'object',
@@ -340,11 +341,6 @@ export class CGMBServer {
                   type: 'object',
                   description: 'Processing options',
                   properties: {
-                    layer_priority: {
-                      type: 'string',
-                      enum: ['claude', 'antigravity', 'gemini', 'aistudio', 'adaptive'],
-                      description: 'Preferred layer for processing. "gemini" is a deprecated alias for "antigravity".',
-                    },
                     execution_mode: {
                       type: 'string',
                       enum: ['sequential', 'parallel', 'adaptive'],
@@ -562,12 +558,13 @@ export class CGMBServer {
       claude: {
         format: 'Text prompts; the layer builds its own prompt from the request',
         requirements: [
-          'Text-based prompts for reasoning and synthesis',
-          'No file upload capability - text only, like the search layer',
-          'Claude Code must be installed and signed in',
+          'Text-based prompts for reasoning, code and synthesis',
+          'Source code files only, inlined into the prompt (up to 10 files, 200 KB in total)',
+          'Claude Code must be installed and signed in; without it these requests go to the Antigravity CLI',
         ],
         capabilities: [
-          'Complex reasoning',
+          'Complex reasoning: explain, compare, why, design, review',
+          'Code: write, fix, refactor, review source files',
           'Synthesis across earlier workflow steps',
           'Workflow orchestration',
         ],
@@ -576,7 +573,7 @@ export class CGMBServer {
           targetLayer: 'claude',
         },
         limitations: [
-          'Cannot read files; use the aistudio layer for documents and media',
+          'Reads source code only; use the aistudio layer for documents and media',
           'Each call starts a fresh headless session',
         ],
       },
@@ -658,17 +655,24 @@ export class CGMBServer {
             filesCount: normalizedRequest.files.length,
           });
 
-          // Claude Code is reached through `claude --print` with the prompt on
-          // stdin and no file access -- executeGeneral reads task.prompt and
-          // nothing else. Answering from the prompt alone returned success on a
-          // document nobody opened, which is worse than an error: the caller
-          // has an answer and no reason to doubt it. The search layer refuses
-          // file work the same way, for the same reason.
-          if (requested === 'claude' && normalizedRequest.files.length > 0) {
-            throw new Error(
-              `The Claude layer cannot read files (${normalizedRequest.files.length} attached). ` +
-              'Send file work to the aistudio layer, or omit targetLayer to let CGMB route it.'
-            );
+          // A layer that cannot read the attached files is an error, not a
+          // silent drop. Claude Code is reached through `claude --print` with
+          // the prompt on stdin, so it reads source code only, inlined into the
+          // prompt; the search layer reads nothing. Answering from the prompt
+          // alone returned success on a document nobody opened, which is worse
+          // than an error: the caller has an answer and no reason to doubt it.
+          // LayerManager.assertLayerCanReadFiles is the same check the CLI's
+          // --layer runs.
+          const localFiles = normalizedRequest.files.filter(file => file.type !== 'url');
+          this.layerManager.assertLayerCanReadFiles(requested as LayerType, localFiles);
+
+          if (requested === 'claude' && localFiles.length > 0) {
+            return this.toCallToolResult(await this.layerManager.executeCodeFilesOnClaudeDirect({
+              type: 'text_processing',
+              prompt: normalizedRequest.prompt,
+              files: localFiles,
+              options: normalizedRequest.options ?? {},
+            }));
           }
 
           const direct = await this.layerManager.executeWithLayer(requested as LayerType, {
@@ -692,222 +696,37 @@ export class CGMBServer {
           urlCount: normalizedRequest.urlsDetected.length
         });
         
-        // 2. URL Auto-routing: Detect URL types and route appropriately
-        if (normalizedRequest.hasUrls) {
-          // Classify URLs by type
-          const urlTypes = normalizedRequest.urlsDetected.map(url => ({
-            url,
-            type: this.detectUrlType(url)
-          }));
+        // 2. One routing decision, made by LayerManager -- the same rule the
+        // CLI and cgmb_multimodal_process use. URLs, generation, search,
+        // reasoning and source code are acted on here; other files, long and
+        // multi-step requests go on to processMultimodal below.
+        const localFiles = normalizedRequest.files.filter(file => file.type !== 'url');
+        const decision = this.layerManager.decideRoute({
+          prompt: normalizedRequest.prompt,
+          files: localFiles,
+          urls: normalizedRequest.urlsDetected,
+        });
+        logger.info('Routing decision', { route: decision.kind, layer: decision.layer, reason: decision.reason });
 
-          const fileUrls = urlTypes.filter(u => u.type !== 'web');
-          const webUrls = urlTypes.filter(u => u.type === 'web');
-
-          logger.info('URLs detected - classifying for routing', {
-            totalUrls: normalizedRequest.urlsDetected.length,
-            fileUrls: fileUrls.length,
-            webUrls: webUrls.length,
-            urlTypes: urlTypes.map(u => ({ url: u.url.substring(0, 50), type: u.type }))
-          });
-
-          // Route file URLs (PDF, images, audio) directly to AI Studio (no download needed for PDFs)
-          if (fileUrls.length > 0) {
-            logger.info('File URLs detected - routing directly to AI Studio', {
-              fileUrls: fileUrls.map(u => u.url)
-            });
-
-            try {
-              // Prepare files for AI Studio processing - pass URLs directly
-              // AI Studio's MCP server handles URL PDFs via Gemini File API
-              const filesForProcessing = fileUrls.map(f => ({
-                path: f.url,  // Pass URL as path - AI Studio detects and handles URLs
-                type: f.type === 'pdf' ? 'document' : f.type
-              }));
-
-              // Execute via AI Studio (with async initialization)
-              const aiStudioLayer = await this.layerManager.getAIStudioLayerAsync();
-              const result = await aiStudioLayer.execute({
-                type: 'document_analysis',
-                files: filesForProcessing,
-                instructions: normalizedRequest.prompt
-              });
-
-              // Format response
-              const urlResponse = {
-                success: result.success,
-                data: result.data,
-                metadata: {
-                  ...result.metadata,
-                  layer: 'aistudio',
-                  routing_reason: 'file_url_direct_routing',
-                  urls_processed: fileUrls.length
-                }
-              };
-
-              return this.formatResponse(urlResponse, normalizedRequest.hasCGMB);
-            } catch (error) {
-              logger.error('AI Studio URL processing failed', {
-                error: (error as Error).message
-              });
-              // Return error with helpful message
-              const errorResponse = {
-                success: false,
-                data: `URL PDF processing failed: ${(error as Error).message}. Try downloading the PDF and using: CGMB analyze local-file.pdf`,
-                metadata: {
-                  layer: 'error',
-                  routing_reason: 'url_pdf_processing_failed',
-                  error: (error as Error).message
-                }
-              };
-              return this.formatResponse(errorResponse, normalizedRequest.hasCGMB);
-            }
-          }
-
-          // Route web URLs through the Antigravity CLI (search/browse)
-          logger.info('Web URLs - routing to Antigravity CLI layer', {
-            urls: webUrls.length > 0 ? webUrls.map(u => u.url) : normalizedRequest.urlsDetected
-          });
-
-          // Construct analysis prompt based on URLs and original request
-          let analysisPrompt: string;
-          if (normalizedRequest.urlsDetected.length === 1) {
-            const basePrompt = normalizedRequest.prompt.toLowerCase().includes('analyze')
-              ? normalizedRequest.prompt
-              : `Analyze the content at ${normalizedRequest.urlsDetected[0]}`;
-            analysisPrompt = basePrompt;
-          } else {
-            analysisPrompt = `Analyze the content at these URLs: ${normalizedRequest.urlsDetected.join(', ')}. ${normalizedRequest.prompt}`;
-          }
-
-          // Length only: prompts and URLs can carry personal or confidential
-          // content, and logger metadata goes to the console and LOG_FILE
-          // unredacted. Stripping prompt text inside the layer is pointless if
-          // the routing code above logs the same text first.
-          logger.info('Executing URL analysis via Antigravity CLI', {
-            promptLength: analysisPrompt.length,
-            urlCount: webUrls.length,
-          });
-
-          // Direct execution on Gemini layer for URL processing (with async initialization)
-          const geminiLayer = await this.layerManager.getAntigravityLayerAsync();
-          const result = await geminiLayer.execute({
-            type: 'text_processing',
-            prompt: analysisPrompt,
-            files: [],
-            useSearch: true // Enable web search for URL content access
-          });
-
-          // Format response for URL processing
-          const urlResponse = {
-            success: result.success,
-            data: result.data,
-            metadata: {
-              ...result.metadata,
-              layer: 'antigravity',
-              routing_reason: 'web_url_auto_routing',
-              urls_processed: normalizedRequest.urlsDetected.length,
-              processing_time: result.metadata?.duration || 0
-            }
-          };
-
-          return this.formatResponse(urlResponse, normalizedRequest.hasCGMB);
+        if (decision.kind === 'file_url' || decision.kind === 'web_url' || decision.kind === 'web_and_files') {
+          return this.handleUrlRoute(decision, normalizedRequest.prompt, localFiles, normalizedRequest.options, normalizedRequest.hasCGMB);
         }
 
-        // 2.5 Search Auto-routing: If search keywords detected (no files), route directly to Antigravity CLI
-        const searchKeywords = ['search', 'find', 'look up', 'lookup', 'what is', 'latest', 'news', 'current', 'today', '検索', '最新', 'ニュース'];
-        const lowerPrompt = normalizedRequest.prompt.toLowerCase();
-        const isSearchTask = searchKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase())) && normalizedRequest.files.length === 0;
-
-        if (isSearchTask) {
-          logger.info('Search keywords detected - auto-routing to Antigravity CLI layer', {
-            promptLength: normalizedRequest.prompt.length,
-            matchedKeywords: searchKeywords.filter(k => lowerPrompt.includes(k.toLowerCase()))
-          });
-
-          // Direct execution on Gemini layer for search (with async initialization)
-          const geminiLayerForSearch = await this.layerManager.getAntigravityLayerAsync();
-          const result = await geminiLayerForSearch.execute({
-            type: 'search',
+        if (['image_generation', 'audio_generation', 'search', 'reasoning', 'code_files'].includes(decision.kind)) {
+          const result = await this.layerManager.executeRoute(decision, {
             prompt: normalizedRequest.prompt,
-            files: [],
-            useSearch: true
+            files: localFiles,
+            options: normalizedRequest.options ?? {},
           });
-
-          // Format response for search
-          const searchResponse = {
+          return this.formatResponse({
             success: result.success,
-            data: result.data,
+            ...(result.error ? { error: result.error } : {}),
+            data: this.describeLayerData(result.data),
             metadata: {
               ...result.metadata,
-              layer: 'antigravity',
-              routing_reason: 'search_auto_routing',
-              processing_time: result.metadata?.duration || 0
-            }
-          };
-
-          return this.formatResponse(searchResponse, normalizedRequest.hasCGMB);
-        }
-
-        // 2.6 Generation Auto-routing: If image/audio generation detected, route directly to AI Studio
-        const imageGenKeywords = ['generate image', 'create image', 'make image', 'generate picture', 'create picture', 'draw', '画像生成', '画像を作成'];
-        const audioGenKeywords = ['generate audio', 'create audio', 'make audio', 'create speech', 'text to speech', '音声生成', '音声を作成'];
-        const isImageGeneration = imageGenKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
-        const isAudioGeneration = audioGenKeywords.some(keyword => lowerPrompt.includes(keyword.toLowerCase()));
-
-        if ((isImageGeneration || isAudioGeneration) && normalizedRequest.files.length === 0) {
-          logger.info('Generation task detected - auto-routing to AI Studio layer', {
-            promptLength: normalizedRequest.prompt.length,
-            isImageGeneration,
-            isAudioGeneration
-          });
-
-          try {
-            // Async initialization for AI Studio layer
-            const aiStudioLayerForGen = await this.layerManager.getAIStudioLayerAsync();
-            let result;
-
-            if (isImageGeneration) {
-              result = await aiStudioLayerForGen.execute({
-                type: 'image_generation',
-                prompt: normalizedRequest.prompt,
-                files: [],
-                action: 'generate_image'
-              });
-            } else {
-              result = await aiStudioLayerForGen.execute({
-                type: 'audio_generation',
-                prompt: normalizedRequest.prompt,
-                files: [],
-                action: 'generate_audio'
-              });
-            }
-
-            const genResponse = {
-              success: result.success,
-              data: result.data,
-              metadata: {
-                ...result.metadata,
-                layer: 'aistudio',
-                routing_reason: isImageGeneration ? 'image_generation_routing' : 'audio_generation_routing',
-                processing_time: result.metadata?.duration || 0
-              }
-            };
-
-            return this.formatResponse(genResponse, normalizedRequest.hasCGMB);
-          } catch (error) {
-            // Enhanced diagnostics: Output detailed error information
-            logger.error('AI Studio generation failed - detailed diagnostics', {
-              error: (error as Error).message,
-              stack: (error as Error).stack,
-              platform: process.platform,
-              isWindows: process.platform === 'win32',
-              isImageGeneration,
-              isAudioGeneration,
-              prompt: normalizedRequest.prompt.substring(0, 100),
-              nodeVersion: process.version
-            });
-            // Fall through to workflow processing
-          }
+              routing_reason: decision.kind,
+            },
+          }, normalizedRequest.hasCGMB);
         }
 
         // 3. Convert to format that each layer can understand (for non-URL, non-search, non-generation requests)
@@ -1125,8 +944,11 @@ export class CGMBServer {
     const hasCGMB = prompt.toLowerCase().includes('cgmb');
 
     // URL Detection - check for URLs in the prompt and file paths
-    const urlRegex = /https?:\/\/[^\s]+/g;
-    const urlsInPrompt = prompt.match(urlRegex) ?? [];
+    // extractUrls stops at characters a URL cannot hold, so a URL followed
+    // directly by Japanese text ("...document.pdfを分析してください") is read
+    // as the URL alone; matching up to the next space took the sentence too,
+    // and the PDF was then classified as a web page.
+    const urlsInPrompt = extractUrls(prompt);
     
     // Also check file paths for URLs
     const fileArray = Array.isArray(files) ? files : [];
@@ -1335,11 +1157,15 @@ Solutions:
     // - AI Studio: API format, base64 encoded files
 
     // Determine workflow (simple logic)
+    //
+    // "generat"/"creat" no longer select the generation workflow. Image and
+    // audio requests are recognised by LayerManager.decideRoute and sent to AI
+    // Studio before this point; what reaches here is not one, and the
+    // generation workflow made an image for anything that said "create" --
+    // twice, with Claude's text returned in place of either.
     let workflow: 'analysis' | 'conversion' | 'extraction' | 'generation' = 'analysis';
     const lowerPrompt = prompt.toLowerCase();
-    if (lowerPrompt.includes('generat') || lowerPrompt.includes('creat')) {
-      workflow = 'generation';
-    } else if (lowerPrompt.includes('convert') || lowerPrompt.includes('transform')) {
+    if (lowerPrompt.includes('convert') || lowerPrompt.includes('transform')) {
       workflow = 'conversion';
     } else if (lowerPrompt.includes('extract') || lowerPrompt.includes('取得')) {
       workflow = 'extraction';
@@ -1354,7 +1180,6 @@ Solutions:
 
     // Merge options with defaults
     const processedOptions = {
-      layer_priority: 'adaptive',
       execution_mode: 'adaptive',
       quality_level: 'balanced',
       ...options
@@ -1447,6 +1272,17 @@ Solutions:
       responseData = 'Processing completed';
     }
 
+    // Say when the answer came from a fallback layer. A search answered by a
+    // layer without web access, or a reasoning question answered by the search
+    // layer, is still an answer -- but not the one the routing promised.
+    const fallbackFrom = result?.metadata?.fallback_from;
+    if (typeof fallbackFrom === 'string' && result?.success !== false) {
+      const answeredBy = typeof result?.metadata?.layer === 'string' ? result.metadata.layer : 'another';
+      const reason = typeof result?.metadata?.fallback_reason === 'string' ? result.metadata.fallback_reason : 'it failed';
+      responseData = `⚠️ The ${fallbackFrom} layer could not answer (${reason}); ` +
+        `this answer comes from the ${answeredBy} layer instead.\n\n${responseData}`;
+    }
+
     let responseText = prefix + responseData;
 
     // Add usage hints only when CGMB keyword is missing AND response is minimal
@@ -1512,7 +1348,7 @@ Failed steps: ${result.metadata.steps_failed}`
             content: [
               {
                 type: 'text',
-                text: mainResult?.data || 'Processing completed'
+                text: extractResultText(mainResult) ?? 'Processing completed'
               }
             ]
           };
@@ -1710,112 +1546,152 @@ Failed steps: ${result.metadata.steps_failed}`
   }
 
   /**
-   * Detect URL type based on extension or content-type hints
+   * Requests that name URLs.
+   *
+   * PDF (and image / audio) URLs go to AI Studio, whose server downloads a PDF
+   * and reads it like a local one; web pages go to the Antigravity CLI. A
+   * request with both a web page and files -- local files or file URLs -- has
+   * each half read by the layer that can, and the answers are returned
+   * together. The files used to be dropped here without a word: URL routing
+   * ran first and handed the search layer `files: []`.
+   *
+   * There is no fallback on this path. No other layer can open a web page, and
+   * no other layer can read the file; an answer from one would be about
+   * content it never saw. A failure names the layer and what it could not read.
    */
-  private detectUrlType(url: string): 'pdf' | 'image' | 'audio' | 'web' {
-    const lower = url.toLowerCase();
-    const urlPath = lower.split('?')[0] ?? lower; // Remove query params for extension check
+  private async handleUrlRoute(
+    decision: RouteDecision,
+    prompt: string,
+    localFiles: Array<{ path: string; type: string }>,
+    options: Record<string, unknown> | undefined,
+    hasCGMB: boolean
+  ): Promise<CallToolResult> {
+    const { fileUrls, webUrls } = decision;
+    const sections: string[] = [];
+    const failures: string[] = [];
+    const layersUsed: string[] = [];
+    let duration = 0;
 
-    // Check for PDF
-    if (urlPath.endsWith('.pdf') || lower.includes('/pdf') || lower.includes('type=pdf')) {
-      return 'pdf';
-    }
-
-    // Check for images
-    if (/\.(png|jpg|jpeg|gif|webp|bmp|svg)$/.test(urlPath)) {
-      return 'image';
-    }
-
-    // Check for audio
-    if (/\.(mp3|wav|m4a|ogg|flac|aac)$/.test(urlPath)) {
-      return 'audio';
-    }
-
-    // Default to web content
-    return 'web';
-  }
-
-  /**
-   * Download files from URLs to temp directory for AI Studio processing
-   */
-  private async downloadUrlFiles(urls: Array<{ url: string; type: string }>): Promise<Array<{ path: string; type: string; originalUrl: string }>> {
-    const downloadedFiles: Array<{ path: string; type: string; originalUrl: string }> = [];
-    const tempDir = path.join(process.cwd(), 'temp', 'downloads');
-
-    // Ensure temp directory exists
-    await fs.mkdir(tempDir, { recursive: true });
-
-    for (const { url, type } of urls) {
+    if (webUrls.length > 0) {
+      // Length only: prompts and URLs can carry personal or confidential
+      // content, and logger metadata goes to the console and LOG_FILE
+      // unredacted.
+      const analysisPrompt = webUrls.length === 1
+        ? (/\banaly[sz]e\b/i.test(prompt) ? prompt : `${prompt}\n\nRead the content at ${webUrls[0]}.`)
+        : `Analyze the content at these URLs: ${webUrls.join(', ')}. ${prompt}`;
+      logger.info('Executing URL analysis via Antigravity CLI', {
+        promptLength: analysisPrompt.length,
+        urlCount: webUrls.length,
+      });
       try {
-        logger.info('Downloading file from URL', { url, type });
-
-        // Generate unique filename
-        const timestamp = Date.now();
-        const urlHash = url.split('/').pop()?.split('?')[0] ?? 'file';
-        const extension = type === 'pdf' ? '.pdf' : type === 'image' ? '.png' : type === 'audio' ? '.mp3' : '';
-        const filename = `${urlHash}-${timestamp}${extension}`;
-        const filePath = path.join(tempDir, filename);
-
-        // Use dynamic import for https/http modules
-        const protocol = url.startsWith('https') ? await import('https') : await import('http');
-
-        await new Promise<void>((resolve, reject) => {
-          const file = fsSync.createWriteStream(filePath);
-
-          protocol.get(url, (response) => {
-            // Handle redirects
-            if (response.statusCode === 301 || response.statusCode === 302) {
-              const redirectUrl = response.headers.location;
-              if (redirectUrl) {
-                logger.info('Following redirect', { from: url, to: redirectUrl });
-                // Recursive call for redirect
-                const redirectProtocol = redirectUrl.startsWith('https') ? require('https') : require('http');
-                redirectProtocol.get(redirectUrl, (redirectResponse: any) => {
-                  redirectResponse.pipe(file);
-                  file.on('finish', () => {
-                    file.close();
-                    resolve();
-                  });
-                }).on('error', (err: Error) => {
-                  fsSync.unlink(filePath, () => reject(err));
-                });
-                return;
-              }
-            }
-
-            response.pipe(file);
-            file.on('finish', () => {
-              file.close();
-              resolve();
-            });
-          }).on('error', (err) => {
-            fsSync.unlink(filePath, () => reject(err));
-          });
+        const result = await this.layerManager.executeWithLayer('antigravity', {
+          type: 'text_processing',
+          prompt: analysisPrompt,
+          files: [],
+          useSearch: true,
         });
-
-        logger.info('File downloaded successfully', { url, filePath, type });
-        downloadedFiles.push({ path: filePath, type, originalUrl: url });
-
+        if (result.success === false) {
+          throw new Error(result.error ?? 'no result');
+        }
+        duration += result.metadata?.duration ?? 0;
+        layersUsed.push('antigravity');
+        sections.push(extractResultText(result) ?? '');
       } catch (error) {
-        logger.error('Failed to download file from URL', { url, error: (error as Error).message });
-        // Continue with other URLs
+        failures.push(`The antigravity layer could not read ${webUrls.join(', ')}: ${(error as Error).message}`);
       }
     }
 
-    return downloadedFiles;
+    // Only PDFs are fetched from URLs (the AI Studio server refuses the rest
+    // too). Refused here first so the request fails at once rather than after
+    // the layer's retries.
+    const unfetchable = fileUrls.filter(url => this.layerManager.detectUrlType(url) !== 'pdf');
+    if (unfetchable.length > 0) {
+      failures.push(`The aistudio layer could not read ${unfetchable.join(', ')}: Only PDF URLs are fetched. ` +
+        'Download the file and pass its local path instead.');
+    }
+
+    const studioFiles = [
+      ...fileUrls.map(url => ({ path: url, type: this.layerManager.detectUrlType(url) === 'pdf' ? 'pdf' : this.layerManager.detectUrlType(url) })),
+      ...localFiles,
+    ];
+    if (studioFiles.length > 0 && failures.length === 0) {
+      const instructions = webUrls.length > 0
+        ? `${prompt}\n\n(${webUrls.join(', ')} ${webUrls.length === 1 ? 'is' : 'are'} read separately; ` +
+          `answer from the attached file${studioFiles.length === 1 ? '' : 's'}.)`
+        : prompt;
+      // A request of PDF URLs alone takes the document path; anything with a
+      // local file takes the path a local file takes on its own (the
+      // single-file fast path's task shape), which reads both.
+      const pdfUrlsOnly = localFiles.length === 0;
+      try {
+        const result = await this.layerManager.executeWithLayer('aistudio', {
+          type: pdfUrlsOnly ? 'document_analysis' : 'multimodal_processing',
+          ...(pdfUrlsOnly ? {} : { action: 'analyze' }),
+          files: studioFiles,
+          prompt: instructions,
+          instructions,
+          options: options ?? {},
+          ...(typeof options?.pdf_mode === 'string' ? { pdf_mode: options.pdf_mode } : {}),
+        });
+        if (result.success === false) {
+          throw new Error(result.error ?? 'no result');
+        }
+        duration += result.metadata?.duration ?? 0;
+        layersUsed.push('aistudio');
+        sections.push(extractResultText(result) ?? '');
+      } catch (error) {
+        const what = fileUrls.length > 0 && localFiles.length === 0 ? fileUrls.join(', ') : 'the attached files';
+        failures.push(`The aistudio layer could not read ${what}: ${(error as Error).message}`);
+      }
+    }
+
+    if (failures.length > 0) {
+      logger.error('URL request failed', { failures });
+      return this.formatResponse({
+        success: false,
+        error: failures.join('; '),
+        data: failures.join('\n'),
+        metadata: { layer: 'error', routing_reason: decision.kind, layers_used: layersUsed },
+      }, hasCGMB);
+    }
+
+    const data = sections.length === 2
+      ? `🌐 From ${webUrls.length === 1 ? 'the web page' : 'the web pages'} (Antigravity CLI):\n${sections[0]}\n\n` +
+        `📎 From the attached ${studioFiles.length === 1 ? 'file' : 'files'} (AI Studio):\n${sections[1]}`
+      : sections[0] ?? '';
+
+    return this.formatResponse({
+      success: true,
+      data,
+      metadata: {
+        layer: layersUsed.length === 1 ? layersUsed[0] : 'multiple',
+        layers_used: layersUsed,
+        routing_reason: decision.kind === 'file_url' ? 'file_url_direct_routing'
+          : decision.kind === 'web_url' ? 'web_url_auto_routing'
+            : 'web_url_with_files',
+        urls_processed: fileUrls.length + webUrls.length,
+        processing_time: duration,
+      },
+    }, hasCGMB);
   }
 
   /**
-   * Clean up temporary downloaded files
+   * The text of a layer result for the caller.
+   *
+   * Generation results are objects, and the generic extraction found no text
+   * in them, so a generated image came back as "Processing completed" without
+   * the path of the file -- which the README says is returned.
    */
-  private async cleanupTempFiles(files: Array<{ path: string }>): Promise<void> {
-    for (const file of files) {
-      try {
-        await fs.unlink(file.path);
-        logger.debug('Cleaned up temp file', { path: file.path });
-      } catch {
-        // Ignore cleanup errors
-      }
+  private describeLayerData(data: unknown): unknown {
+    if (data && typeof data === 'object' && 'generationType' in data) {
+      const media = data as { generationType?: unknown; outputPath?: unknown; metadata?: { responseText?: unknown } };
+      const kind = media.generationType === 'audio' ? '🎵 Audio' : media.generationType === 'image' ? '🎨 Image' : 'Media';
+      const where = typeof media.outputPath === 'string' && media.outputPath !== '' ? `: ${media.outputPath}` : '';
+      const note = typeof media.metadata?.responseText === 'string' && media.metadata.responseText.trim() !== ''
+        ? `\n\n${media.metadata.responseText}`
+        : '';
+      return `${kind} generated${where}${note}`;
     }
+    return extractResultText({ data }) ?? data;
   }
 }

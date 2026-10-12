@@ -1,3 +1,4 @@
+import { readFileSync, statSync } from 'fs';
 import { basename } from 'path';
 import { ClaudeCodeLayer } from '../layers/ClaudeCodeLayer.js';
 import { AntigravityCLILayer } from '../layers/AntigravityCLILayer.js';
@@ -19,6 +20,16 @@ import {
 } from './types.js';
 import { taskFileRefs } from './types.js';
 import { normalizeLayerName } from './types.js';
+import {
+  hasAudioGenerationIntent,
+  hasCodeIntent,
+  hasImageGenerationIntent,
+  hasReasoningIntent,
+  hasSearchIntent,
+  hasWorkflowIntent,
+  type RouteKind,
+  urlKind,
+} from './routing.js';
 
 /**
  * Names that must not be transmitted to Google, checked at the AI Studio
@@ -88,6 +99,74 @@ interface TaskAnalysis {
   estimatedTokens: number;
   preferredLayer: LayerType;
   reasoning: string;
+}
+
+/**
+ * Where a request goes, decided once by LayerManager.decideRoute() and acted on
+ * by executeRoute() (or, for URLs and multi-file work, by the caller).
+ */
+export interface RouteDecision {
+  kind: RouteKind;
+  /** The layer that answers first. For 'web_and_files' the URL half; the files go to AI Studio. */
+  layer: LayerType;
+  reason: string;
+  /** PDF / image / audio URLs found in the request. */
+  fileUrls: string[];
+  /** Web page URLs found in the request. */
+  webUrls: string[];
+}
+
+/** A task handed to executeRoute(): the prompt, the files, and anything a layer reads. */
+export interface RoutedTask {
+  prompt?: string;
+  instructions?: string;
+  request?: string;
+  type?: string;
+  files?: unknown;
+  documents?: unknown;
+  options?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/** What decideRoute() looks at. */
+export interface RouteInput {
+  prompt: string;
+  /** Local files (not URLs). */
+  files?: readonly FileReference[];
+  /** URLs found in the prompt or passed as files. */
+  urls?: readonly string[];
+  /** A caller that already knows it wants a search passes 'search'. */
+  taskType?: string;
+}
+
+/**
+ * How much source code the Claude layer is given inline.
+ *
+ * Claude Code runs headless in CGMB's own package directory, where its
+ * permissions allow reading CGMB's sources and nothing of the user's -- so a
+ * code file has to travel in the prompt. 200 KB is roughly 50k tokens: a large
+ * module or a handful of small ones. Above it the files go to AI Studio, which
+ * reads them through the File API path like any other document.
+ */
+export const CLAUDE_INLINE_MAX_BYTES = 200 * 1024;
+const CLAUDE_INLINE_MAX_FILES = 10;
+
+/** Local paths written into a prompt (Windows and POSIX, absolute or ./relative). */
+const EMBEDDED_PATH = /(?:[A-Za-z]:\\[^\s"'<>|]+\.[a-zA-Z0-9]+|\/(?!https?:)[^\s"'<>|]+\.[a-zA-Z0-9]+|\.\.?\/[^\s"'<>|]+\.[a-zA-Z0-9]+)/i;
+
+/** Mark a result as answered by a fallback layer, so the caller can say so. */
+function markFallback(result: LayerResult, from: LayerType, reason: string): LayerResult {
+  if (result.metadata?.fallback_from) {
+    return result;
+  }
+  return {
+    ...result,
+    metadata: {
+      ...result.metadata,
+      fallback_from: normalizeLayerName(from) as 'claude' | 'antigravity' | 'aistudio',
+      fallback_reason: reason,
+    },
+  };
 }
 
 export class LayerManager {
@@ -291,149 +370,406 @@ export class LayerManager {
   }
 
   /**
-   * Intelligent task analysis for optimal layer selection
-   * Implements enterprise-level routing logic for CGMB
-   * Enhanced to support user-specified layer preferences
+   * Describe a task for routing and fallback decisions.
+   *
+   * preferredLayer comes from decideRoute() -- the one routing rule -- unless
+   * the caller named a layer. This used to carry a priority chain of its own
+   * whose "Priority 6: Complex reasoning or code -> Claude Code" could never be
+   * reached: Priority 5 (`task.useSearch !== false`) was true for every task
+   * that did not set useSearch, which is all of them.
    */
   public analyzeTask(task: any, userPreferredLayer?: LayerType): TaskAnalysis {
-    const prompt = task.prompt || task.request || task.input || '';
+    const prompt = task.prompt || task.request || task.input || task.instructions || '';
 
     // Both keys, not just `files`. A document-analysis task carries `documents`,
     // so hasFiles was false for it: routing treated it as text, and the
     // capability filter in getFallbackOrder never fired -- which is how a
     // file-carrying request reached layers that cannot read files.
     const files = taskFileRefs(task);
-
-    // Analyze file types and complexity
     const fileTypes = files.map((f: FileReference) => f.type || this.detectFileType(f.path));
     const hasFiles = files.length > 0;
-    const hasImages = fileTypes.some((type: string) => ['image'].includes(type));
-    const hasDocuments = fileTypes.some((type: string) => ['pdf', 'document', 'text', 'spreadsheet', 'presentation'].includes(type));
-    const hasAudio = fileTypes.some((type: string) => ['audio'].includes(type));
-    const hasVideo = fileTypes.some((type: string) => ['video'].includes(type));
-    
-    // Enhanced code file detection
-    const hasCodeFiles = fileTypes.some((type: string) => ['code', 'config', 'markup', 'stylesheet', 'database'].includes(type));
-    
-    // Analyze prompt characteristics
-    const promptLength = prompt.length;
-    const isCodeRelated = this.detectCodeContent(prompt) || hasCodeFiles;
-    const needsCurrentInfo = this.detectCurrentInfoNeed(prompt);
-    const isGenerationTask = this.detectGenerationTask(prompt, task);
     const complexity = this.assessComplexity(prompt, files, task);
-    
-    // Check for user-specified layer override
-    if (userPreferredLayer) {
-      return {
-        complexity,
-        hasFiles,
-        fileTypes,
-        needsCurrentInfo,
-        isGenerationTask,
-        isCodeRelated,
-        estimatedTokens: Math.ceil(promptLength / 4) + files.length * 100,
-        preferredLayer: userPreferredLayer,
-        reasoning: `User explicitly requested ${userPreferredLayer} layer`,
-      };
-    }
-    
-    // Determine optimal layer based on task characteristics
-    let preferredLayer: LayerType;
-    let reasoning: string;
-    
-    // Priority 1: Code files - Route to AI Studio (primary layer for most tasks)
-    if (hasCodeFiles) {
-      if (isGenerationTask) {
-        preferredLayer = 'aistudio';
-        reasoning = 'Code files with generation task - AI Studio for multimodal processing';
-      } else {
-        preferredLayer = 'aistudio';
-        reasoning = 'Code files detected - AI Studio for code analysis';
-      }
-    } 
-    // Priority 2: Media files - Route to AI Studio for multimodal processing
-    else if (hasFiles && (hasImages || hasAudio || hasVideo)) {
-      preferredLayer = 'aistudio';
-      reasoning = 'Media files requiring AI Studio multimodal processing';
-    }
-    // Priority 3: Document files (PDFs, etc.) - Route to AI Studio for OCR and analysis
-    else if (hasFiles && hasDocuments) {
-      preferredLayer = 'aistudio';
-      reasoning = 'Document files requiring AI Studio OCR and analysis capabilities';
-    }
-    // Priority 4: Generation tasks - Route to AI Studio for content creation
-    else if (isGenerationTask && (hasImages || hasAudio || hasVideo || prompt.includes('generate') || prompt.includes('create'))) {
-      preferredLayer = 'aistudio';
-      reasoning = 'Generation task requiring AI Studio capabilities (Imagen 3, Veo 2)';
-    }
-    // Priority 5: Current information needs - Route to the Antigravity CLI for web search
-    else if (needsCurrentInfo || task.useSearch !== false || task.type === 'search') {
-      preferredLayer = 'antigravity';
-      reasoning = 'Current information or search required - Antigravity CLI optimal';
-    }
-    // Priority 6: Complex reasoning or code-related prompts - Route to Claude Code
-    else if (complexity === 'high' || isCodeRelated || promptLength > 2000) {
-      preferredLayer = 'claude';
-      reasoning = 'Complex reasoning or code analysis - Claude Code optimal';
-    }
-    // Priority 7: Simple tasks - Route to Antigravity CLI for speed
-    else if (complexity === 'low' && promptLength < 500) {
-      preferredLayer = 'antigravity';
-      reasoning = 'Simple task - Antigravity CLI for speed';
-    }
-    // Default: Route to AI Studio (primary layer)
-    else {
-      preferredLayer = 'aistudio';
-      reasoning = 'Default to AI Studio for balanced multimodal capabilities';
-    }
-    
-    const estimatedTokens = Math.ceil(promptLength / 4) + files.length * 100;
-    
+    const decision = this.decideRoute({ prompt, files, taskType: task.type });
+
     return {
       complexity,
       hasFiles,
       fileTypes,
-      needsCurrentInfo,
-      isGenerationTask,
-      isCodeRelated,
-      estimatedTokens,
-      preferredLayer,
-      reasoning,
+      needsCurrentInfo: hasSearchIntent(prompt),
+      isGenerationTask: hasImageGenerationIntent(prompt) || hasAudioGenerationIntent(prompt),
+      isCodeRelated: hasCodeIntent(prompt) || decision.kind === 'code_files',
+      estimatedTokens: Math.ceil(prompt.length / 4) + files.length * 100,
+      preferredLayer: userPreferredLayer ?? decision.layer,
+      reasoning: userPreferredLayer
+        ? `User explicitly requested ${userPreferredLayer} layer`
+        : decision.reason,
     };
   }
 
   /**
-   * Execute task with optimal layer selection
-   * Implements intelligent routing with fallback strategies
-   * Enhanced to support user-specified layer preferences
+   * The routing rule: which layer a request goes to.
+   *
+   * The one place this is decided, for the MCP `cgmb` tool, the
+   * `cgmb_multimodal_process` tool and the CLI. In order, first match wins:
+   *
+   *   1. URLs      PDF / image / audio URL -> AI Studio (with any local files);
+   *                web page URL -> Antigravity; web page URL plus files ->
+   *                both, the URL to Antigravity and the files to AI Studio.
+   *   2. Files     source code only, small enough to inline -> Claude Code;
+   *                anything else -> AI Studio.
+   *   3. Image or audio generation wording -> AI Studio.
+   *   4. Search or current-information wording -> Antigravity (it has the web).
+   *   5. Reasoning or code wording -> Claude Code.
+   *   6. Long (1,000+ characters) or multi-step wording, or a path the caller
+   *      could not resolve -> the analysis workflow (Claude, AI Studio, Claude).
+   *   7. Anything else -- a short question with none of the signals above, such
+   *      as "Who wrote Hamlet?" -- -> Antigravity, the README's layer for
+   *      information. It answers with web search, which is also what keeps a
+   *      plain factual answer current.
+   *
+   * Generation and search sit above reasoning on purpose: "explain today's
+   * news" needs the web before it needs reasoning, and "create audio saying
+   * ..." is a request for audio whatever the words in it.
+   */
+  public decideRoute(input: RouteInput): RouteDecision {
+    const prompt = input.prompt ?? '';
+    const files = input.files ?? [];
+    const urls = input.urls ?? [];
+    const decision = (kind: RouteKind, layer: LayerType, reason: string, fileUrls: string[] = [], webUrls: string[] = []): RouteDecision =>
+      ({ kind, layer, reason, fileUrls, webUrls });
+
+    if (urls.length > 0) {
+      const fileUrls = urls.filter(url => urlKind(url) !== 'web');
+      const webUrls = urls.filter(url => urlKind(url) === 'web');
+      if (webUrls.length === 0) {
+        return decision('file_url', 'aistudio', 'PDF, image or audio URL - AI Studio reads the file', fileUrls, webUrls);
+      }
+      if (fileUrls.length === 0 && files.length === 0) {
+        return decision('web_url', 'antigravity', 'Web page URL - Antigravity CLI reads the page', fileUrls, webUrls);
+      }
+      return decision('web_and_files', 'antigravity',
+        'Web page URL plus files - Antigravity CLI reads the page, AI Studio reads the files', fileUrls, webUrls);
+    }
+
+    if (files.length > 0) {
+      if (this.canInlineForClaude(files)) {
+        return decision('code_files', 'claude', 'Source code files - Claude Code for code analysis');
+      }
+      return decision('files', 'aistudio', 'Files - AI Studio reads images, audio and documents');
+    }
+
+    if (hasImageGenerationIntent(prompt)) {
+      return decision('image_generation', 'aistudio', 'Image generation - AI Studio');
+    }
+    if (hasAudioGenerationIntent(prompt)) {
+      return decision('audio_generation', 'aistudio', 'Audio generation - AI Studio');
+    }
+    if (input.taskType === 'search' || hasSearchIntent(prompt)) {
+      return decision('search', 'antigravity', 'Search or current information - Antigravity CLI');
+    }
+    if (hasCodeIntent(prompt) || hasReasoningIntent(prompt)) {
+      return decision('reasoning', 'claude', 'Reasoning or code - Claude Code');
+    }
+    if (prompt.length >= 1000 || hasWorkflowIntent(prompt) || EMBEDDED_PATH.test(prompt)) {
+      return decision('workflow', 'claude', 'Long or multi-step request - analysis workflow led by Claude Code');
+    }
+    return decision('plain', 'antigravity', 'Short question with no reasoning, code or generation signal - Antigravity CLI');
+  }
+
+  /** What a URL points at: 'pdf', 'image', 'audio' or 'web'. */
+  public detectUrlType(url: string): 'pdf' | 'image' | 'audio' | 'web' {
+    return urlKind(url);
+  }
+
+  /** True when a file is source code (by extension). */
+  private isSourceCodeFile(filePath: string): boolean {
+    return this.detectFileType(filePath) === 'code';
+  }
+
+  /**
+   * True when every file is source code and together they fit inline.
+   *
+   * Only source code: config, data and markup files are documents as far as
+   * the README is concerned, and a credential-shaped name (.env, *.pem) is not
+   * code in the first place.
+   */
+  private canInlineForClaude(files: readonly FileReference[]): boolean {
+    if (files.length === 0 || files.length > CLAUDE_INLINE_MAX_FILES) {
+      return false;
+    }
+    if (!files.every(file => this.isSourceCodeFile(file.path))) {
+      return false;
+    }
+    let total = 0;
+    for (const file of files) {
+      try {
+        total += statSync(file.path).size;
+      } catch {
+        // A file that cannot be stat'ed goes to AI Studio, which reports why.
+        return false;
+      }
+    }
+    return total <= CLAUDE_INLINE_MAX_BYTES;
+  }
+
+  /**
+   * Refuse a layer that cannot read the files it would be given.
+   *
+   * Only AI Studio reads files; Claude reads source code, inlined into its
+   * prompt; the search layer reads none. Sending files anywhere else returned
+   * an answer about a document nobody opened -- the MCP `targetLayer` path
+   * refused that, the CLI `--layer` path did not.
+   */
+  public assertLayerCanReadFiles(layer: LayerType, files: readonly FileReference[]): void {
+    if (files.length === 0) {
+      return;
+    }
+    const target = normalizeLayerName(layer);
+    if (target === 'aistudio') {
+      return;
+    }
+    if (target === 'claude') {
+      if (this.canInlineForClaude(files)) {
+        return;
+      }
+      throw new CGMBError(
+        `The Claude layer cannot read files (${files.length} attached). It reads source code files only ` +
+        `(up to ${CLAUDE_INLINE_MAX_FILES} files, ${CLAUDE_INLINE_MAX_BYTES / 1024} KB in total). ` +
+        'Send other file work to the aistudio layer, or omit the layer to let CGMB route it.',
+        'LAYER_CANNOT_READ_FILES'
+      );
+    }
+    throw new CGMBError(
+      `The ${target} layer cannot read files (${files.length} attached). ` +
+      'Send file work to the aistudio layer, or omit the layer to let CGMB route it.',
+      'LAYER_CANNOT_READ_FILES'
+    );
+  }
+
+  /**
+   * Put source files into a prompt for the Claude layer.
+   *
+   * The same boundary as AI Studio: the contents leave the machine, so only
+   * files under the directories the AI Studio server may read
+   * (CGMB_ALLOWED_ROOTS) are inlined, credential-shaped names are refused, and
+   * binary files are refused rather than sent as noise.
+   */
+  private async inlineCodeFiles(prompt: string, files: readonly FileReference[]): Promise<string> {
+    const { assertReadableRoot } = await import('../mcp-servers/ai-studio-mcp-server.js');
+    const sections: string[] = [];
+    let total = 0;
+
+    for (const file of files) {
+      const resolved = assertReadableRoot(file.path);
+      const content = readFileSync(resolved, 'utf8');
+      if (content.includes('\u0000')) {
+        throw new CGMBError(`${basename(resolved)} is not a text file; the Claude layer reads source code only.`, 'LAYER_CANNOT_READ_FILES');
+      }
+      total += Buffer.byteLength(content, 'utf8');
+      if (total > CLAUDE_INLINE_MAX_BYTES) {
+        throw new CGMBError(
+          `The code files exceed the ${CLAUDE_INLINE_MAX_BYTES / 1024} KB the Claude layer is given inline. ` +
+          'Send them to the aistudio layer, or fewer at a time.',
+          'LAYER_CANNOT_READ_FILES'
+        );
+      }
+      const longestFence = Math.max(0, ...(content.match(/`+/g) ?? []).map(run => run.length));
+      const fence = '`'.repeat(Math.max(3, longestFence + 1));
+      sections.push(`File: ${resolved}\n${fence}\n${content}${content.endsWith('\n') ? '' : '\n'}${fence}`);
+    }
+
+    return `${prompt}\n\n` +
+      `The ${files.length === 1 ? 'file below is' : `${files.length} files below are`} attached to this request. ` +
+      'Their full contents are included here; answer from them.\n\n' +
+      sections.join('\n\n');
+  }
+
+  /**
+   * Carry out a route decision for the routes that end in one layer.
+   *
+   * Fallback, where there is one, is the CLI's (getFallbackOrder): a text
+   * request that fails on its layer moves to the next one that can answer it,
+   * a file request never moves to a layer that cannot read the file, and a
+   * generation request does not fall back at all -- the other layers cannot
+   * make an image, and an answer in its place would be an unrelated one. When
+   * every layer fails, the error names each of them.
+   */
+  public async executeRoute(decision: RouteDecision, task: RoutedTask): Promise<LayerResult> {
+    const prompt = task.prompt || task.instructions || task.request || '';
+    const files = taskFileRefs(task);
+    const options = task.options ?? {};
+
+    logger.info('Routing decision', { route: decision.kind, layer: decision.layer, reason: decision.reason });
+
+    switch (decision.kind) {
+      case 'image_generation':
+        return this.executeWithLayer('aistudio', { type: 'image_generation', action: 'generate_image', prompt, files: [] });
+
+      case 'audio_generation':
+        return this.executeWithLayer('aistudio', { type: 'audio_generation', action: 'generate_audio', prompt, files: [] });
+
+      case 'search':
+      case 'plain':
+        return this.executeTextWithFallback('antigravity', {
+          type: decision.kind === 'search' ? 'search' : 'text_processing',
+          prompt,
+          files: [],
+          options,
+          useSearch: true,
+        });
+
+      case 'reasoning':
+      case 'workflow':
+        return this.executeTextWithFallback('claude', { type: 'text_processing', prompt, files: [], options });
+
+      case 'code_files':
+        return this.executeCodeFilesOnClaude({ ...task, prompt, files, options }, { fallback: true });
+
+      default:
+        try {
+          const result = await this.executeWithLayer(decision.layer, task);
+          if (result.success === false) {
+            throw new Error(result.error ?? `The ${decision.layer} layer returned no result`);
+          }
+          return result;
+        } catch (error) {
+          logger.warn('Primary layer execution failed, attempting fallback', {
+            primaryLayer: decision.layer,
+            error: (error as Error).message,
+          });
+          return this.executeWithFallback(task, decision.layer, error as Error);
+        }
+    }
+  }
+
+  /**
+   * Run a text-only request on `primary`, falling back as the CLI does.
+   *
+   * Claude Code is optional: when it is not installed or not signed in, the
+   * request goes to the Antigravity CLI instead, with an info line on stderr.
+   */
+  private async executeTextWithFallback(primary: 'claude' | 'antigravity', task: RoutedTask): Promise<LayerResult> {
+    if (primary === 'claude') {
+      try {
+        await this.getClaudeLayerAsync();
+      } catch (error) {
+        const reason = (error as Error).message;
+        logger.info('Claude Code is not available; answering with the Antigravity CLI instead', { reason });
+        const result = await this.executeTextWithFallback('antigravity', { ...task, useSearch: true });
+        return markFallback(result, 'claude', `Claude Code is not available: ${reason}`);
+      }
+    }
+
+    try {
+      const result = await this.executeWithLayer(primary, task);
+      if (result.success === false) {
+        throw new Error(result.error ?? `The ${primary} layer returned no result`);
+      }
+      return result;
+    } catch (error) {
+      logger.warn(`The ${primary} layer failed; trying the next layer`, { error: (error as Error).message });
+      return this.executeWithFallback(task, primary, error as Error);
+    }
+  }
+
+  /**
+   * Answer about source code files with Claude Code, their text inlined.
+   *
+   * With `fallback`, a Claude that is unavailable or fails hands the original
+   * files to AI Studio -- the only other layer that can read them. Without it
+   * (an explicit layer choice) the failure is the answer.
+   */
+  private async executeCodeFilesOnClaude(task: RoutedTask, { fallback }: { fallback: boolean }): Promise<LayerResult> {
+    const files = taskFileRefs(task);
+    const prompt = task.prompt || task.instructions || task.request || 'Review this code.';
+
+    // Checked on the original task: the inlined one carries no file list.
+    assertNoCredentialFiles(task);
+
+    if (fallback) {
+      try {
+        await this.getClaudeLayerAsync();
+      } catch (error) {
+        const reason = (error as Error).message;
+        logger.info('Claude Code is not available; sending the code files to AI Studio instead', { reason });
+        const result = await this.executeWithLayer('aistudio', task);
+        if (result.success === false) {
+          throw new Error(`Claude Code is not available (${reason}), and the aistudio layer failed: ${result.error ?? 'no result'}`);
+        }
+        return markFallback(result, 'claude', `Claude Code is not available: ${reason}`);
+      }
+    }
+
+    const inlined = await this.inlineCodeFiles(prompt, files);
+    const claudeTask = { type: 'text_processing', prompt: inlined, files: [], options: task.options ?? {} };
+
+    if (!fallback) {
+      return this.executeWithLayer('claude', claudeTask);
+    }
+    try {
+      const result = await this.executeWithLayer('claude', claudeTask);
+      if (result.success === false) {
+        throw new Error(result.error ?? 'The claude layer returned no result');
+      }
+      return result;
+    } catch (error) {
+      logger.warn('The claude layer failed on code files; trying AI Studio', { error: (error as Error).message });
+      return this.executeWithFallback(task, 'claude', error as Error);
+    }
+  }
+
+  /**
+   * Execute a task on the layer the router picks, or on the one the caller
+   * named (task.options.preferredLayer, the CLI's --layer).
+   *
+   * A named layer that cannot read the attached files is an error, as it is
+   * for the MCP tool's targetLayer.
    */
   public async executeWithOptimalLayer(
     task: any
   ): Promise<LayerResult> {
-    // Extract user-preferred layer from task options
-    const userPreferredLayer = task.options?.preferredLayer;
-    
-    const analysis = this.analyzeTask(task, userPreferredLayer);
-    
+    const requested: unknown = task.options?.preferredLayer;
+    const files = taskFileRefs(task);
+
+    if (typeof requested === 'string' && requested !== '' && requested !== 'auto' && requested !== 'adaptive') {
+      const layer = normalizeLayerName(requested) as LayerType;
+      this.assertLayerCanReadFiles(layer, files);
+
+      logger.info('Executing on the requested layer', { layer, fileCount: files.length });
+
+      if (layer === 'claude' && files.length > 0) {
+        return this.executeCodeFilesOnClaude(task, { fallback: true });
+      }
+      try {
+        return await this.executeWithLayer(layer, task);
+      } catch (error) {
+        logger.warn('Primary layer execution failed, attempting fallback', {
+          primaryLayer: layer,
+          error: (error as Error).message,
+        });
+        return await this.executeWithFallback(task, layer, error as Error);
+      }
+    }
+
+    const prompt: string = task.prompt || task.request || task.input || task.instructions || '';
+    const decision = this.decideRoute({ prompt, files, taskType: task.type });
+
     logger.info('Optimal layer analysis completed', {
-      preferredLayer: analysis.preferredLayer,
-      complexity: analysis.complexity,
-      reasoning: analysis.reasoning,
-      hasFiles: analysis.hasFiles,
-      fileTypes: analysis.fileTypes,
-      userSpecified: !!userPreferredLayer,
+      route: decision.kind,
+      preferredLayer: decision.layer,
+      reasoning: decision.reason,
+      hasFiles: files.length > 0,
     });
 
-    try {
-      return await this.executeWithLayer(analysis.preferredLayer, task);
-    } catch (error) {
-      logger.warn('Primary layer execution failed, attempting fallback', {
-        primaryLayer: analysis.preferredLayer,
-        error: (error as Error).message,
-      });
-      
-      return await this.executeWithFallback(task, analysis.preferredLayer);
-    }
+    return this.executeRoute(decision, task);
+  }
+
+  /**
+   * Run a route on Claude with code files, without fallback. Used when a layer
+   * was named explicitly (the MCP tool's targetLayer).
+   */
+  public async executeCodeFilesOnClaudeDirect(task: RoutedTask): Promise<LayerResult> {
+    return this.executeCodeFilesOnClaude(task, { fallback: false });
   }
 
   /**
@@ -475,13 +811,22 @@ export class LayerManager {
   }
 
   /**
-   * Execute with fallback strategy
+   * Execute with fallback strategy.
+   *
+   * Every layer tried is named in the error when all of them fail, with the
+   * reason it failed: "All layers failed" alone did not say which layer to fix.
+   * A successful fallback is marked (metadata.fallback_from), so a caller can
+   * tell the answer did not come from the layer the request was meant for.
    */
   private async executeWithFallback(
     task: any,
-    failedLayer: LayerType
+    failedLayer: LayerType,
+    primaryError?: Error
   ): Promise<LayerResult> {
     const fallbackOrder = this.getFallbackOrder(failedLayer, task);
+    const primaryReason = primaryError?.message ?? 'failed';
+    const failures: string[] = [];
+    const textOnly = taskFileRefs(task).length === 0;
 
     for (const layerType of fallbackOrder) {
       try {
@@ -493,6 +838,7 @@ export class LayerManager {
           logger.warn(`Skipping ${layerType} - layer not initialized`, {
             originalLayer: failedLayer,
           });
+          failures.push(`${layerType}: not initialized`);
           continue;
         }
 
@@ -501,12 +847,23 @@ export class LayerManager {
           originalLayer: failedLayer,
         });
 
-        return await this.executeWithLayer(layerType, task);
+        // A text request on AI Studio is answered as text. Its general path
+        // guesses generation from the wording ("picture" + "make"), and a
+        // search prompt that happens to say both would come back as an image.
+        const fallbackTask = layerType === 'aistudio' && textOnly
+          ? { ...task, action: 'answer_text' }
+          : task;
+        const result = await this.executeWithLayer(layerType, fallbackTask);
+        if (result.success === false) {
+          throw new Error(result.error ?? 'no result');
+        }
+        return markFallback(result, failedLayer, primaryReason);
       } catch (error) {
         logger.warn('Fallback layer also failed', {
           layer: layerType,
           error: (error as Error).message,
         });
+        failures.push(`${layerType}: ${(error as Error).message}`);
         continue;
       }
     }
@@ -515,13 +872,16 @@ export class LayerManager {
       // Reached when the task carries files and no remaining layer can read
       // them. Naming that explicitly beats "Fallbacks: " with an empty list.
       throw new Error(
-        `The ${failedLayer} layer failed and no fallback layer can process files. ` +
+        `The ${failedLayer} layer failed (${primaryReason}) and no fallback layer can process files. ` +
         `Only the AI Studio layer reads file contents; the search and Claude layers ` +
         `would answer from the prompt alone.`
       );
     }
 
-    throw new Error(`All layers failed for task. Primary: ${failedLayer}, Fallbacks: ${fallbackOrder.join(', ')}`);
+    throw new Error(
+      `The ${failedLayer} layer failed (${primaryReason}), and so did every fallback layer -- ` +
+      failures.join('; ')
+    );
   }
 
   /**
@@ -648,54 +1008,6 @@ export class LayerManager {
   }
 
   /**
-   * Detect if prompt contains code-related content
-   */
-  private detectCodeContent(prompt: string): boolean {
-    const codeKeywords = [
-      'function', 'class', 'import', 'export', 'const', 'let', 'var',
-      'def', 'if __name__', 'import ', 'from ', 'return',
-      'public', 'private', 'protected', 'static',
-      'code', 'programming', 'script', 'algorithm', 'debug', 'refactor'
-    ];
-    
-    const lowerPrompt = prompt.toLowerCase();
-    return codeKeywords.some(keyword => lowerPrompt.includes(keyword)) ||
-           /```/.test(prompt) || // Code blocks
-           /\.(js|ts|py|java|cpp|c|go|rs|php)/.test(prompt); // File extensions
-  }
-
-  /**
-   * Detect if prompt needs current/real-time information
-   */
-  private detectCurrentInfoNeed(prompt: string): boolean {
-    const currentInfoKeywords = [
-      'latest', 'recent', 'current', 'today', 'now', 'news', 'trends',
-      '2024', '2025', 'this year', 'this month', 'this week',
-      'search', 'find', 'what is happening', 'breaking', 'update'
-    ];
-    
-    const lowerPrompt = prompt.toLowerCase();
-    return currentInfoKeywords.some(keyword => lowerPrompt.includes(keyword));
-  }
-
-  /**
-   * Detect if task is for content generation
-   */
-  private detectGenerationTask(prompt: string, task: any): boolean {
-    const generationKeywords = [
-      'generate', 'create', 'make', 'produce', 'build', 'design',
-      'draw', 'paint', 'compose', 'write', 'author', 'craft'
-    ];
-    
-    const lowerPrompt = prompt.toLowerCase();
-    return generationKeywords.some(keyword => lowerPrompt.includes(keyword)) ||
-           task.type === 'generation' ||
-           task.action === 'generate' ||
-           lowerPrompt.includes('image of') ||
-           lowerPrompt.includes('picture of');
-  }
-
-  /**
    * Assess task complexity
    */
   private assessComplexity(prompt: string, files: FileReference[], task: any): 'low' | 'medium' | 'high' {
@@ -731,40 +1043,6 @@ export class LayerManager {
   }
 
   /**
-   * Determine if a prompt is simple enough for fast processing
-   * Based on reference implementation principles
-   */
-  private isSimplePrompt(prompt: string, files?: FileReference[]): boolean {
-    // NEW: Check for file paths embedded in prompt (Windows + Unix)
-    // If paths found, this is not a simple prompt - needs file processing
-    const filePathRegex = /(?:[A-Za-z]:\\[^\s"'<>|]+\.[a-zA-Z0-9]+|\/(?!https?:)[^\s"'<>|]+\.[a-zA-Z0-9]+|\.\.?\/[^\s"'<>|]+\.[a-zA-Z0-9]+)/gi;
-    const embeddedPaths = prompt.match(filePathRegex) ?? [];
-
-    if (embeddedPaths.length > 0) {
-      logger.debug('File paths detected in prompt - not simple', { paths: embeddedPaths });
-      return false;
-    }
-
-    // Fast processing criteria
-    const isSimple =
-      prompt.length < 1000 &&              // Short prompt
-      (!files || files.length === 0) &&    // No files
-      !prompt.includes('workflow') &&      // No workflow keywords
-      !prompt.includes('orchestrate') &&   // No orchestration
-      !prompt.includes('generate image') && // No AI Studio tasks
-      !prompt.includes('convert') &&       // No complex conversion
-      !prompt.includes('analyze multiple'); // No multi-step analysis
-
-    logger.debug('Simple prompt check', {
-      promptLength: prompt.length,
-      hasFiles: !!files?.length,
-      isSimple
-    });
-
-    return isSimple;
-  }
-
-  /**
    * Initialize all layers (now optional - layers are initialized on demand)
    */
   public async initializeLayers(): Promise<void> {
@@ -791,32 +1069,32 @@ export class LayerManager {
       options: options ? Object.keys(options) : []
     });
 
-    // Fast path for simple prompts (reference implementation style)
-    if (this.isSimplePrompt(prompt, files) && workflow === 'analysis') {
-      logger.info('Using fast path for simple multimodal request');
-
-      try {
-        const result = await this.processSimpleFast(prompt, files);
-
-        // Convert to WorkflowResult format
+    // One answer from one layer when the routing rule picks one.
+    //
+    // This was a "simple prompt" fast path that sent every file-less prompt
+    // under 1,000 characters to the Antigravity CLI, whatever it asked -- so
+    // "explain the difference between TCP and UDP" and "write a TypeScript
+    // function" never reached Claude Code, which the README names for both.
+    // decideRoute() is the same rule the MCP `cgmb` tool and the CLI use.
+    if (workflow === 'analysis') {
+      const decision = this.decideRoute({ prompt, files });
+      if (['search', 'plain', 'reasoning', 'code_files'].includes(decision.kind)) {
+        logger.info('Answering from one layer', { route: decision.kind, layer: decision.layer });
+        const result = await this.executeRoute(decision, { prompt, files, options: options ?? {} });
+        const layer = result.metadata?.layer ?? decision.layer;
         return {
           success: result.success,
           results: [result],
           metadata: {
             workflow: 'analysis',
-            execution_mode: 'fast',
+            execution_mode: 'direct',
             total_duration: result.metadata?.duration || 0,
-            steps_completed: 1,
-            steps_failed: 0,
-            layers_used: ['antigravity'],
+            steps_completed: result.success ? 1 : 0,
+            steps_failed: result.success ? 0 : 1,
+            layers_used: [layer],
             optimization: 'fast-path-bypass'
           }
         };
-      } catch (error) {
-        logger.warn('Fast path failed, falling back to full workflow', {
-          error: (error as Error).message
-        });
-        // Continue to full workflow below
       }
     }
 

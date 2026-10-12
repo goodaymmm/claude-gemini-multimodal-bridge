@@ -122,6 +122,12 @@ export function taskFileRefs(task: unknown): FileReference[] {
 
 // Processing Options
 export const ProcessingOptionsSchema = z.object({
+  /**
+   * @deprecated Never read by anything, and no longer advertised in the MCP
+   * tool schema (1.3.0). Still accepted so callers that send it are not
+   * refused; it has no effect. Use the `cgmb` tool's targetLayer to choose a
+   * layer.
+   */
   layer_priority: z.enum(['claude', 'antigravity', 'gemini', 'aistudio', 'adaptive']).optional(),
   execution_mode: z.enum(['sequential', 'parallel', 'adaptive']).optional(),
   output_format: z.string().optional(),
@@ -239,6 +245,10 @@ export const LayerResultSchema = z.object({
     fast_mode: z.boolean().optional(),
     optimization: z.string().optional(),
     retry_attempt: z.number().optional(),
+    // Set when the layer the request was routed to failed (or, for Claude
+    // Code, is not available) and this result came from a fallback layer.
+    fallback_from: z.enum(['claude', 'antigravity', 'aistudio']).optional(),
+    fallback_reason: z.string().optional(),
   }),
 });
 export type LayerResult = z.infer<typeof LayerResultSchema>;
