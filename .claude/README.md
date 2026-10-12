@@ -28,9 +28,10 @@ repository's instructions and permissions.
 
 ## What does not belong here
 
-Development-oriented agents, skills and commands. Those live in the workspace
-tree (`M:\workMCPtest\.claude\`) and are for people working *on* CGMB, not for
-the process CGMB spawns at runtime.
+Development-oriented agents, skills and commands. Those belong in each
+developer's own Claude Code configuration (for example `~/.claude/`), outside
+this package; they are for people working *on* CGMB, not for the process CGMB
+spawns at runtime.
 
 Skills placed here would also be loaded by a parent Claude Code session that
 has this repository open, so anything added later should carry a `cgmb-`

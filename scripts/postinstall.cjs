@@ -228,58 +228,35 @@ function checkClaudeCode() {
   log('⚠️ Claude Code CLI not found', 'warning');
   log('📋 Please install Claude Code CLI:', 'info');
   log('   npm install -g @anthropic-ai/claude-code', 'info');
-  log('   Or visit: https://docs.anthropic.com/claude/docs/claude-code', 'info');
+  log('   Or visit: https://docs.anthropic.com/en/docs/claude-code', 'info');
   
   return false;
 }
 
-// Setup environment file
+// Tell the user where their configuration goes. Writes nothing.
+//
+// This used to create a .env in process.cwd() -- which, under npm, is this
+// package's own installation directory -- and then told the user to edit it.
+// Since 1.2.1 the env loader never reads the installation directory (a .env
+// there would have supplied the API key, and CGMB_ALLOWED_ROOTS, to every
+// project on the machine), so the file it created was one nothing would ever
+// read, and the instructions sent people to edit it. Its built-in fallback
+// template also wrote AI_STUDIO_API_KEY=${GEMINI_API_KEY}, which dotenv does
+// not expand: the literal string became the key.
 function setupEnvironment() {
-  log('🔧 Setting up environment configuration...');
-  
-  const envPath = path.join(process.cwd(), '.env');
-  const envExamplePath = path.join(process.cwd(), '.env.example');
-  
-  if (fs.existsSync(envPath)) {
-    log('✅ .env file already exists', 'success');
-    return true;
-  }
-  
-  let envContent = '';
-  
-  if (fs.existsSync(envExamplePath)) {
-    envContent = fs.readFileSync(envExamplePath, 'utf8');
-    log('📄 Using .env.example as template', 'info');
-  } else {
-    envContent = `# Claude-Gemini Multimodal Bridge Configuration
-# Get your API key from: https://aistudio.google.com/app/apikey
+  log('🔧 Environment configuration (nothing is written by the installer)...');
 
-GEMINI_API_KEY=your_gemini_api_key_here
-AI_STUDIO_API_KEY=\${GEMINI_API_KEY}
+  const example = path.join(__dirname, '..', '.env.example');
 
-# Optional: Customize paths if needed
-CLAUDE_CODE_PATH=/usr/local/bin/claude
-# Path to the Antigravity CLI (agy). Leave unset to auto-detect.
-# ANTIGRAVITY_CLI_PATH=
+  log('📋 CGMB reads .env from the directory you run it in (where Claude Code starts the MCP server),', 'info');
+  log('   or from the file or directory named by CGMB_ENV_PATH. Set your key there:', 'info');
+  log('     AI_STUDIO_API_KEY=your_key   # https://aistudio.google.com/app/apikey', 'info');
+  log('   or export AI_STUDIO_API_KEY in your shell / MCP server environment.', 'info');
+  if (fs.existsSync(example)) {
+    log(`   A commented template is at: ${example}`, 'info');
+  }
 
-# Logging and performance
-LOG_LEVEL=info
-ENABLE_CACHING=true
-# Antigravity model for the search layer - must match \`agy models\`
-ANTIGRAVITY_MODEL=gemini-3.6-flash-low
-`;
-    log('📄 Creating basic .env template', 'info');
-  }
-  
-  try {
-    fs.writeFileSync(envPath, envContent, 'utf8');
-    log('✅ Created .env file', 'success');
-    log('📝 Please edit .env and add your API keys', 'info');
-    return true;
-  } catch (error) {
-    log(`❌ Failed to create .env file: ${error.message}`, 'error');
-    return false;
-  }
+  return true;
 }
 
 // Detect Node.js environment
@@ -400,17 +377,16 @@ function showCompletionSummary(results) {
   });
   
   console.log('\n📋 Next Steps:');
-  console.log('1. Edit .env file and add your API keys:');
-  console.log('   - Get Gemini API key: https://aistudio.google.com/app/apikey');
-  console.log('2. Build the project (if in development):');
-  console.log('   npm run build');
-  console.log('3. Verify installation:');
+  console.log('1. In your project directory, create a .env with your AI Studio key');
+  console.log('   (or export it in your shell):');
+  console.log('   AI_STUDIO_API_KEY=your_key   # https://aistudio.google.com/app/apikey');
+  console.log('2. Verify installation:');
   console.log('   cgmb verify');
-  console.log('4. Set up authentication:');
+  console.log('3. Set up authentication:');
   console.log('   cgmb auth --interactive');
   
   if (!results['MCP Integration']) {
-    console.log('5. Set up Claude Code MCP integration:');
+    console.log('4. Set up Claude Code MCP integration:');
     console.log('   cgmb setup-mcp');
   }
   
@@ -456,7 +432,26 @@ function checkNodeVersion(version, requiredMajor) {
   };
 }
 
-module.exports = { checkNodeVersion, requiredNodeMajor };
+/**
+ * Whether an environment variable says "this is CI".
+ *
+ * `if (process.env.CI)` treated any non-empty string as true, so CI=false --
+ * which people set precisely to say "not CI" -- skipped the setup. Only an
+ * affirmative value counts now: true, 1 or yes, in any case.
+ *
+ * Exported for tests, with the environment as a parameter.
+ */
+const CI_TRUE_VALUES = new Set(['true', '1', 'yes']);
+
+function isTruthyEnvFlag(value) {
+  return CI_TRUE_VALUES.has(String(value ?? '').trim().toLowerCase());
+}
+
+function isCiEnvironment(env = process.env) {
+  return isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.CONTINUOUS_INTEGRATION);
+}
+
+module.exports = { checkNodeVersion, isCiEnvironment, requiredNodeMajor, setupEnvironment };
 
 // Main setup function
 async function main() {
@@ -551,7 +546,7 @@ if (require.main === module) {
   // postinstall-node-version.test.mjs reported one case where a local run
   // reported six, and exited 0: five cases silently absent, the run green, and
   // nothing proven by it.
-  if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) {
+  if (isCiEnvironment()) {
     log('🔄 CI environment detected, skipping interactive setup', 'info');
     process.exit(0);
   }

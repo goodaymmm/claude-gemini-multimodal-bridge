@@ -1,6 +1,6 @@
 import { config, type DotenvConfigOutput } from 'dotenv';
 import { existsSync, statSync } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { join, resolve } from 'path';
 import { logger } from './logger.js';
 
 /**
@@ -25,6 +25,122 @@ export function loadDotenvFile(path: string = resolve(process.cwd(), '.env')): D
     override: false,
     fast: false,
   });
+}
+
+/**
+ * Every name the AI Studio key is read under, in AuthVerifier's search order:
+ * the recommended one first, then the two deprecated fallbacks.
+ */
+export const AI_STUDIO_KEY_VARS = ['AI_STUDIO_API_KEY', 'GOOGLE_AI_STUDIO_API_KEY', 'GEMINI_API_KEY'] as const;
+
+/** ENABLE_CACHING values that turn the search cache off. Anything else leaves it on. */
+const FALSE_WORDS = new Set(['false', '0', 'no', 'off']);
+
+/**
+ * CACHE_TTL is in seconds, as the README has always documented
+ * (`CACHE_TTL=3600` is an hour). Until 1.3.0 the Antigravity layer passed the
+ * number to SearchCache as milliseconds, so the README's example gave a 3.6
+ * second cache.
+ *
+ * Someone who read the code rather than the README may have set milliseconds
+ * (the old default was 1800000). A value at or above this threshold -- about
+ * 28 hours if it were seconds, longer than any in-memory search cache is
+ * useful for -- is therefore still read as milliseconds, with a warning.
+ */
+export const CACHE_TTL_LEGACY_MS_THRESHOLD = 100_000;
+
+const DEFAULT_CACHE_TTL_SECONDS = 1800; // 30 minutes
+const DEFAULT_MAX_CACHE_ENTRIES = 1000;
+
+export interface SearchCacheSettings {
+  /** False when ENABLE_CACHING is false/0/no/off. Default true. */
+  enabled: boolean;
+  /** Entry lifetime in milliseconds, converted from CACHE_TTL. */
+  ttlMs: number;
+  /** MAX_CACHE_ENTRIES, a positive integer. */
+  maxEntries: number;
+}
+
+/**
+ * The search cache settings, read from ENABLE_CACHING, CACHE_TTL (seconds; see
+ * CACHE_TTL_LEGACY_MS_THRESHOLD) and MAX_CACHE_ENTRIES. A value that is not a
+ * positive number falls back to the default rather than to 0, which would make
+ * every entry expire as it is written.
+ */
+export function searchCacheSettingsFromEnv(env: NodeJS.ProcessEnv = process.env): SearchCacheSettings {
+  const enabled = !FALSE_WORDS.has((env.ENABLE_CACHING ?? '').trim().toLowerCase());
+
+  let ttlMs = DEFAULT_CACHE_TTL_SECONDS * 1000;
+  const rawTtl = (env.CACHE_TTL ?? '').trim();
+  const ttl = rawTtl === '' ? Number.NaN : Number(rawTtl);
+  if (Number.isFinite(ttl) && ttl > 0) {
+    if (ttl >= CACHE_TTL_LEGACY_MS_THRESHOLD) {
+      ttlMs = Math.round(ttl);
+      logger.warn('CACHE_TTL is in seconds; a value this large is read as milliseconds for compatibility', {
+        CACHE_TTL: rawTtl,
+        seconds: Math.round(ttl / 1000),
+      });
+    } else {
+      ttlMs = Math.round(ttl * 1000);
+    }
+  } else if (rawTtl !== '') {
+    logger.warn('CACHE_TTL is not a positive number of seconds; using the default', {
+      CACHE_TTL: rawTtl,
+      defaultSeconds: DEFAULT_CACHE_TTL_SECONDS,
+    });
+  }
+
+  const entries = Number((env.MAX_CACHE_ENTRIES ?? '').trim() || Number.NaN);
+  const maxEntries = Number.isInteger(entries) && entries > 0 ? entries : DEFAULT_MAX_CACHE_ENTRIES;
+
+  return { enabled, ttlMs, maxEntries };
+}
+
+export interface RetryPolicy {
+  /** Retries after the first attempt (ErrorHandler.retry's maxAttempts/maxRetries). */
+  maxAttempts: number;
+  /** Delay before the first retry, in milliseconds; later ones back off from it. */
+  delay: number;
+}
+
+/** Upper bounds, so a typo cannot stall a request for hours. */
+export const MAX_RETRIES_LIMIT = 10;
+export const RETRY_DELAY_LIMIT_MS = 60_000;
+
+function parseBoundedInt(raw: string | undefined, min: number, max: number): number | undefined {
+  const text = (raw ?? '').trim();
+  if (!/^\d+$/.test(text)) {
+    return undefined;
+  }
+  const value = Number(text);
+  return value >= min && value <= max ? value : undefined;
+}
+
+/**
+ * The retry policy a layer should hand to `retry()`, with MAX_RETRIES and
+ * RETRY_DELAY overriding the layer's own defaults.
+ *
+ * - MAX_RETRIES: retries after the first attempt, an integer 0..10. 0 means
+ *   "do not retry".
+ * - RETRY_DELAY: milliseconds before the first retry, an integer 0..60000;
+ *   ErrorHandler.retry doubles it on each further attempt up to its maxDelay.
+ *
+ * A missing, malformed or out-of-range value keeps the layer's default, so a
+ * layer that is tuned differently (AI Studio retries less than Claude Code)
+ * keeps its tuning unless the user asks otherwise.
+ */
+export function retryPolicyFromEnv(defaults: RetryPolicy, env: NodeJS.ProcessEnv = process.env): RetryPolicy {
+  const maxAttempts = parseBoundedInt(env.MAX_RETRIES, 0, MAX_RETRIES_LIMIT);
+  const delay = parseBoundedInt(env.RETRY_DELAY, 0, RETRY_DELAY_LIMIT_MS);
+  for (const [name, parsed] of [['MAX_RETRIES', maxAttempts], ['RETRY_DELAY', delay]] as const) {
+    if (parsed === undefined && (env[name] ?? '').trim() !== '') {
+      logger.warn(`${name} is not a valid value; using the default`, { [name]: env[name] });
+    }
+  }
+  return {
+    maxAttempts: maxAttempts ?? defaults.maxAttempts,
+    delay: delay ?? defaults.delay,
+  };
 }
 
 /**
@@ -70,7 +186,7 @@ export class SmartEnvLoader {
     }
 
     const { verbose = false } = options;
-    const searchPaths = options.searchPaths ?? await this.getDefaultSearchPaths();
+    const searchPaths = options.searchPaths ?? this.getDefaultSearchPaths();
     
     this.loadResult = {
       success: false,
@@ -148,8 +264,7 @@ export class SmartEnvLoader {
         
         if (verbose) {
           logger.info('Using environment variables (no .env file needed)', {
-            hasGeminiKey: !!process.env.GEMINI_API_KEY,
-            hasClaudeKey: !!process.env.CLAUDE_API_KEY
+            hasAIStudioKey: AI_STUDIO_KEY_VARS.some(name => !!process.env[name])
           });
         }
       }
@@ -188,10 +303,10 @@ export class SmartEnvLoader {
   /**
    * Get default search paths for .env files
    */
-  private async getDefaultSearchPaths(): Promise<string[]> {
+  private getDefaultSearchPaths(): string[] {
     const paths: string[] = [];
 
-    // Where the user is, and the project they are in. Nothing else by default.
+    // Where the user is. Nothing else by default.
     //
     // The list used to include the package's own installation directory, the
     // global npm directory and ~/.cgmb unconditionally -- measured on WSL, that
@@ -219,38 +334,15 @@ export class SmartEnvLoader {
       paths.push(process.cwd());
     }
 
-    const projectRoot = await this.findProjectRoot();
-    if (projectRoot && !paths.includes(projectRoot)) {
-      paths.push(projectRoot);
-    }
+    // There was a third entry, the "project root": the nearest directory
+    // above the working directory whose package.json named this package. Its
+    // lookup imported package.json with `assert: { type: 'json' }`, which
+    // Node 22 rejects (ERR_IMPORT_ATTRIBUTE_MISSING); the error was caught, so
+    // it always returned null and never added anything. It is gone rather
+    // than repaired, so the default search stays exactly what it has been in
+    // practice: CGMB_ENV_PATH, then the working directory.
 
     return paths;
-  }
-
-  /**
-   * Find project root by looking for package.json
-   */
-  private async findProjectRoot(startPath: string = process.cwd()): Promise<string | null> {
-    let currentPath = startPath;
-    
-    while (currentPath !== dirname(currentPath)) { // Stop at filesystem root
-      const packageJsonPath = join(currentPath, 'package.json');
-      if (existsSync(packageJsonPath)) {
-        try {
-          const pkg = await import(packageJsonPath, { assert: { type: 'json' } });
-          // Check if this looks like the CGMB project
-          if (pkg.default?.name === 'claude-gemini-multimodal-bridge' || 
-              pkg.default?.bin?.cgmb) {
-            return currentPath;
-          }
-        } catch {
-          // If we can't read package.json, continue searching
-        }
-      }
-      currentPath = dirname(currentPath);
-    }
-    
-    return null;
   }
 
   /**
@@ -265,14 +357,12 @@ export class SmartEnvLoader {
    * Check if required environment variables are already set
    */
   private checkEnvironmentVariables(): boolean {
-    // Check for at least one of the key environment variables
-    const requiredVars = [
-      'GEMINI_API_KEY',
-      'GOOGLE_AI_STUDIO_API_KEY',
-      'CLAUDE_API_KEY'
-    ];
-
-    return requiredVars.some(varName => !!process.env[varName]);
+    // The AI Studio key, under any name AuthVerifier accepts. This list used to
+    // be GEMINI_API_KEY, GOOGLE_AI_STUDIO_API_KEY and CLAUDE_API_KEY -- so the
+    // recommended AI_STUDIO_API_KEY, set on its own, counted as "not
+    // configured", while CLAUDE_API_KEY, which nothing in CGMB reads (Claude
+    // Code signs itself in), counted as configured.
+    return AI_STUDIO_KEY_VARS.some(varName => !!process.env[varName]);
   }
 
   /**
@@ -307,12 +397,14 @@ export class SmartEnvLoader {
     foundFiles: string[];
     errors: string[];
   } {
+    // What `cgmb info` lists. GEMINI_CLI_PATH is gone from it: the Gemini CLI
+    // was retired in 1.3.0, and showing it as "Not set" invited people to set
+    // a variable that is now only ever rejected. ANTIGRAVITY_CLI_PATH is its
+    // successor.
     const importantVars = [
-      'GEMINI_API_KEY',
-      'GOOGLE_AI_STUDIO_API_KEY', 
-      'CLAUDE_API_KEY',
+      ...AI_STUDIO_KEY_VARS,
+      'ANTIGRAVITY_CLI_PATH',
       'CLAUDE_CODE_PATH',
-      'GEMINI_CLI_PATH',
       'LOG_LEVEL'
     ];
 

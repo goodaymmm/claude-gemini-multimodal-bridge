@@ -40,14 +40,14 @@ async function main() {
       capabilities: {
         'Commands': 'chat, search, analyze, generate, process, extract, translate',
         'Files': 'PDF, images, audio, documents (relative/absolute paths)',
-        'URLs': 'Direct processing without download',
-        'Generation': 'Images (Imagen 3), Audio (TTS)',
+        'URLs': 'Web pages are read by the Antigravity CLI (agy); PDF URLs are downloaded and sent to AI Studio',
+        'Generation': 'Images and audio (TTS) through AI Studio (Gemini image and TTS models)',
         'Routing': 'Automatic optimal AI layer selection'
       },
       tips: [
         'Always use "CGMB" keyword in prompts',
         'Relative paths like ./file.pdf are auto-resolved',
-        'URLs are processed directly by the Antigravity CLI (agy)'
+        'Web page URLs go to the Antigravity CLI (agy); PDF URLs go to AI Studio'
       ]
     });
 

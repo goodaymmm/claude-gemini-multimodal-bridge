@@ -11,6 +11,14 @@ export interface LoggerConfig {
   json: boolean;
 }
 
+/** winston's npm levels, most to least severe. */
+export const LOG_LEVELS = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'] as const;
+export type LogLevel = typeof LOG_LEVELS[number];
+
+export function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === 'string' && (LOG_LEVELS as readonly string[]).includes(value);
+}
+
 class Logger {
   private logger: winston.Logger;
   private static instance: Logger | null;
@@ -126,6 +134,30 @@ class Logger {
     Logger.instance = null;
     Logger.quietInstance = null;
     process.env.LOG_LEVEL = 'warn';
+  }
+
+  /**
+   * Change this logger's level after it has been built.
+   *
+   * The exported `logger` is created when this module is first imported,
+   * which in the CLI is before commander has parsed anything. `--debug` used
+   * to set LOG_LEVEL / CGMB_DEBUG inside the command's action -- by then the
+   * level had already been read, so the flag changed nothing. This is the
+   * runtime switch the CLI calls instead.
+   */
+  public setLevel(level: LogLevel): void {
+    this.logger.level = level;
+    for (const transport of this.logger.transports) {
+      // A transport given its own level keeps it unless told otherwise; ours
+      // are created without one, but make the intent explicit.
+      if (transport.level !== undefined) {
+        transport.level = level;
+      }
+    }
+  }
+
+  public getLevel(): string {
+    return this.logger.level;
   }
 
   public info(message: string, meta?: Record<string, unknown>): void {
@@ -247,6 +279,16 @@ class Logger {
 export const logger = process.env.CGMB_CLI_MODE === 'true' 
   ? Logger.getQuietInstance() 
   : Logger.getInstance();
+
+/**
+ * Set the level of the shared `logger` at runtime, e.g. from `--debug`. Also
+ * records it in LOG_LEVEL so that a logger built later starts at the same
+ * level.
+ */
+export function setLogLevel(level: LogLevel): void {
+  logger.setLevel(level);
+  process.env.LOG_LEVEL = level;
+}
 
 // Export class for testing
 export { Logger };

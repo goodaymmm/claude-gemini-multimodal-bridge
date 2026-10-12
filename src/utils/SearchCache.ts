@@ -27,7 +27,14 @@ export interface CacheStats {
 }
 
 export interface CacheOptions {
-  ttl?: number; // Time to live in milliseconds
+  /**
+   * False turns the cache off: get() always misses and set() stores nothing.
+   * Default true. This is what ENABLE_CACHING=false controls; it used to be
+   * passed in as enableMetrics, which the cache never read, so the variable
+   * had no effect at all.
+   */
+  enabled?: boolean;
+  ttl?: number; // Time to live in milliseconds (CACHE_TTL is seconds; envLoader converts)
   maxEntries?: number;
   enableMetrics?: boolean;
   similarityThreshold?: number; // For fuzzy matching
@@ -55,6 +62,10 @@ export class SearchCache {
    * Get search results from cache
    */
   async get(query: string, searchEngine: string = 'antigravity', model?: string): Promise<any | null> {
+    if (this.options.enabled === false) {
+      return null;
+    }
+
     const key = this.generateCacheKey(query, searchEngine, model);
     const entry = this.cache.get(key);
 
@@ -115,6 +126,10 @@ export class SearchCache {
     processingTime: number = 0,
     model?: string
   ): Promise<void> {
+    if (this.options.enabled === false) {
+      return;
+    }
+
     const key = this.generateCacheKey(query, searchEngine, model);
     const timestamp = Date.now();
     const ttl = this.options.ttl || this.defaultTTL;

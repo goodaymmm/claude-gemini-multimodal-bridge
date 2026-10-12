@@ -83,6 +83,37 @@ describe('a module must survive being imported under CI', () => {
   });
 });
 
+describe('the CI skip reads the value, not just its presence', () => {
+  // Each run is stopped by the publish check that follows the CI check
+  // (npm_lifecycle_event=prepare), so a run that is not taken as CI still never
+  // reaches the setup -- no npm, no MCP registration.
+  const skipRun = (env) => {
+    const result = node([POSTINSTALL], { CI: '', CONTINUOUS_INTEGRATION: '', npm_lifecycle_event: 'prepare', ...env });
+    return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  };
+
+  it('does not treat CI=false as CI', () => {
+    const { status, output } = skipRun({ CI: 'false' });
+
+    assert.equal(status, 0, output);
+    assert.doesNotMatch(output, /CI environment detected/, 'CI=false says "not CI"');
+    assert.match(output, /Publish process detected/, 'the run must have got past the CI check');
+  });
+
+  it('does not treat CONTINUOUS_INTEGRATION=0 as CI', () => {
+    const { output } = skipRun({ CONTINUOUS_INTEGRATION: '0' });
+    assert.doesNotMatch(output, /CI environment detected/);
+  });
+
+  it('still skips for CI=1 and CONTINUOUS_INTEGRATION=yes', () => {
+    for (const env of [{ CI: '1' }, { CONTINUOUS_INTEGRATION: 'yes' }]) {
+      const { status, output } = skipRun(env);
+      assert.equal(status, 0, output);
+      assert.match(output, /CI environment detected/, JSON.stringify(env));
+    }
+  });
+});
+
 describe('the suite must not shrink under CI', () => {
   it('runs the cases of the file that vanishes, under CI', () => {
     // Named cases, not counts. Comparing a CI run against a plain one looks

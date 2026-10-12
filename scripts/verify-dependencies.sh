@@ -87,17 +87,20 @@ check_agy_version() {
 }
 
 # Node.js バージョンチェック
+# package.json の engines.node（>=22.12.0）と同じ値。メジャー番号だけを見ると
+# 22.0〜22.11 も通ってしまう。
+MIN_NODE_VERSION="22.12.0"
+
 check_node_version() {
     if command -v node &> /dev/null; then
         local version=$(node --version)
-        local major_version=$(echo $version | cut -d'.' -f1 | sed 's/v//')
-        
-        if [ "$major_version" -ge 22 ]; then
-            echo -e "${GREEN}✓${NC} Node.js バージョン: $version (要件: >=22.0.0)"
+
+        if version_at_least "$version" "$MIN_NODE_VERSION"; then
+            echo -e "${GREEN}✓${NC} Node.js バージョン: $version (要件: >=$MIN_NODE_VERSION)"
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         else
-            echo -e "${RED}✗${NC} Node.js バージョン: $version (要件: >=22.0.0)"
-            echo -e "${YELLOW}  → nvm use 22 でバージョンを切り替えてください${NC}"
+            echo -e "${RED}✗${NC} Node.js バージョン: $version (要件: >=$MIN_NODE_VERSION)"
+            echo -e "${YELLOW}  → Node.js $MIN_NODE_VERSION 以降に切り替えてください（例: nvm install 22 && nvm use 22）${NC}"
             FAILURE_COUNT=$((FAILURE_COUNT + 1))
         fi
     else
@@ -192,24 +195,20 @@ fi
 echo ""
 
 # Claude Code MCP設定チェック
+# CGMB は `claude mcp add` で登録する（cgmb setup-mcp）。登録先のファイルは
+# Claude Code の版によって変わるため、ファイルを推測せず `claude mcp list` に聞く。
 echo "🔗 Claude Code MCP設定の確認:"
 
-MCP_CONFIG_PATH="$HOME/.claude-code/mcp_servers.json"
-
-if [ -f "$MCP_CONFIG_PATH" ]; then
-    echo -e "${GREEN}✓${NC} MCP設定ファイルが存在します: $MCP_CONFIG_PATH"
-    
-    if grep -q "claude-gemini-multimodal-bridge" "$MCP_CONFIG_PATH"; then
-        echo -e "${GREEN}✓${NC} CGMB MCP設定が見つかりました"
+if command -v claude &> /dev/null; then
+    if claude mcp list 2>/dev/null | grep -q "claude-gemini-multimodal-bridge"; then
+        echo -e "${GREEN}✓${NC} CGMB MCP設定が見つかりました（claude mcp list）"
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     else
-        echo -e "${YELLOW}⚠${NC} CGMB MCP設定が見つかりません"
+        echo -e "${YELLOW}⚠${NC} CGMB MCP設定が見つかりません（claude mcp list）"
         echo -e "   → cgmb setup-mcp を実行してください"
     fi
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
 else
-    echo -e "${YELLOW}⚠${NC} MCP設定ファイルが見つかりません: $MCP_CONFIG_PATH"
-    echo -e "   → Claude Codeを一度起動してからcgmb setup-mcpを実行してください"
+    echo -e "${YELLOW}⚠${NC} Claude Code CLI がないため MCP 設定を確認できません"
 fi
 
 echo ""

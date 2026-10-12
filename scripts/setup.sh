@@ -61,12 +61,12 @@ check_node_version() {
     log_info "Checking Node.js version..."
     
     if ! command_exists node; then
-        log_error "Node.js is not installed. Please install Node.js 18.0.0 or higher."
+        log_error "Node.js is not installed. Please install Node.js 22.12.0 or higher."
         exit 1
     fi
     
     local node_version=$(node --version | cut -d'v' -f2)
-    local required_version="18.0.0"
+    local required_version="22.12.0"  # package.json engines.node
     
     if ! version_at_least "$node_version" "$required_version"; then
         log_error "Node.js version $node_version is too old. Required: $required_version or higher."
@@ -100,7 +100,7 @@ install_claude_code() {
     
     log_warning "Claude Code CLI not found. Please install it manually:"
     echo "  npm install -g @anthropic-ai/claude-code"
-    echo "  Or visit: https://docs.anthropic.com/claude/docs/claude-code"
+    echo "  Or visit: https://docs.anthropic.com/en/docs/claude-code"
     
     read -p "Have you installed Claude Code CLI? (y/n): " -n 1 -r
     echo

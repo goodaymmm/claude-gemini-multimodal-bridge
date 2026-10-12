@@ -5,7 +5,7 @@ import { CGMBServer } from './core/CGMBServer.js';
 import { AI_MODELS, DEFAULT_ANTIGRAVITY_MODEL, defaultLayerConfig, isOneOf } from './core/types.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, findAntigravityBinary } from './utils/antigravityCli.js'; // eslint-disable-line sort-imports
 import { commandAvailable, probeCommand, resolveTrustedCommand } from './utils/processUtils.js';
-import { logger } from './utils/logger.js';
+import { logger, setLogLevel } from './utils/logger.js';
 import { shutdownAIStudio } from './layers/AIStudioLayer.js';
 import { getEnvironmentStatus, loadEnvironmentSmart } from './utils/envLoader.js';
 import { getManualSetupInstructions, getMCPStatus, setupCGMBMCP } from './utils/mcpConfigManager.js';
@@ -28,8 +28,11 @@ import { PDF_MODES, type PdfMode } from './utils/pdfText.js';
 function pdfModeOption(): Option {
   return new Option(
     '--pdf-mode <mode>',
-    'How PDFs reach Gemini: auto (local text when the PDF has a text layer, upload for OCR when not), ' +
-    'local (always local text), upload (always upload). Default: CGMB_PDF_MODE, else auto'
+    'How local PDF files reach Gemini (auto|local|upload): ' +
+    'auto = extract the text locally when the PDF has a text layer, otherwise upload it for OCR; ' +
+    'local = always send locally extracted text, refusing a PDF that has none; ' +
+    'upload = always upload the PDF to the Gemini File API. ' +
+    'PDF URLs are always uploaded. Default: CGMB_PDF_MODE, else auto'
   ).choices(PDF_MODES);
 }
 
@@ -152,36 +155,52 @@ const packageJson = require('../package.json') as { version: string };
 program
   .name('cgmb')
   .description('Claude-Gemini Multimodal Bridge - Enterprise-grade AI integration tool')
-  .version(packageJson.version);
+  .version(packageJson.version)
+  // Global, so `cgmb <any command> --debug` works and the flag is parsed before
+  // the command runs. It used to exist on `serve` only, where it set
+  // LOG_LEVEL/CGMB_DEBUG inside the action -- after the logger had been built
+  // at import time with the old level, so it changed nothing.
+  .option('--debug', 'Write debug logging to stderr')
+  .configureHelp({ showGlobalOptions: true })
+  .hook('preAction', (_program, actionCommand) => {
+    if (actionCommand.optsWithGlobals<{ debug?: boolean }>().debug) {
+      enableDebugLogging(actionCommand.name());
+    }
+  });
+
+/**
+ * Turn on debug logging for this process and for the processes it starts:
+ * the level of the already-built logger is changed in place, and CGMB_DEBUG /
+ * LOG_LEVEL are set so that a child (the AI Studio MCP server) inherits it.
+ */
+function enableDebugLogging(command: string): void {
+  process.env.CGMB_DEBUG = 'true';
+  setLogLevel('debug');
+  logger.debug('Debug logging enabled', { command });
+}
 
 // Server command
 program
   .command('serve')
   .description('Start the CGMB MCP server')
   .option('-c, --config <path>', 'Path to configuration file')
-  .option('-v, --verbose', 'Enable verbose logging')
-  .option('--debug', 'Enable debug logging')
+  .option('-v, --verbose', 'Enable verbose (debug) logging, same as --debug')
   .action(async (options) => {
     try {
       // Set environment variables to prevent Claude Code duplication
       process.env.CGMB_SERVE_MODE = 'true';
       process.env.CGMB_NO_CLAUDE_EXEC = 'true';
       
-      // Set log level first if specified.
-      //
-      // CGMB_DEBUG as well as LOG_LEVEL: the logger reads the level from
-      // LOG_LEVEL but decided whether to have a console transport at all from
-      // CGMB_DEBUG. Setting only the level meant `cgmb serve --debug` under the
-      // NODE_ENV=production that MCP registrations carry produced no output
-      // whatsoever -- the flag looked ignored because, for the console, it was.
-      if (options.verbose || options.debug) {
-        process.env.LOG_LEVEL = 'debug';
-        process.env.CGMB_DEBUG = 'true';
+      // --debug is a global option and has already been applied by the
+      // preAction hook; --verbose is serve's older spelling of it.
+      const debug = Boolean(options.verbose || program.opts<{ debug?: boolean }>().debug);
+      if (options.verbose) {
+        enableDebugLogging('serve');
       }
 
       // Load environment variables with smart discovery
       const loadOptions: { verbose: boolean; searchPaths?: string[] } = { 
-        verbose: options.verbose || options.debug
+        verbose: debug
       };
       if (options.config) {
         loadOptions.searchPaths = [path.dirname(options.config)];
@@ -509,7 +528,10 @@ program
       
       // Check environment variables
       console.log('\n📋 Environment Variables:');
-      const envVars = ['AI_STUDIO_API_KEY', 'CLAUDE_CODE_PATH', 'ANTIGRAVITY_CLI_PATH', 'GEMINI_CLI_PATH'];
+      // GEMINI_CLI_PATH is not listed: the Gemini CLI was retired and the
+      // variable is only ever rejected now, so "Not set" was an invitation to
+      // set something useless.
+      const envVars = ['AI_STUDIO_API_KEY', 'ANTIGRAVITY_CLI_PATH', 'CLAUDE_CODE_PATH'];
       for (const envVar of envVars) {
         const value = process.env[envVar];
         if (value) {
@@ -535,7 +557,7 @@ program
         if (value) {
           console.log(`  ⚠️  ${old}: ${value.substring(0, 8)}... (DEPRECATED)`);
           console.log(`     → Migrate to: ${newVar} (for ${purpose})`);
-          console.log(`     → Add to .env: ${newVar}=${value}`);
+          console.log(`     → Add to .env: ${newVar}=<the value of ${old}>`);
         }
       }
       

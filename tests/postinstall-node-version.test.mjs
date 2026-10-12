@@ -23,7 +23,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 // Requiring this used to run the whole installer; it is guarded by
 // `require.main === module` now, which this import also proves.
-const { checkNodeVersion, requiredNodeMajor } = require(join(HERE, '..', 'scripts', 'postinstall.cjs'));
+const postinstall = require(join(HERE, '..', 'scripts', 'postinstall.cjs'));
+const { checkNodeVersion, requiredNodeMajor } = postinstall;
 
 const packageJson = require(join(HERE, '..', 'package.json'));
 
@@ -69,6 +70,14 @@ describe('postinstall node version gate', () => {
     const verdict = checkNodeVersion('garbage', requiredNodeMajor());
 
     assert.equal(verdict.ok, false, 'an unparseable version is not a passing one');
+  });
+
+  it('exports its checks without running anything', () => {
+    // Requiring the file must hand back the functions the other postinstall
+    // tests use, and nothing more must happen: no setup, no exit.
+    for (const name of ['checkNodeVersion', 'requiredNodeMajor', 'isCiEnvironment', 'setupEnvironment']) {
+      assert.equal(typeof postinstall[name], 'function', name);
+    }
   });
 
   it('accepts the Node actually running these tests', () => {

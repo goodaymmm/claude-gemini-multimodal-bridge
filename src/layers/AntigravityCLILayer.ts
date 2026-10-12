@@ -7,6 +7,7 @@ import { logger } from '../utils/logger.js';
 import { safeExecute } from '../utils/errorHandler.js';
 import { AuthVerifier } from '../auth/AuthVerifier.js';
 import { SearchCache } from '../utils/SearchCache.js';
+import { searchCacheSettingsFromEnv } from '../utils/envLoader.js';
 import { AGY_INSTALL_HINT, MIN_AGY_VERSION, buildAgyChildEnv, findAntigravityBinary, isVersionAtLeast, looksSignedOut, probeAntigravityAuth } from '../utils/antigravityCli.js'; // eslint-disable-line sort-imports
 
 /**
@@ -51,11 +52,14 @@ export class AntigravityCLILayer implements LayerInterface {
   constructor() {
     this.authVerifier = new AuthVerifier();
 
-    // Initialize search cache for performance optimization (CGMB unique value)
+    // Initialize search cache for performance optimization (CGMB unique value).
+    // ENABLE_CACHING=false turns it off; CACHE_TTL is in seconds, as the README
+    // documents (searchCacheSettingsFromEnv states the legacy-milliseconds rule).
+    const cacheSettings = searchCacheSettingsFromEnv();
     this.searchCache = new SearchCache({
-      ttl: Number.parseInt(process.env.CACHE_TTL ?? '', 10) || 1800000, // 30 minutes
-      maxEntries: Number.parseInt(process.env.MAX_CACHE_ENTRIES ?? '', 10) || 1000,
-      enableMetrics: process.env.ENABLE_CACHING === 'true',
+      enabled: cacheSettings.enabled,
+      ttl: cacheSettings.ttlMs,
+      maxEntries: cacheSettings.maxEntries,
       similarityThreshold: 0.8
     });
   }
