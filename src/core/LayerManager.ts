@@ -1258,6 +1258,10 @@ export class LayerManager {
       executionMode: options.executionMode,
     });
 
+    // Checked before any step runs, and outside the try below so the caller
+    // sees which step is wrong rather than "Workflow execution failed".
+    this.validateWorkflowDependencies(workflow.steps);
+
     try {
       let results: Record<string, LayerResult>;
 
@@ -1982,6 +1986,79 @@ export class LayerManager {
     }
   }
 
+  /**
+   * Reject a plan whose dependsOn cannot be satisfied, before any step runs.
+   *
+   * Each execution mode used to find out on its own, differently: sequential
+   * (topologicalSort) skipped a dependsOn naming no step and ran the step as if
+   * it had no dependency, while parallel and hybrid (groupStepsByDependencies)
+   * threw a generic DEPENDENCY_RESOLUTION_FAILED. So the same definition ran in
+   * one mode and failed in another -- and in sequential mode the steps before
+   * the bad one had already been paid for. One check here, ahead of every mode,
+   * names the step and the id at fault.
+   */
+  private validateWorkflowDependencies(steps: WorkflowStep[]): void {
+    const ids = new Set<string>();
+    for (const step of steps) {
+      if (ids.has(step.id)) {
+        throw new CGMBError(
+          `Invalid workflow: more than one step has the id "${step.id}". Step ids must be unique.`,
+          'INVALID_WORKFLOW_DEPENDENCY'
+        );
+      }
+      ids.add(step.id);
+    }
+
+    const known = [...ids].map(id => `"${id}"`).join(', ');
+    for (const step of steps) {
+      for (const depId of step.dependsOn ?? []) {
+        if (depId === step.id) {
+          throw new CGMBError(
+            `Invalid workflow: step "${step.id}" lists itself in dependsOn.`,
+            'INVALID_WORKFLOW_DEPENDENCY'
+          );
+        }
+        if (!ids.has(depId)) {
+          throw new CGMBError(
+            `Invalid workflow: step "${step.id}" depends on "${depId}", which is not a step in this workflow ` +
+            `(steps: ${known}).`,
+            'INVALID_WORKFLOW_DEPENDENCY'
+          );
+        }
+      }
+    }
+
+    // Every id is known now, so what is left to go wrong is a cycle. Walk the
+    // graph keeping the current path, so the error can show the loop itself.
+    const byId = new Map(steps.map(step => [step.id, step] as const));
+    const done = new Set<string>();
+    const path: string[] = [];
+    const onPath = new Set<string>();
+
+    const visit = (id: string): void => {
+      if (done.has(id)) { return; }
+      if (onPath.has(id)) {
+        const loop = [...path.slice(path.indexOf(id)), id].map(s => `"${s}"`).join(' -> ');
+        throw new CGMBError(
+          `Invalid workflow: steps depend on each other in a cycle: ${loop}.`,
+          'CIRCULAR_DEPENDENCY'
+        );
+      }
+      path.push(id);
+      onPath.add(id);
+      for (const depId of byId.get(id)?.dependsOn ?? []) {
+        visit(depId);
+      }
+      path.pop();
+      onPath.delete(id);
+      done.add(id);
+    };
+
+    for (const step of steps) {
+      visit(step.id);
+    }
+  }
+
   private topologicalSort(steps: WorkflowStep[]): WorkflowStep[] {
     const sorted: WorkflowStep[] = [];
     const visited = new Set<string>();
@@ -2002,9 +2079,15 @@ export class LayerManager {
       const dependencies = step.dependsOn ?? [];
       for (const depId of dependencies) {
         const depStep = steps.find(s => s.id === depId);
-        if (depStep) {
-          visit(depStep);
+        // validateWorkflowDependencies has already refused an unknown id;
+        // skipping one here is what used to run the step without its input.
+        if (!depStep) {
+          throw new CGMBError(
+            `Step "${step.id}" depends on "${depId}", which is not a step in this workflow.`,
+            'INVALID_WORKFLOW_DEPENDENCY'
+          );
         }
+        visit(depStep);
       }
 
       visiting.delete(step.id);
@@ -2077,64 +2160,125 @@ export class LayerManager {
 
     for (const [key, value] of Object.entries(input)) {
       if (typeof value === 'string' && value.startsWith('@')) {
-        // Reference to another step's output
-        const [stepId, ...pathParts] = value.slice(1).split('.');
-        // split() always yields at least one element, but the type does not say
-        // so; check rather than assert, and skip a reference with no step name.
-        if (stepId === undefined || stepId === '') {
-          continue;
+        const reference = this.resolveStepReference(value, stepOutputs);
+        // A reference with no step name ("@", "@.x") leaves the key unset, as
+        // it always has.
+        if (reference) {
+          resolved[key] = reference.value;
         }
-        const stepOutput = stepOutputs[stepId];
-
-        if (stepOutput) {
-          // Check if the step result is a failed LayerResult (has success: false)
-          const layerResult = stepOutput as { success?: boolean; error?: string; output?: unknown };
-          if (layerResult.success === false) {
-            // Previous step failed - provide context for downstream handling
-            logger.warn(`Step reference ${value} points to failed step ${stepId}`, {
-              stepId,
-              error: layerResult.error || 'Unknown error'
-            });
-            resolved[key] = {
-              _stepFailed: true,
-              _stepId: stepId,
-              _error: layerResult.error || 'Previous step failed',
-              _originalReference: value
-            };
-            continue;
-          }
-
-          let resolvedValue: unknown = stepOutput;
-          for (const part of pathParts) {
-            if (typeof resolvedValue === 'object' && resolvedValue !== null) {
-              resolvedValue = (resolvedValue as Record<string, unknown>)[part];
-            } else {
-              resolvedValue = undefined;
-              break;
-            }
-          }
-          resolved[key] = resolvedValue;
-        } else {
-          // Step output not found - could be a failed step or not yet executed
-          logger.warn(`Could not resolve step reference: ${value}`, {
-            stepId,
-            availableSteps: Object.keys(stepOutputs),
-            hint: 'The referenced step may have failed or not been executed'
-          });
-          // Provide context for downstream handling
-          resolved[key] = {
-            _stepMissing: true,
-            _stepId: stepId,
-            _originalReference: value,
-            _hint: 'Referenced step output not available - step may have failed or not executed'
-          };
-        }
-      } else {
-        resolved[key] = value;
+        continue;
       }
+      resolved[key] = this.resolveNestedReferences(value, stepOutputs, 0);
     }
 
     return resolved;
+  }
+
+  /**
+   * Resolve `@step` references inside arrays and plain objects.
+   *
+   * Only top-level values used to be resolved, so the shape synthesize_response
+   * is built around -- `inputs: { search: '@search.output', ... }` -- reached
+   * Claude as the literal reference strings. The value a reference resolves to
+   * is passed through as it is (an object stays an object); it is the layer
+   * that decides how to render it.
+   */
+  private resolveNestedReferences(
+    value: unknown,
+    stepOutputs: Record<string, Record<string, unknown>>,
+    depth: number
+  ): unknown {
+    // Step inputs are small hand-written structures; the bound only guards
+    // against something pathological arriving in one.
+    if (depth > 8) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      if (!value.startsWith('@')) {
+        return value;
+      }
+      const reference = this.resolveStepReference(value, stepOutputs);
+      return reference ? reference.value : value;
+    }
+    if (Array.isArray(value)) {
+      return value.map(item => this.resolveNestedReferences(item, stepOutputs, depth + 1));
+    }
+    if (typeof value === 'object' && value !== null) {
+      const proto: unknown = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) {
+        return value;
+      }
+      const out: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(value)) {
+        out[key] = this.resolveNestedReferences(item, stepOutputs, depth + 1);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  /**
+   * What one `@step[.path]` reference stands for, or null when it names no step
+   * at all ("@" or "@.x").
+   */
+  private resolveStepReference(
+    value: string,
+    stepOutputs: Record<string, Record<string, unknown>>
+  ): { value: unknown } | null {
+    const [stepId, ...pathParts] = value.slice(1).split('.');
+    // split() always yields at least one element, but the type does not say
+    // so; check rather than assert, and skip a reference with no step name.
+    if (stepId === undefined || stepId === '') {
+      return null;
+    }
+    const stepOutput = stepOutputs[stepId];
+
+    if (!stepOutput) {
+      // Step output not found - could be a failed step or not yet executed
+      logger.warn(`Could not resolve step reference: ${value}`, {
+        stepId,
+        availableSteps: Object.keys(stepOutputs),
+        hint: 'The referenced step may have failed or not been executed'
+      });
+      // Provide context for downstream handling
+      return {
+        value: {
+          _stepMissing: true,
+          _stepId: stepId,
+          _originalReference: value,
+          _hint: 'Referenced step output not available - step may have failed or not executed'
+        },
+      };
+    }
+
+    // Check if the step result is a failed LayerResult (has success: false)
+    const layerResult = stepOutput as { success?: boolean; error?: string; output?: unknown };
+    if (layerResult.success === false) {
+      // Previous step failed - provide context for downstream handling
+      logger.warn(`Step reference ${value} points to failed step ${stepId}`, {
+        stepId,
+        error: layerResult.error || 'Unknown error'
+      });
+      return {
+        value: {
+          _stepFailed: true,
+          _stepId: stepId,
+          _error: layerResult.error || 'Previous step failed',
+          _originalReference: value
+        },
+      };
+    }
+
+    let resolvedValue: unknown = stepOutput;
+    for (const part of pathParts) {
+      if (typeof resolvedValue === 'object' && resolvedValue !== null) {
+        resolvedValue = (resolvedValue as Record<string, unknown>)[part];
+      } else {
+        resolvedValue = undefined;
+        break;
+      }
+    }
+    return { value: resolvedValue };
   }
 
   private generateWorkflowSummary(results: Record<string, LayerResult>): string {

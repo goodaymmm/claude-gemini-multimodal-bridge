@@ -34,6 +34,42 @@ const CLAUDE_NOT_FOUND_MESSAGE =
   'to an existing installation.';
 
 /**
+ * Task fields that steer the synthesis rather than feed it. `files` is left out
+ * as it is everywhere in this layer: Claude is never handed file paths to read.
+ */
+const SYNTHESIS_CONTROL_KEYS = ['type', 'action', 'workflow', 'depth', 'timeout', 'options', 'files'] as const;
+
+/** Most JSON one synthesis input may contribute to the prompt, in characters. */
+const SYNTHESIS_JSON_LIMIT = 20_000;
+
+/**
+ * One synthesis input as prompt text: a string verbatim, anything structured
+ * as indented JSON -- capped, with a note saying how much was left out, so one
+ * oversized step result cannot crowd the rest out of the prompt.
+ */
+function renderSynthesisInput(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value !== 'object' || value === null) {
+    return String(value);
+  }
+
+  let json: string;
+  try {
+    json = JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    // A cycle or a BigInt; say what it is rather than fail the step.
+    return `[unserialisable ${Array.isArray(value) ? 'array' : 'object'}]`;
+  }
+  if (json.length <= SYNTHESIS_JSON_LIMIT) {
+    return json;
+  }
+  const omitted = json.length - SYNTHESIS_JSON_LIMIT;
+  return `${json.slice(0, SYNTHESIS_JSON_LIMIT)}\n[truncated: ${omitted} more characters of JSON omitted]`;
+}
+
+/**
  * ClaudeCodeLayer handles direct Claude Code execution with enhanced authentication support
  * Provides complex reasoning tasks and workflow orchestration capabilities
  */
@@ -796,33 +832,55 @@ export class ClaudeCodeLayer implements LayerInterface {
 
   /**
    * Build synthesis prompt
+   *
+   * Every input the step was given reaches Claude. This used to read only
+   * `request`/`prompt`/`input` and `inputs`, so the usual way of feeding a
+   * synthesis step -- `analysis: '@s1.output'`, a key named after what it holds
+   * -- was dropped, and Claude answered with nothing to synthesise. Values in
+   * `inputs` were interpolated with `${}`, so an object became
+   * "[object Object]". Both runs reported success.
    */
   private buildSynthesisPrompt(task: ClaudeCodeTask): string {
     let prompt = 'Please synthesize and respond to the following:\n\n';
-    
+
     // `request` is what a direct caller sends; a workflow step carries the
-    // same thing as `prompt`, and some callers as `input`. Reading only
-    // `request` meant every synthesis step of a workflow reached Claude as
-    // two sentences of instructions with nothing between them, and whatever
-    // came back was reported as the workflow's answer.
-    const request = task.request
-      ?? (typeof task.prompt === 'string' ? task.prompt : undefined)
-      ?? (typeof task.input === 'string' ? task.input : undefined);
+    // same thing as `prompt`, and some callers as `input`. Whichever string is
+    // used here is the request; the others are still rendered as inputs below.
+    const requestKey = (['request', 'prompt', 'input'] as const)
+      .find(key => typeof task[key] === 'string' && task[key] !== '');
+    const request = requestKey ? task[requestKey] : undefined;
 
     if (request) {
       prompt += `Request: ${request}\n\n`;
     }
-    
-    if (task.inputs && typeof task.inputs === 'object') {
-      prompt += 'Input Sources:\n';
-      Object.entries(task.inputs).forEach(([source, content], index) => {
-        prompt += `${index + 1}. ${source}: ${content}\n`;
-      });
-      prompt += '\n';
+
+    const sources: Array<[string, unknown]> = [];
+    const skip = new Set<string>([...SYNTHESIS_CONTROL_KEYS, ...(requestKey ? [requestKey] : [])]);
+    for (const [key, value] of Object.entries(task)) {
+      if (skip.has(key) || value === undefined || value === null || value === '') {
+        continue;
+      }
+      if (key === 'inputs' && typeof value === 'object' && !Array.isArray(value)) {
+        // The named sources inside `inputs` keep their own names.
+        for (const [source, content] of Object.entries(value as Record<string, unknown>)) {
+          if (content !== undefined && content !== null && content !== '') {
+            sources.push([source, content]);
+          }
+        }
+        continue;
+      }
+      sources.push([key, value]);
     }
-    
+
+    if (sources.length > 0) {
+      prompt += 'Input Sources:\n\n';
+      sources.forEach(([source, content], index) => {
+        prompt += `### ${index + 1}. ${source}\n${renderSynthesisInput(content)}\n\n`;
+      });
+    }
+
     prompt += 'Please provide a comprehensive, well-structured response that synthesizes all the information.';
-    
+
     return prompt;
   }
 
